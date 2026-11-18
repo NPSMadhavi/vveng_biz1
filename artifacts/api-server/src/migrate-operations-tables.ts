@@ -48,6 +48,8 @@ export const OPERATIONS_TABLE_MIGRATIONS = [
     status TEXT NOT NULL DEFAULT 'active',
     salary TEXT,
     annual_salary TEXT,
+    work_type TEXT,
+    per_hour_charge TEXT,
     nationality TEXT,
     pr_status TEXT,
     date_of_birth TIMESTAMPTZ,
@@ -205,6 +207,13 @@ export const OPERATIONS_TABLE_MIGRATIONS = [
     signature TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
   )`,
+  `CREATE TABLE IF NOT EXISTS customer_employees (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL,
+    customer_id INTEGER NOT NULL,
+    employee_id INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
   `CREATE TABLE IF NOT EXISTS employee_documents (
     id SERIAL PRIMARY KEY,
     company_id INTEGER NOT NULL,
@@ -225,6 +234,8 @@ export const OPERATIONS_TABLE_MIGRATIONS = [
 export const OPERATIONS_COLUMN_MIGRATIONS = [
   // employees
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_salary TEXT`,
+  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_type TEXT`,
+  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS per_hour_charge TEXT`,
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS pr_status TEXT`,
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS date_of_birth TIMESTAMPTZ`,
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS passport_number TEXT`,
@@ -320,6 +331,7 @@ export const OPERATIONS_INDEX_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS ir8a_employers_company_id_idx ON ir8a_employers (company_id)`,
   `CREATE INDEX IF NOT EXISTS service_reports_company_id_idx ON service_reports (company_id)`,
   `CREATE INDEX IF NOT EXISTS employee_documents_company_id_idx ON employee_documents (company_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS customer_employees_company_customer_employee_idx ON customer_employees (company_id, customer_id, employee_id)`,
 ];
 
 /** Apply HR/operations schema on any pool (shared or per-company tenant). */

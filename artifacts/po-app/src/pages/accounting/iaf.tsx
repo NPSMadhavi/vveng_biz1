@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,9 +35,16 @@ const QUARTERS = [
 ];
 
 export default function IafPage() {
-  const yr = new Date().getFullYear();
-  const [fromDate, setFromDate] = useState(`${yr}-01-01`);
-  const [toDate,   setToDate]   = useState(`${yr}-12-31`);
+  const calendarYear = new Date().getFullYear();
+  const workingYear = useWorkingYearBounds();
+  const yr = workingYear.active ? workingYear.year : calendarYear;
+  const [fromDate, setFromDate] = useState(`${calendarYear}-01-01`);
+  const [toDate,   setToDate]   = useState(`${calendarYear}-12-31`);
+  useEffect(() => {
+    if (!workingYear.active) return;
+    setFromDate(workingYear.from);
+    setToDate(workingYear.to);
+  }, [workingYear.active, workingYear.from, workingYear.to]);
   const [downloading, setDownloading] = useState(false);
 
   const { data, isLoading, error } = useQuery<IafData>({
@@ -128,7 +136,7 @@ export default function IafPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {[yr, yr - 1].map(y => (
+          {Array.from(new Set([yr, calendarYear, calendarYear - 1])).sort((a, b) => b - a).map(y => (
             <button key={y} type="button"
               onClick={() => { setFromDate(`${y}-01-01`); setToDate(`${y}-12-31`); }}
               className={cn("px-3 py-1.5 rounded-full text-xs font-medium border transition-colors",

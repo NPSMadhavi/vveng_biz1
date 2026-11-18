@@ -1,5 +1,5 @@
 import { db, pool, accountsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 /** Ensure chart-of-accounts table exists on the current company tenant DB. */
 async function ensureAccountsTable(): Promise<void> {
@@ -83,6 +83,7 @@ export const DEFAULT_ACCOUNTS = [
   { code: "4300", name: "Interest Income",                            type: "revenue",   subType: "other_income",        isSystem: false },
   { code: "4400", name: "Foreign Exchange Gain",                      type: "revenue",   subType: "other_income",        isSystem: false },
   { code: "5000", name: "Cost of Goods Sold",                         type: "expense",   subType: "cost_of_sales",       isSystem: false },
+  { code: "5010", name: "Cost of Services",                           type: "expense",   subType: "cost_of_sales",       isSystem: false },
   { code: "5100", name: "Direct Materials",                           type: "expense",   subType: "cost_of_sales",       isSystem: false },
   { code: "5200", name: "Direct Labour",                              type: "expense",   subType: "cost_of_sales",       isSystem: false },
   { code: "5300", name: "Subcontractor Costs",                        type: "expense",   subType: "cost_of_sales",       isSystem: false },
@@ -131,4 +132,26 @@ export async function ensureAccountsSeeded(companyId: number): Promise<void> {
   await db.insert(accountsTable).values(
     DEFAULT_ACCOUNTS.map(a => ({ ...a, companyId }))
   );
+}
+
+/** Insert one chart account when the company was seeded before that account existed. */
+export async function ensureNamedAccount(
+  companyId: number,
+  account: (typeof DEFAULT_ACCOUNTS)[number],
+) {
+  await ensureAccountsSeeded(companyId);
+  const [byName] = await db.select().from(accountsTable).where(and(
+    eq(accountsTable.companyId, companyId),
+    eq(accountsTable.name, account.name),
+  )).limit(1);
+  if (byName) return byName;
+
+  const [byCode] = await db.select().from(accountsTable).where(and(
+    eq(accountsTable.companyId, companyId),
+    eq(accountsTable.code, account.code),
+  )).limit(1);
+  if (byCode) return byCode;
+
+  const [created] = await db.insert(accountsTable).values({ ...account, companyId }).returning();
+  return created;
 }

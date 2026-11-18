@@ -696,7 +696,7 @@ export default function CreditNoteEdit() {
         <PdfPreviewModal
  open={showPreview}
  onOpenChange={(open) => { if (!open) { setShowPreview(false); setLocation(`/credit-notes`); } }}
- title={(savedDoc ?? doc).cnNumber}
+ title={`Credit Note ${(savedDoc ?? doc).cnNumber}`}
  generatePdf={(opts) => generateCreditNote_PDF(savedDoc ?? doc, selectedCompany, opts)}
  pdfFilename={`${(savedDoc ?? doc).cnNumber}.pdf`}
  defaultEmailTo={(savedDoc ?? doc as any).contactEmail || ""}

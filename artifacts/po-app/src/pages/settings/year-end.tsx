@@ -11,7 +11,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useDateRangeOptional } from "@/contexts/date-range-context";
-import { fromInputDate } from "@/lib/date-range";
 
 type Fy = {
   id: number;
@@ -99,7 +98,7 @@ const STEPS = [
 export default function YearEndProcessPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { applyDateRange } = useDateRangeOptional();
+  const { selectFinancialYear } = useDateRangeOptional();
   const [step, setStep] = useState(1);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState<{ closed: string; next: string } | null>(null);
@@ -186,9 +185,7 @@ export default function YearEndProcessPage() {
       setDone({ closed: closeRes.closed?.label || active.label, next: next?.label || nextSpan });
       // Only move Dashboard when the next year is confirmed active — keep prior range otherwise.
       if (next?.status === "active" && next.startDate && next.endDate) {
-        const from = fromInputDate(next.startDate);
-        const to = fromInputDate(next.endDate);
-        if (from && to) applyDateRange("custom", from, to);
+        selectFinancialYear(next);
       }
       await qc.invalidateQueries({ queryKey: ["financial-years"] });
       toast({
@@ -206,10 +203,7 @@ export default function YearEndProcessPage() {
   return (
     <div className="space-y-5 pb-10" data-allow-when-closed>
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-[#101828]">Financial Year Closing & Opening</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Close the current financial year and carry forward opening balances to the next financial year.
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Financial Year Closing & Opening</h1>
       </div>
 
       {yearsQuery.isLoading ? (

@@ -1,5 +1,8 @@
-import { useState, useMemo } from "react";
-import { useLocation } from "wouter";
+import { useDocNav } from "@/lib/doc-nav";
+import { useEffect, useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
+
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,13 +41,17 @@ const QUARTERS = [
 type FilterMode = "all" | "q1" | "q2" | "q3" | "q4" | "custom";
 
 export default function VendorInvoiceList() {
-  const [, setLocation] = useLocation();
+  const { setLocation } = useDocNav();
   const { selectedCompany } = useAuth();
   const [search, setSearch] = useState("");
 
   // Filter state
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const workingYear = useWorkingYearBounds();
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  useEffect(() => {
+    if (workingYear.active) setFilterYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
 
@@ -59,7 +66,9 @@ export default function VendorInvoiceList() {
 
   // Apply date filter
   const filteredByDate = useMemo(() => {
-    if (filterMode === "all") return pis;
+    if (filterMode === "all") {
+      return workingYear.active ? pis.filter((pi) => isoInBounds(pi.piDate, workingYear.from, workingYear.to)) : pis;
+    }
     if (filterMode === "custom") {
       if (!customFrom && !customTo) return pis;
       return pis.filter(pi => {
@@ -77,7 +86,7 @@ export default function VendorInvoiceList() {
       const d = new Date(pi.piDate);
       return d.getFullYear() === filterYear && months.includes(d.getMonth());
     });
-  }, [pis, filterMode, filterYear, customFrom, customTo]);
+  }, [pis, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: any) => d.vendorName || "";
   const bulk = useBulkPartyEmail<any>({ allDocs: pis, dateFiltered: filteredByDate, getPartyName });
@@ -114,7 +123,7 @@ export default function VendorInvoiceList() {
     paid: filtered.filter(p => p.status === "paid").length,
   }), [filtered]);
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
 
   return (
     <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -136,7 +145,7 @@ export default function VendorInvoiceList() {
             onClick={() => setFilterMode("all")}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${filterMode === "all" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
-            All Time
+            {workingYear.active ? workingYear.label : "All Time"}
           </button>
           {QUARTERS.map((q, i) => {
             const key = q.label.toLowerCase() as FilterMode;

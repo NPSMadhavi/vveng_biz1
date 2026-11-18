@@ -1,5 +1,6 @@
 import { AlertTriangle, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 
 interface IssueDateFieldProps {
   value: string;
@@ -32,12 +33,10 @@ export function IssueDateField({ value, onChange, label = "Document Date", class
       <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
         {label}
       </label>
-      <input
-        type="date"
+      <SyncBridgeDatePicker
         value={effectiveValue}
-        onChange={e => onChange(e.target.value)}
-        max={today()}
-        className="flex h-10 w-full rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-1 text-sm shadow-none transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        onChange={onChange}
+        placeholder="DD/MM/YYYY"
       />
       {!hideHints && isFuture && (
         <p className="flex items-center gap-1.5 text-xs text-amber-600">

@@ -1,10 +1,13 @@
-import { useState, useMemo } from "react";
+import { useDocNav } from "@/lib/doc-nav";
+import { useEffect, useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useListQuotations, getListQuotationsQueryKey } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useSearch } from "wouter";
 import { Search, Plus, MailCheck, CheckCircle2, MoreHorizontal, Eye, Pencil, FileText, Receipt, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { usePagination } from "@/hooks/use-pagination";
@@ -51,17 +54,21 @@ function SentToCell({ emailSentTo }: { emailSentTo?: string | null }) {
 }
 
 export default function QuotationList() {
-  const [, setLocation] = useLocation();
+  const { setLocation, href } = useDocNav();
   const searchString = useSearch();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const workingYear = useWorkingYearBounds();
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  useEffect(() => {
+    if (workingYear.active) setFilterYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { selectedCompany } = useAuth();
-  const currentYear = new Date().getFullYear();
+  const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
   const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
 
   // Veda only: /quotations?status=confirmed — no status chips in UI
@@ -92,7 +99,9 @@ export default function QuotationList() {
 
   const filteredByDate = useMemo(() => {
     const all = docs ?? [];
-    if (filterMode === "all") return all;
+    if (filterMode === "all") {
+      return workingYear.active ? all.filter((d) => isoInBounds(d.issueDate || d.createdAt, workingYear.from, workingYear.to)) : all;
+    }
     if (filterMode === "custom") {
       if (!customFrom && !customTo) return all;
       return all.filter(d => {
@@ -109,7 +118,7 @@ export default function QuotationList() {
       const dt = new Date(d.createdAt);
       return dt.getFullYear() === filterYear && months.includes(dt.getMonth());
     });
-  }, [docs, filterMode, filterYear, customFrom, customTo]);
+  }, [docs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: { customerName?: string }) => d.customerName || "";
   const bulk = useBulkPartyEmail({ allDocs: docs ?? [], dateFiltered: filteredByDate, getPartyName });
@@ -142,7 +151,7 @@ export default function QuotationList() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Quotations</h1>
         </div>
-        <Link href="/quotations/new">
+        <Link href={href("/quotations/new")}>
           <Button className="gap-2"><Plus className="h-4 w-4" />Create Quotation</Button>
         </Link>
       </div>
@@ -153,7 +162,7 @@ export default function QuotationList() {
           {(["all","q1","q2","q3","q4"] as FilterMode[]).map(m => (
             <button key={m} onClick={() => setFilterMode(m)}
               className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${filterMode===m?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}
-            >{m==="all"?"All Time":m.toUpperCase()}</button>
+            >{m==="all"?(workingYear.active ? workingYear.label : "All Time"):m.toUpperCase()}</button>
           ))}
           <button onClick={() => setFilterMode("custom")}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors flex items-center gap-1 ${filterMode==="custom"?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}

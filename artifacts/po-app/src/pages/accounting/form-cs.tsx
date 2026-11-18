@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,7 +96,12 @@ function InputRow({ label, value, onChange, hint }: { label: string; value: stri
 
 export default function FormCsPage() {
   const qc = useQueryClient();
-  const [ya, setYa] = useState(CUR_YEAR + 1); // Default to upcoming YA (covers current FY)
+  const workingYear = useWorkingYearBounds();
+  const yaChoices = Array.from(new Set([workingYear.year + 1, ...YAS])).sort((a, b) => b - a);
+  const [ya, setYa] = useState(CUR_YEAR + 1);
+  useEffect(() => {
+    if (workingYear.active) setYa(workingYear.year + 1);
+  }, [workingYear.active, workingYear.year]);
   const fy = ya - 1; // Financial Year
 
   const [revenue,         setRevenue]         = useState("");
@@ -197,7 +203,7 @@ export default function FormCsPage() {
         </div>
         {/* YA selector */}
         <div className="flex gap-1.5 flex-wrap justify-end">
-          {YAS.map(y => (
+          {yaChoices.map(y => (
             <button key={y} onClick={() => setYa(y)}
               className={cn("px-3 py-1.5 rounded-full text-sm font-medium border transition-colors",
                 ya === y ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted")}>

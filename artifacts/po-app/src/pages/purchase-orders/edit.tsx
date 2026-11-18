@@ -1,9 +1,11 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptySalesManpower, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerSalesDateFields, salesManpowerSchema } from "@/components/manpower-quotation-fields";
 import { useEffect, useRef, useState, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import type { FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useLocation, useParams } from "wouter";
+import { useParams } from "wouter";
 import {
   useGetPurchaseOrder,
   getGetPurchaseOrderQueryKey,
@@ -38,6 +40,7 @@ import { ImportItemsDialog } from "@/components/import-items-dialog";
 import { useVoucherAttachment } from "@/components/voucher-document-upload";
 import { CustomerPoUploadDialog, type ExtractedPoData } from "@/components/customer-po-upload-dialog";
 import { cn, plainText } from "@/lib/utils";
+import { isGeneralParty, isManpowerParty } from "@/lib/party-usage";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
@@ -61,6 +64,8 @@ const itemSchema = z.object({
   qty: z.coerce.number().min(0).default(1),
   uom: z.coerce.string().default(""),
   unitPrice: z.coerce.number().min(0, "Cannot be negative"),
+  discount: z.coerce.number().min(0).default(0),
+  isFoc: z.boolean().default(false),
   isStockItem: z.boolean().default(false),
   stockItemId: z.number().nullish(),
   warehouseId: z.number().nullish(),
@@ -86,13 +91,15 @@ const poSchema = z.object({
   customerPoRef: z.string().optional(),
   status: z.enum(["draft", "confirmed", "cancelled", "sent"]),
   tax: z.coerce.number().min(0).max(100).default(0),
+  manpowerDetails: salesManpowerSchema.optional(),
   items: z.array(itemSchema).min(1, "At least one item is required"),
 });
 
 export default function PurchaseOrderEdit() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
   const queryClient = useQueryClient();
@@ -187,6 +194,7 @@ export default function PurchaseOrderEdit() {
         isPrivate: (po as any).isPrivate ?? false,
         customerId: (po as any).customerId ?? null,
         customerPoRef: (po as any).customerPoRef ?? "",
+        manpowerDetails: { ...emptySalesManpower, ...((po as any).manpowerDetails || {}) },
         status: (po.status as any) === "sent" || po.status === "confirmed" || po.status === "draft" || po.status === "cancelled"
           ? (po.status as "draft" | "confirmed" | "cancelled" | "sent")
           : "confirmed",
@@ -254,10 +262,11 @@ export default function PurchaseOrderEdit() {
     return () => subscription.unsubscribe();
   }, [form, append, initialized]);
 
-  const subtotal = items.reduce(
-    (sum, item) => (item as any).type === "section" ? sum : sum + (Number(item.qty) || 0) * (Number(item.unitPrice) || 0),
-    0
-  );
+  const subtotal = items.reduce((sum, item) => {
+    if ((item as any).type === "section" || (item as any).isFoc) return sum;
+    const disc = Number((item as any).discount) || 0;
+    return sum + (Number(item.qty) || 0) * (Number(item.unitPrice) || 0) * (1 - disc / 100);
+  }, 0);
   const taxAmount = subtotal * (taxPercent / 100);
   const totalAmount = subtotal + taxAmount;
 
@@ -287,7 +296,7 @@ export default function PurchaseOrderEdit() {
     const filledItems = values.items.filter(
       (item) => (item as any).type === "section"
         ? plainText((item as any).sectionLabel) !== ""
-        : (plainText(item.partNumber) !== "" || plainText(item.description) !== "")
+        : (plainText(item.partNumber) !== "" || plainText(item.description) !== "" || (isManpower && Number(item.unitPrice) > 0))
     );
     const realItems = filledItems.filter((item: any) => item.type !== "section");
     if (realItems.length === 0) {
@@ -297,7 +306,7 @@ export default function PurchaseOrderEdit() {
     const itemsWithAmount = filledItems.map((item) => ({
       ...item,
       partNumber: plainText(item.partNumber),
-      amount: (item as any).type === "section" ? 0 : item.qty * item.unitPrice,
+      amount: (item as any).type === "section" || (item as any).isFoc ? 0 : item.qty * item.unitPrice * (1 - (Number((item as any).discount) || 0) / 100),
       isStockItem: item.isStockItem === true || Number((item as any).stockItemId) > 0,
       stockItemId: Number((item as any).stockItemId) > 0 ? Number((item as any).stockItemId) : undefined,
       warehouseId: Number((item as any).warehouseId) > 0 ? Number((item as any).warehouseId) : undefined,
@@ -305,7 +314,7 @@ export default function PurchaseOrderEdit() {
     }));
 
     updateMutation.mutate(
-      { id, data: { ...values, status: "draft", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload } as any },
+      { id, data: (() => { const payload: any = { ...values, status: "draft", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload }; if (!isManpower) delete payload.manpowerDetails; return payload; })() },
       {
         onSuccess: async (data) => {
           queryClient.setQueryData(getListPurchaseOrdersQueryKey(), (old: any) =>
@@ -332,7 +341,7 @@ export default function PurchaseOrderEdit() {
     const filledItems = values.items.filter(i =>
       (i as any).type === "section"
         ? plainText((i as any).sectionLabel) !== ""
-        : (plainText(i.partNumber) !== "" || plainText(i.description) !== "")
+        : (plainText(i.partNumber) !== "" || plainText(i.description) !== "" || (isManpower && Number(i.unitPrice) > 0))
     );
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (!realItems.length) {
@@ -342,14 +351,14 @@ export default function PurchaseOrderEdit() {
     const itemsWithAmount = filledItems.map((i) => ({
       ...i,
       partNumber: plainText(i.partNumber),
-      amount: (i as any).type === "section" ? 0 : i.qty * i.unitPrice,
+      amount: (i as any).type === "section" || (i as any).isFoc ? 0 : i.qty * i.unitPrice * (1 - (Number((i as any).discount) || 0) / 100),
       isStockItem: i.isStockItem === true || Number((i as any).stockItemId) > 0,
       stockItemId: Number((i as any).stockItemId) > 0 ? Number((i as any).stockItemId) : undefined,
       warehouseId: Number((i as any).warehouseId) > 0 ? Number((i as any).warehouseId) : undefined,
       warehouseName: (i as any).warehouseName || undefined,
     }));
     updateMutation.mutate(
-      { id, data: { ...values, status: "confirmed", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload } as any },
+      { id, data: (() => { const payload: any = { ...values, status: "confirmed", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload }; if (!isManpower) delete payload.manpowerDetails; return payload; })() },
       {
         onSuccess: async (data) => {
           queryClient.setQueryData(getListPurchaseOrdersQueryKey(), (old: any) =>
@@ -563,6 +572,7 @@ export default function PurchaseOrderEdit() {
                   )}
                 />
                 </div>
+                {isManpower ? <ManpowerCustomerExtraFields control={form.control} addressName="vendorAddress" /> : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <FormField
  control={form.control}
@@ -578,6 +588,7 @@ export default function PurchaseOrderEdit() {
                   )}
                 />
                 </div>
+                )}
               </CardContent>
             </Card>
 
@@ -606,7 +617,7 @@ export default function PurchaseOrderEdit() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {customers.map((c: any) => (
+                          {customers.filter((c: any) => (location.startsWith("/manpower/") ? isManpowerParty(c) : isGeneralParty(c)) || String(c.id) === String(field.value)).map((c: any) => (
                             <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
                           ))}
                         </SelectContent>
@@ -698,7 +709,19 @@ export default function PurchaseOrderEdit() {
                   )}
                 />
                 </div>
+                {isManpower && (
+                <ManpowerSalesDateFields control={form.control}>
+                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Delivery Date</FormLabel>
+                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                </ManpowerSalesDateFields>
+                )}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {!isManpower && (
                 <FormField
  control={form.control}
  name="deliveryDate"
@@ -712,6 +735,7 @@ export default function PurchaseOrderEdit() {
                     </FormItem>
                   )}
                 />
+                )}
                 <FormField
  control={form.control}
  name="deliveryAddress"
@@ -735,12 +759,14 @@ export default function PurchaseOrderEdit() {
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3 flex-wrap">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item", sectionLabel: "", sectionAlign: "left", partNumber: "", uom: "", description: "", qty: 1, unitPrice: 0, isStockItem: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item", sectionLabel: "", sectionAlign: "left", partNumber: "", uom: isManpower ? "Hourly" : "", description: "", qty: 1, unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section", sectionLabel: "", sectionAlign: "left", partNumber: "", uom: "", description: "", qty: 1, unitPrice: 0, isStockItem: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportOpen(true)}>
                     <Upload className="h-3 w-3" /> Import from PDF/Excel
                   </Button>
@@ -765,6 +791,7 @@ export default function PurchaseOrderEdit() {
                 </div>
               )}
             </CardHeader>
+            {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={formatCurrency} /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -926,23 +953,9 @@ export default function PurchaseOrderEdit() {
                 </tbody>
               </table>
             </div>
+            )}
             <div className="bg-muted/20 border-t p-6">
-              <div className="flex flex-col md:flex-row justify-between gap-6">
-                <div className="flex-1 max-w-md">
-                  <FormField
- control={form.control}
- name="notes"
- render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-muted-foreground">Additional Notes</FormLabel>
-                        <FormControl>
-                          <RichTextEditor value={field.value ?? ""} onChange={field.onChange} placeholder="" className="min-h-[96px]" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
+              <div className="flex flex-col md:flex-row justify-end gap-6">
                 <div className="w-full md:w-72 space-y-4">
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground">Subtotal</span>

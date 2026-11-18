@@ -82,6 +82,12 @@ async function ensureSettingsSchema(): Promise<void> {
         `ALTER TABLE settings ADD COLUMN IF NOT EXISTS bc_prefix text DEFAULT 'BC'`,
         `ALTER TABLE settings ADD COLUMN IF NOT EXISTS bc_counter integer NOT NULL DEFAULT 0`,
         `ALTER TABLE settings ADD COLUMN IF NOT EXISTS bc_suffix text DEFAULT ''`,
+        `ALTER TABLE settings ADD COLUMN IF NOT EXISTS dep_prefix text DEFAULT 'DEP'`,
+        `ALTER TABLE settings ADD COLUMN IF NOT EXISTS dep_counter integer NOT NULL DEFAULT 0`,
+        `ALTER TABLE settings ADD COLUMN IF NOT EXISTS dep_suffix text DEFAULT ''`,
+        `ALTER TABLE settings ADD COLUMN IF NOT EXISTS ts_prefix text DEFAULT 'TS'`,
+        `ALTER TABLE settings ADD COLUMN IF NOT EXISTS ts_counter integer NOT NULL DEFAULT 0`,
+        `ALTER TABLE settings ADD COLUMN IF NOT EXISTS ts_suffix text DEFAULT ''`,
         `ALTER TABLE settings ADD COLUMN IF NOT EXISTS allow_negative_stock boolean NOT NULL DEFAULT false`,
         `ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_deduct_on_do boolean NOT NULL DEFAULT false`,
         `ALTER TABLE settings ADD COLUMN IF NOT EXISTS low_stock_warning numeric(15,3) DEFAULT 0`,
@@ -150,6 +156,8 @@ async function ensureSettings(companyId: number) {
       saPrefix: "SA",  saCounter: 0,  saSuffix: "",
       faPrefix: "FA",  faCounter: 0,  faSuffix: "",
       bcPrefix: "BC",  bcCounter: 0,  bcSuffix: "",
+      depPrefix: "DEP", depCounter: 0, depSuffix: "",
+      tsPrefix: "TS", tsCounter: 0, tsSuffix: "",
     }).returning();
     return created;
   } catch (err) {
@@ -242,6 +250,12 @@ function formatSettings(s: typeof settingsTable.$inferSelect, country?: string |
     bcPrefix: s.bcPrefix ?? "BC",
     bcCounter: s.bcCounter ?? 0,
     bcSuffix: s.bcSuffix ?? "",
+    depPrefix: s.depPrefix ?? "DEP",
+    depCounter: s.depCounter ?? 0,
+    depSuffix: s.depSuffix ?? "",
+    tsPrefix: s.tsPrefix ?? "TS",
+    tsCounter: s.tsCounter ?? 0,
+    tsSuffix: s.tsSuffix ?? "",
     allowNegativeStock: s.allowNegativeStock ?? false,
     autoDeductOnDo: s.autoDeductOnDo ?? false,
     lowStockWarning: num(s.lowStockWarning, 0),
@@ -301,6 +315,8 @@ router.put("/", async (req, res) => {
     saPrefix, saCounter, saSuffix,
     faPrefix, faCounter, faSuffix,
     bcPrefix, bcCounter, bcSuffix,
+    depPrefix, depCounter, depSuffix,
+    tsPrefix, tsCounter, tsSuffix,
     allowNegativeStock, autoDeductOnDo, lowStockWarning, defaultUom,
     bankDetails, termsAndConditions, quotationTerms,
     defaultVerifierId, defaultApproverId, defaultPaidById,
@@ -375,6 +391,12 @@ router.put("/", async (req, res) => {
   if (bcPrefix !== undefined) updateData.bcPrefix = bcPrefix;
   if (bcCounter !== undefined) updateData.bcCounter = Number(bcCounter);
   if (bcSuffix !== undefined) updateData.bcSuffix = bcSuffix;
+  if (depPrefix !== undefined) updateData.depPrefix = depPrefix;
+  if (depCounter !== undefined) updateData.depCounter = Number(depCounter);
+  if (depSuffix !== undefined) updateData.depSuffix = depSuffix;
+  if (tsPrefix !== undefined) updateData.tsPrefix = tsPrefix;
+  if (tsCounter !== undefined) updateData.tsCounter = Number(tsCounter);
+  if (tsSuffix !== undefined) updateData.tsSuffix = tsSuffix;
   if (allowNegativeStock !== undefined) updateData.allowNegativeStock = Boolean(allowNegativeStock);
   if (autoDeductOnDo !== undefined) updateData.autoDeductOnDo = Boolean(autoDeductOnDo);
   if (lowStockWarning !== undefined) updateData.lowStockWarning = String(lowStockWarning);

@@ -24,7 +24,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { hasPosChannelAccess } from "@/contexts/auth-modules";
 import { fmtDate } from "@/lib/utils";
 import { DateRangeFilter } from "@/components/date-range-filter";
-import { CloseFyStartNextWizard } from "@/components/financial-year-controls";
+import { CloseFyStartNextWizard, usePeriodReadOnly } from "@/components/financial-year-controls";
 import {
   useDateRangeOptional,
   type FinancialYearSummary,
@@ -165,6 +165,7 @@ function buildSparkline(values: number[], yMin = 10, yMax = 160): string {
 
 export default function Dashboard() {
   const { user, hasModuleAccess, selectedCompany } = useAuth();
+  const { readOnly: fyReadOnly } = usePeriodReadOnly();
   const companyId = selectedCompany?.id ?? null;
   // Generated User schema exposes username; some sessions may also carry fullName.
   const userName =
@@ -175,6 +176,8 @@ export default function Dashboard() {
     periodPreset,
     rangeFrom,
     rangeTo,
+    rangeFromStr,
+    rangeToStr,
     applyDateRange,
     applyThisYear,
     applyFinancialYear,
@@ -207,6 +210,20 @@ export default function Dashboard() {
   });
 
   const activeFy = fyQuery.data?.active?.status === "active" ? fyQuery.data.active : null;
+  const selectedFy = (fyQuery.data?.years || []).find(
+    (year) => !!year.id && year.startDate >= rangeFromStr && year.startDate <= rangeToStr,
+  );
+  const openingQuery = useQuery({
+    queryKey: ["fy-opening-summary", companyId, selectedFy?.id ?? null],
+    enabled: !!companyId && !!selectedFy?.id,
+    queryFn: async () => {
+      const res = await fetch(`/api/financial-years/${selectedFy!.id}/opening-summary`, { credentials: "include" });
+      if (!res.ok) return { receivables: 0, payables: 0, generated: false };
+      return res.json() as Promise<{ receivables: number; payables: number; generated: boolean }>;
+    },
+  });
+  const carriedReceivable = Number(openingQuery.data?.receivables) || 0;
+  const carriedPayable = Number(openingQuery.data?.payables) || 0;
 
   useEffect(() => {
     if (!fyQuery.data?.years) return;
@@ -305,6 +322,9 @@ export default function Dashboard() {
     const monthIncomeExtra = incomeList.filter((r) =>
       inRange(r.incomeDate || r.createdAt, new Date(rangeFrom), new Date(rangeTo)),
     );
+    const monthPurchaseOrders = poList.filter((po) =>
+      inRange(po.issueDate || po.createdAt, new Date(rangeFrom), new Date(rangeTo)),
+    );
 
     const invoiceIncome = monthInvoices
       .filter((i) => i.status !== "void" && i.status !== "cancelled" && i.status !== "draft")
@@ -324,11 +344,11 @@ export default function Dashboard() {
 
     const netProfit = totalIncome - totalExpenses;
 
-    const receivable = invList
+    const receivable = monthInvoices
       .filter((i) => isOpenReceivable(i.status))
       .reduce((s, i) => s + invoiceBalance(i), 0);
 
-    const overdueReceivable = invList
+    const overdueReceivable = monthInvoices
       .filter((i) => {
         if (!isOpenReceivable(i.status)) return false;
         const due = i.deliveryDate || i.dueDate;
@@ -337,7 +357,7 @@ export default function Dashboard() {
       })
       .reduce((s, i) => s + invoiceBalance(i), 0);
 
-    const payable = viList
+    const payable = monthVendorInvoices
       .reduce((s, vi) => s + vendorOutstanding(vi), 0);
 
     // Split selected range into up to 5 buckets for the sparkline
@@ -400,14 +420,14 @@ export default function Dashboard() {
     const incomePts = buildSparkline(weeks.map((w) => w.inc));
     const expensePts = buildSparkline(weeks.map((w) => w.exp), 40, 160);
 
-    const overdueCount = invList.filter((i) => {
+    const overdueCount = monthInvoices.filter((i) => {
       if (["paid", "void", "cancelled", "draft"].includes(String(i.status))) return false;
       const due = i.deliveryDate || i.dueDate;
       if (!due) return i.status === "overdue";
       return new Date(due) < new Date(new Date().toISOString().slice(0, 10));
     }).length;
 
-    const draftCount = invList.filter((i) => i.status === "draft").length;
+    const draftCount = monthInvoices.filter((i) => i.status === "draft").length;
     const lowStock = (stockItems as any[]).filter((i) => Number(i.stockQty) <= 5).length;
 
     // Recent transactions mix
@@ -425,7 +445,7 @@ export default function Dashboard() {
       sort: number;
     }[] = [];
 
-    for (const inv of invList.slice(0, 20)) {
+    for (const inv of monthInvoices.slice(0, 20)) {
       const status = String(inv.status || "draft");
       const statusColor =
         status === "paid" ? "bg-[#dcfce7] text-[#16a34a]"
@@ -447,7 +467,7 @@ export default function Dashboard() {
         sort: new Date(inv.issueDate || inv.createdAt || 0).getTime(),
       });
     }
-    for (const exp of expList.slice(0, 10)) {
+    for (const exp of monthExpenses.slice(0, 10)) {
       txns.push({
         date: fmtDate(exp.expenseDate || exp.createdAt) || "—",
         type: "Expense",
@@ -462,7 +482,7 @@ export default function Dashboard() {
         sort: new Date(exp.expenseDate || exp.createdAt || 0).getTime(),
       });
     }
-    for (const po of poList.slice(0, 10)) {
+    for (const po of monthPurchaseOrders.slice(0, 10)) {
       txns.push({
         date: fmtDate(po.issueDate || po.createdAt) || "—",
         type: "Purchase",
@@ -518,6 +538,40 @@ export default function Dashboard() {
 
   const showEmptyPeriodBanner =
     metrics.hasSourceActivity && !metrics.hasPeriodActivity;
+  const carriedForward = carriedReceivable > 0 || carriedPayable > 0;
+  const rangeIsActiveYear =
+    !!activeFy && rangeFromStr === activeFy.startDate && rangeToStr === activeFy.endDate;
+  const carriedTransactions = [
+    carriedReceivable > 0
+      ? {
+          date: fmtDate(selectedFy?.startDate) || selectedFy?.startDate || "—",
+          type: "Opening",
+          typeCode: "O",
+          typeColor: "bg-[#f3e8ff] text-[#9333ea]",
+          number: selectedFy?.label || "Opening",
+          party: "Receivable carried forward",
+          amount: moneyExact(carriedReceivable),
+          status: "Opening",
+          statusColor: "bg-[#f3e8ff] text-[#9333ea]",
+          href: "/accounting/balance-sheet",
+        }
+      : null,
+    carriedPayable > 0
+      ? {
+          date: fmtDate(selectedFy?.startDate) || selectedFy?.startDate || "—",
+          type: "Opening",
+          typeCode: "O",
+          typeColor: "bg-[#fee2e2] text-[#dc2626]",
+          number: selectedFy?.label || "Opening",
+          party: "Payable carried forward",
+          amount: moneyExact(carriedPayable),
+          status: "Opening",
+          statusColor: "bg-[#fee2e2] text-[#dc2626]",
+          href: "/accounting/balance-sheet",
+        }
+      : null,
+  ].filter((row): row is NonNullable<typeof row> => row !== null);
+  const recentTransactions = [...carriedTransactions, ...metrics.transactions].slice(0, 5);
 
   const summaryCards = [
     {
@@ -552,23 +606,26 @@ export default function Dashboard() {
     },
     {
       title: "Outstanding Receivable",
-      value: money(metrics.receivable),
+      value: money(metrics.receivable + carriedReceivable),
       change: null,
       up: true,
       icon: ArrowUpRight,
       iconBg: "bg-[#f3e8ff]",
       iconColor: "text-[#9333ea]",
-      sub: metrics.overdueReceivable > 0 ? `Overdue: ${money(metrics.overdueReceivable)}` : null,
+      sub: [
+        carriedReceivable > 0 ? `Carried forward: ${money(carriedReceivable)}` : null,
+        metrics.overdueReceivable > 0 ? `Overdue: ${money(metrics.overdueReceivable)}` : null,
+      ].filter(Boolean).join(" · ") || null,
     },
     {
       title: "Outstanding Payable",
-      value: money(metrics.payable),
+      value: money(metrics.payable + carriedPayable),
       change: null,
       up: false,
       icon: ArrowDownRight,
       iconBg: "bg-[#fee2e2]",
       iconColor: "text-[#dc2626]",
-      sub: null,
+      sub: carriedPayable > 0 ? `Carried forward: ${money(carriedPayable)}` : null,
     },
   ];
 
@@ -581,9 +638,11 @@ export default function Dashboard() {
     { label: "New Product", icon: Package, bg: "bg-[#fef9c3]", color: "text-[#ca8a04]", href: "/stock", module: "stock_items" as const },
     { label: "New credit Note", icon: RotateCcw, bg: "bg-[#ffedd5]", color: "text-[#ea580c]", href: "/credit-notes/new", module: "credit_notes" as const },
   ].filter((action) =>
-    action.href.startsWith("/point-of-sale")
-      ? hasPosChannelAccess(hasModuleAccess, "pos_retail")
-      : hasModuleAccess(action.module),
+    fyReadOnly
+      ? false
+      : action.href.startsWith("/point-of-sale")
+        ? hasPosChannelAccess(hasModuleAccess, "pos_retail")
+        : hasModuleAccess(action.module),
   );
 
   const reminders = [
@@ -647,33 +706,37 @@ export default function Dashboard() {
 
       {showEmptyPeriodBanner && (
         <div className="rounded-xl border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">
-          <p className="font-semibold">No activity in the selected period</p>
-          <p className="mt-1 text-[13px]">
-            {periodLabel} has no income or expense documents, but this company has transactions
-            outside that range. Income, expenses, and charts are filtered to the selected dates;
-            outstanding balances and recent transactions are not.
+          <p className="font-semibold">
+            {carriedForward ? "New year — balances carried forward" : "No activity in the selected period"}
           </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="border-[#f59e0b] bg-white text-[#92400e] hover:bg-[#fff7ed]"
-              onClick={() => applyThisYear()}
-            >
-              Use This Year
-            </Button>
-            {activeFy && (
+          <p className="mt-1 text-[13px]">
+            {carriedForward
+              ? `${periodLabel} has no new income or expense documents. Income, expenses, and profit start at zero. Outstanding receivable and payable include balances carried forward from the previous year.`
+              : `${periodLabel} has no income or expense documents in this range. Income, expenses, outstanding balances, and recent transactions follow the selected dates.`}
+          </p>
+          {!rangeIsActiveYear && (
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button
                 type="button"
                 size="sm"
-                className="bg-[#2563EB] text-white hover:bg-[#1d4ed8]"
-                onClick={() => applyFinancialYear(activeFy)}
+                variant="outline"
+                className="border-[#f59e0b] bg-white text-[#92400e] hover:bg-[#fff7ed]"
+                onClick={() => applyThisYear()}
               >
-                Use Active FY{activeFy.label ? ` (${activeFy.label})` : ""}
+                Use This Year
               </Button>
-            )}
-          </div>
+              {activeFy && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-[#2563EB] text-white hover:bg-[#1d4ed8]"
+                  onClick={() => applyFinancialYear(activeFy)}
+                >
+                  Use Active FY{activeFy.label ? ` (${activeFy.label})` : ""}
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -806,15 +869,15 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {metrics.transactions.length === 0 ? (
+                {recentTransactions.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-8 text-center text-[#94a3b8]">
                       No transactions yet.
                     </td>
                   </tr>
                 ) : (
-                  metrics.transactions.map((tx) => (
-                    <tr key={`${tx.type}-${tx.number}`} className="border-b border-[#f1f5f9] last:border-0">
+                  recentTransactions.map((tx) => (
+                    <tr key={`${tx.type}-${tx.number}-${tx.party}`} className="border-b border-[#f1f5f9] last:border-0">
                       <td className="py-3 pr-3 text-[#64748b]">{tx.date}</td>
                       <td className="py-3 pr-3">
                         <span

@@ -25,11 +25,7 @@ import {
   Settings2,
   Laptop,
   FolderOpen,
-  Key,
   Globe,
-  Radio,
-  Terminal,
-  Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -314,8 +310,6 @@ export default function SettingsBackupsPage() {
   const [localDownloadFreq, setLocalDownloadFreq] = useState<"daily" | "weekly" | "monthly">("daily");
   const [localDownloadTime, setLocalDownloadTime] = useState("02:30");
   const [localAmPm, setLocalAmPm] = useState<"AM" | "PM">("AM");
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [triggeringLocalDownload, setTriggeringLocalDownload] = useState(false);
 
   // Manual Create Company Backup Modal State
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -381,7 +375,6 @@ export default function SettingsBackupsPage() {
   const backups = data?.backups || [];
   const schedule = data?.schedule;
   const localHistory = data?.localHistory || [];
-  const agentStatus = data?.agentStatus;
   const summary = data?.summary || {
     totalBackups: 0,
     lastSuccessfulBackup: null,
@@ -448,39 +441,32 @@ export default function SettingsBackupsPage() {
       // Backend folder picker unavailable or non-Windows host
     }
 
-    // 2. Try Browser File System Access API
-    if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
-      try {
-        const handle = await (window as any).showDirectoryPicker({
-          mode: "readwrite",
-        });
-        if (handle) {
-          setFolderHandle(handle);
-          const selectedName = handle.name;
-          const driveMatch = localBackupPath.match(/^[A-Za-z]:/);
-          const drive = driveMatch ? driveMatch[0] : "C:";
-          const updatedPath = `${drive}\\BizOneBackups\\${selectedName}`;
-          setLocalBackupPath(updatedPath);
-          toast({
-            title: "Folder Connected",
-            description: `Granted write access to folder '${selectedName}'.`,
-          });
-        }
-      } catch (err: any) {
-        if (err.name !== "AbortError") {
-          toast({
-            title: "Folder Selection",
-            description: "You can type or paste any valid Windows path.",
-          });
-        }
-      }
-    } else {
-      toast({
-        title: "Manual Folder Path",
-        description: "You can type or paste your desired local Windows path directly in the field.",
-      });
-    }
+    toast({
+      title: "Type the folder path",
+      description: "The browser cannot open that folder. Type the full path, for example C:\\BizOneBackups.",
+    });
     setIsBrowsingFolder(false);
+  };
+
+  const pickLocalDownloadFolder = async () => {
+    try {
+      const res = await api("/api/system-backups/browse-folder", {
+        method: "POST",
+        body: JSON.stringify({ initialPath: localDestDir || "C:\\BizOneBackups" }),
+      });
+      if (res.supported && res.success && res.path) {
+        setLocalDestDir(String(res.path).replace(/\\+/g, "\\"));
+        toast({ title: "Folder selected", description: res.path });
+        return;
+      }
+      if (res.supported && res.cancelled) return;
+    } catch {
+      // Native picker is only available when the app is running on this Windows PC.
+    }
+    toast({
+      title: "Type the folder path",
+      description: "The browser cannot open folders that contain system files. Type the full path in the box, for example C:\\BizOneBackups.",
+    });
   };
 
   const handleStartBackup = async () => {
@@ -678,10 +664,22 @@ export default function SettingsBackupsPage() {
           localDownloadFrequency: localDownloadFreq,
         }),
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
+      let taskNote = "This browser will save the backup into the linked folder at that time.";
+      try {
+        const installed = await api("/api/system-backups/agent/install-task", {
+          method: "POST",
+          body: JSON.stringify({ serverUrl: window.location.origin }),
+        });
+        if (installed?.installed) {
+          taskNote = installed.message || `Daily download task will save into ${localDestDir}.`;
+        }
+      } catch {
+        // The hosted server cannot start a Windows task. The open browser downloads at the scheduled time.
+      }
       toast({
         title: "Settings Saved Successfully",
-        description: "Server backup schedule and Windows local download settings saved persistently.",
+        description: `Daily download at ${localDownloadTime || "02:30"} ${localAmPm} into ${localDestDir}. ${taskNote}`,
       });
       setScheduleModalOpen(false);
       qc.invalidateQueries({ queryKey: ["system-backups-dashboard"] });
@@ -690,63 +688,6 @@ export default function SettingsBackupsPage() {
       toast({ title: "Error Saving Settings", description: err.message, variant: "destructive" });
     },
   });
-
-  // Trigger Local Windows Download Immediately
-  const triggerLocalDownload = async () => {
-    setTriggeringLocalDownload(true);
-    try {
-      await api("/api/system-backups/agent/run-local", { method: "POST" });
-      toast({
-        title: "Local Download Succeeded",
-        description: `Verified backup archive downloaded directly into ${localDestDir || "C:\\BizOneBackups"}.`,
-      });
-      qc.invalidateQueries({ queryKey: ["system-backups-dashboard"] });
-    } catch (err: any) {
-      toast({
-        title: "Download Trigger Failed",
-        description: err.message || "Could not run local download agent.",
-        variant: "destructive",
-      });
-    } finally {
-      setTriggeringLocalDownload(false);
-    }
-  };
-
-  // Regenerate Agent Token Mutation
-  const regenerateTokenMut = useMutation({
-    mutationFn: () => api("/api/system-backups/agent/token/regenerate", { method: "POST" }),
-    onSuccess: (res) => {
-      toast({
-        title: "Agent Credential Regenerated",
-        description: "A new secure, revocable token has been generated for this company's Windows agent.",
-      });
-      qc.invalidateQueries({ queryKey: ["system-backups-dashboard"] });
-    },
-    onError: (err: any) => {
-      toast({ title: "Token Generation Failed", description: err.message, variant: "destructive" });
-    },
-  });
-
-  // Test Agent Connection
-  async function testAgentConnection() {
-    setTestingConnection(true);
-    try {
-      const res = await api(`/api/system-backups/agent/status?companyId=${selectedCompany?.id || 0}`);
-      toast({
-        title: "Backend Agent Endpoint OK",
-        description: `Verified connection for ${res.company?.name || "Company"}. Latest Backup: ${res.latestBackup?.backupCode || "Ready"}. Server Time: ${new Date(res.serverTime).toLocaleTimeString()}.`,
-      });
-      refetch();
-    } catch (err: any) {
-      toast({
-        title: "Connection Test Failed",
-        description: err.message || "Failed to reach agent status endpoint",
-        variant: "destructive",
-      });
-    } finally {
-      setTestingConnection(false);
-    }
-  }
 
   // Delete Backup Mutation
   const deleteBackupMut = useMutation({
@@ -976,9 +917,6 @@ export default function SettingsBackupsPage() {
               </Badge>
             )}
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Company-scoped database backups, automated scheduling, and safe data restoration for <strong>{selectedCompany?.name || "your company"}</strong>.
-          </p>
         </div>
       </div>
 
@@ -1472,7 +1410,7 @@ export default function SettingsBackupsPage() {
             <div className="flex items-center justify-between">
               <DialogTitle className="flex items-center gap-2 text-lg">
                 <CalendarClock className="h-5 w-5 text-emerald-600" />
-                Automatic Backup & Local Auto Download Schedule
+                Automatic Backup
               </DialogTitle>
               {selectedCompany?.name && (
                 <Badge variant="outline" className="text-xs bg-slate-50 border-slate-300 font-medium">
@@ -1480,9 +1418,6 @@ export default function SettingsBackupsPage() {
                 </Badge>
               )}
             </div>
-            <DialogDescription>
-              Configure server-side scheduled backups (Plesk) and automatic downloads to your local Windows PC.
-            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-5 py-2">
@@ -1648,14 +1583,7 @@ export default function SettingsBackupsPage() {
                     size="sm"
                     className="gap-1.5 text-xs bg-white whitespace-nowrap"
                     title="Click to copy PowerShell Folder Selector command"
-                    onClick={() => {
-                      const cmd = `powershell.exe -ExecutionPolicy Bypass -File C:\\BizOne_SG\\scripts\\setup-windows-agent.ps1 -CompanyId ${selectedCompany?.id || 0}`;
-                      navigator.clipboard.writeText(cmd);
-                      toast({
-                        title: "PowerShell Setup Command Copied",
-                        description: "Paste in PowerShell to open Windows Graphical Folder Browser and save to config.",
-                      });
-                    }}
+                    onClick={() => { void pickLocalDownloadFolder(); }}
                   >
                     <FolderOpen className="h-3.5 w-3.5 text-blue-600" />
                     Browse / Setup
@@ -1732,110 +1660,6 @@ export default function SettingsBackupsPage() {
                 </div>
               </div>
 
-              {/* Live Windows Agent Connection Status Card */}
-              <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="relative flex h-2.5 w-2.5">
-                      {agentStatus?.connected ? (
-                        <>
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                        </>
-                      ) : (
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-slate-400"></span>
-                      )}
-                    </span>
-                    <span className="text-xs font-semibold text-slate-800">
-                      {agentStatus?.connected ? "Windows Agent Connected" : "Windows Agent Configured / Standby"}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2.5 text-[11px] gap-1 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 hover:text-blue-800 font-medium"
-                      title="Run the Windows download agent immediately to fetch the latest backup into your local folder"
-                      onClick={triggerLocalDownload}
-                      disabled={triggeringLocalDownload}
-                    >
-                      <Play className={`h-3 w-3 ${triggeringLocalDownload ? "animate-spin" : ""}`} />
-                      {triggeringLocalDownload ? "Downloading..." : "⚡ Run Download Now"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 px-2 text-[11px] gap-1"
-                      onClick={testAgentConnection}
-                      disabled={testingConnection}
-                    >
-                      <Radio className={`h-3 w-3 ${testingConnection ? "animate-spin text-blue-600" : "text-slate-600"}`} />
-                      {testingConnection ? "Pinging..." : "Test Connection"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2 text-[11px] text-slate-500 hover:text-slate-900 gap-1"
-                      title="Regenerate secure revocable token for this company"
-                      onClick={() => {
-                        if (confirm("Regenerate agent token? The Windows agent will need to be updated with the new token.")) {
-                          regenerateTokenMut.mutate();
-                        }
-                      }}
-                      disabled={regenerateTokenMut.isPending}
-                    >
-                      <Key className="h-3 w-3" />
-                      New Token
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600 border-t pt-2">
-                  <div>
-                    <span className="text-muted-foreground">Last Agent Contact: </span>
-                    <span className="font-medium text-slate-800">
-                      {agentStatus?.lastContactAt ? formatDateTime(agentStatus.lastContactAt).full : "No contact recorded yet"}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Last Successful Download: </span>
-                    <span className="font-medium text-slate-800">
-                      {agentStatus?.lastSuccessfulDownloadAt ? formatDateTime(agentStatus.lastSuccessfulDownloadAt).full : "None recorded yet"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Windows Task Scheduler Setup Command Helper */}
-              <div className="p-3 bg-slate-900 text-slate-100 rounded-lg text-xs space-y-2 font-mono">
-                <div className="flex items-center justify-between text-slate-400">
-                  <span className="flex items-center gap-1.5">
-                    <Terminal className="h-3.5 w-3.5 text-sky-400" />
-                    One-Click Windows Setup & Scheduler Command:
-                  </span>
-                  <button
-                    type="button"
-                    className="hover:text-white"
-                    onClick={() => {
-                      const cmd = `powershell.exe -ExecutionPolicy Bypass -File C:\\BizOne_SG\\scripts\\setup-windows-agent.ps1 -Folder "${localDestDir}" -CompanyId ${selectedCompany?.id || 0} -Time "${localDownloadTime}" -AmPm "${localAmPm}" -AgentKey "${agentStatus?.agentToken || "bizone-backup-sync-key"}" -TestDownload`;
-                      navigator.clipboard.writeText(cmd);
-                      toast({ title: "Copied Windows setup command to clipboard" });
-                    }}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <p className="break-all text-[11px] text-sky-300">
-                  powershell.exe -ExecutionPolicy Bypass -File C:\BizOne_SG\scripts\setup-windows-agent.ps1 -Folder &quot;{localDestDir}&quot; -CompanyId {selectedCompany?.id || 0} -Time &quot;{localDownloadTime}&quot; -AmPm &quot;{localAmPm}&quot; -AgentKey &quot;{agentStatus?.agentToken || "bizone-backup-sync-key"}&quot; -TestDownload
-                </p>
-                <p className="text-[10px] text-slate-400 font-sans">
-                  Runs folder verification, registers Windows Task Scheduler with &apos;StartWhenAvailable&apos; policy, and performs an initial download test.
-                </p>
-              </div>
             </div>
           </div>
 
@@ -1869,9 +1693,6 @@ export default function SettingsBackupsPage() {
               <Database className="h-5 w-5 text-blue-600" />
               Create Company Backup
             </DialogTitle>
-            <DialogDescription className="text-xs text-slate-600">
-              Generate an isolated PostgreSQL database backup dumpfile for <strong>{selectedCompany?.name || "the active company"}</strong>.
-            </DialogDescription>
           </DialogHeader>
 
           {/* STATE A: IDLE (Form Input) */}
@@ -1891,21 +1712,7 @@ export default function SettingsBackupsPage() {
                 </p>
               </div>
 
-              {/* 2. Backup Type (Read-Only) */}
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-slate-700">Backup Type</Label>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-                  <span className="font-semibold text-slate-900">PostgreSQL Database Backup</span>
-                  <Badge className="ml-auto text-[10px] bg-blue-600 hover:bg-blue-600 text-white font-medium">
-                    Native Dumpfile (.dump)
-                  </Badge>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  PostgreSQL native custom format (<code className="font-mono text-blue-700">-Fc</code>) database dumpfile (<code className="font-mono text-blue-700">.dump</code>), standard for both manual and scheduled backups.
-                </p>
-              </div>
-
-              {/* 3. Local Download Folder Path with Browse button */}
+              {/* 2. Local Download Folder Path with Browse button */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="local-backup-path-input" className="text-xs font-semibold text-slate-700">

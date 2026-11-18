@@ -6,7 +6,8 @@ import {
   vendorInvoicesTable, grnTable, pool,
 } from "@workspace/db";
 import { eq, and, ilike, or, desc, SQL, gte, ne } from "drizzle-orm";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { openai, getAssistantChat } from "@workspace/integrations-openai-ai-server";
+import { ensureGatewayModel, publicAiError, vedaChat } from "../lib/veda-gateway.js";
 import { speechToText, ensureCompatibleFormat } from "@workspace/integrations-openai-ai-server/audio";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { adjustItemStockInWarehouse, resolveWarehouseId } from "../lib/inventory-service.js";
@@ -2242,6 +2243,14 @@ async function executeTool(
   }
 }
 
+function flattenGatewayPrompt(messages: any[]): string {
+  return messages.map((m) => {
+    if (m.role === "tool") return `Tool result: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")}`;
+    const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+    return `${m.role}: ${content}`;
+  }).join("\n\n");
+}
+
 router.post("/agent/chat", async (req: any, res: any): Promise<void> => {
   if (!requireAuth(req, res)) return;
 
@@ -2464,14 +2473,28 @@ Today: ${today}.${memoryBlock}`;
   const chatMessages: any[] = [{ role: "system", content: systemPrompt }, ...messages];
 
   try {
+    const assistant = getAssistantChat();
+    if (assistant.gateway) assistant.model = await ensureGatewayModel();
+
     for (let iteration = 0; iteration < 10; iteration++) {
-      const stream = await openai.chat.completions.create({
-        model: "gpt-4o",
-        max_completion_tokens: 8192,
-        messages: chatMessages,
-        ...(allowedTools.length > 0 ? { tools: allowedTools as any } : {}),
-        stream: true,
-      });
+      let stream;
+      try {
+        stream = await assistant.client.chat.completions.create({
+          model: assistant.model,
+          ...(assistant.gateway ? { max_tokens: 4096 } : { max_completion_tokens: 8192 }),
+          messages: chatMessages,
+          ...(allowedTools.length > 0 ? { tools: allowedTools as any } : {}),
+          stream: true,
+        });
+      } catch (gatewayErr: any) {
+        const status = Number(gatewayErr?.status || 0);
+        if (assistant.gateway && (status === 404 || status === 405)) {
+          const text = await vedaChat(flattenGatewayPrompt(chatMessages), { timeoutMs: 120_000 });
+          if (text) res.write(`data: ${JSON.stringify({ type: "text", content: text })}\n\n`);
+          break;
+        }
+        throw gatewayErr;
+      }
 
       let fullContent = "";
       const toolCalls: any[] = [];
@@ -2614,7 +2637,8 @@ Today: ${today}.${memoryBlock}`;
       }
     }
   } catch (e: any) {
-    res.write(`data: ${JSON.stringify({ type: "error", message: e.message })}\n\n`);
+    req.log?.warn?.({ status: e?.status, code: e?.code }, "assistant chat failed");
+    res.write(`data: ${JSON.stringify({ type: "error", message: publicAiError(e) })}\n\n`);
   }
 
   res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);

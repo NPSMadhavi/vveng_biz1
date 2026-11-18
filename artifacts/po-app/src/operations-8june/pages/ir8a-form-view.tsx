@@ -473,7 +473,11 @@ export function Ir8aFormView({
                           <span className="mb-1 block h-6 border-b border-[#94A3B8]" />
                         )}
                       </div>
-                      <Particular label="Date" value={declaredOn} />
+                      <div className="grid grid-cols-[110px_12px_minmax(0,1fr)] items-center gap-x-1 text-[13px]">
+                        <span className="text-[#64748B]">Date</span>
+                        <span className="text-[#94A3B8]">:</span>
+                        <span className="font-medium text-[#111827]">{declaredOn}</span>
+                      </div>
                     </div>
                   </div>
                 </div>

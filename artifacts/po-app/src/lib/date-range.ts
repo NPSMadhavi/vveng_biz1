@@ -74,6 +74,38 @@ export function parseLocalDate(iso: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+export function isoInBounds(iso: string | null | undefined, from: string, to: string) {
+  const day = String(iso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !from || !to) return false;
+  return day >= from && day <= to;
+}
+
+/**
+ * An employee belongs to a working year when they joined on or before that year ends.
+ * Join dates from earlier years still count, so payroll set up for them stays visible.
+ */
+export function employeeActiveInWorkingYear(
+  iso: string | null | undefined,
+  bounds: { active: boolean; to: string },
+) {
+  if (!bounds.active || !bounds.to) return true;
+  const day = String(iso || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return true;
+  return day <= bounds.to;
+}
+
+/** Open year shows only records dated in that year. A closed year shows records that already existed by its end. */
+export function recordVisibleInWorkingYear(
+  iso: string | null | undefined,
+  bounds: { active: boolean; from: string; to: string; readOnly: boolean },
+) {
+  if (!bounds.active) return true;
+  const day = String(iso || "").slice(0, 10);
+  const dated = /^\d{4}-\d{2}-\d{2}$/.test(day);
+  if (bounds.readOnly) return !dated || day <= bounds.to;
+  return dated && day >= bounds.from && day <= bounds.to;
+}
+
 export function inRange(iso: string | null | undefined, from: Date, to: Date) {
   const d = parseLocalDate(iso);
   if (!d) return false;

@@ -13,6 +13,7 @@ export const invoicesTable = pgTable("invoices", {
   deliveryDate: text("delivery_date"),
   paymentTerms: text("payment_terms"),
   salesPerson: text("sales_person"),
+  manpowerDetails: jsonb("manpower_details"),
   notes: text("notes"),
   isPrivate: boolean("is_private").default(false).notNull(),
   items: jsonb("items").notNull().default([]),

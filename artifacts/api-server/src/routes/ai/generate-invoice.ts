@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { openai } from "@workspace/integrations-openai-ai-server";
+import { getAssistantChat, openai } from "@workspace/integrations-openai-ai-server";
+import { isVedaGatewayConfigured, vedaChat } from "../../lib/veda-gateway.js";
 
 const router = Router();
 
@@ -53,6 +54,36 @@ router.post("/ai/generate-invoice", async (req: any, res: any) => {
   res.setHeader("Connection", "keep-alive");
 
   try {
+    if (isVedaGatewayConfigured()) {
+      const assistant = getAssistantChat();
+      try {
+        const stream = await assistant.client.chat.completions.create({
+          model: assistant.model,
+          max_tokens: 4096,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: prompt },
+          ],
+          stream: true,
+        });
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      } catch (gatewayErr: any) {
+        const status = Number(gatewayErr?.status || 0);
+        if (status !== 404 && status !== 405) throw gatewayErr;
+        const text = await vedaChat(`${SYSTEM_PROMPT}\n\n---\n\n${prompt}`);
+        if (text) res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+
     const stream = await openai.chat.completions.create({
       model: "gpt-5.4",
       max_completion_tokens: 4096,

@@ -1,4 +1,5 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,7 @@ function fmtDateLong(d: string | null) {
 
 interface QuarterPickerProps {
   label: string;
+  years: number[];
   year: number; setYear: (y: number) => void;
   quarter: number; setQuarter: (q: number) => void;
   useCustom: boolean; setUseCustom: (v: boolean) => void;
@@ -56,7 +58,7 @@ interface QuarterPickerProps {
   customTo: string; setCustomTo: (v: string) => void;
 }
 
-function QuarterPicker({ label, year, setYear, quarter, setQuarter, useCustom, setUseCustom, customFrom, setCustomFrom, customTo, setCustomTo }: QuarterPickerProps) {
+function QuarterPicker({ label, years, year, setYear, quarter, setQuarter, useCustom, setUseCustom, customFrom, setCustomFrom, customTo, setCustomTo }: QuarterPickerProps) {
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -69,7 +71,7 @@ function QuarterPicker({ label, year, setYear, quarter, setQuarter, useCustom, s
             value={year}
             onChange={e => { setYear(Number(e.target.value)); setUseCustom(false); }}
           >
-            {[YEAR - 2, YEAR - 1, YEAR, YEAR + 1].map(y => <option key={y} value={y}>{y}</option>)}
+            {years.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
           <div className="flex gap-1.5">
             {QUARTERS.map((q, i) => (
@@ -122,6 +124,8 @@ function QuarterPicker({ label, year, setYear, quarter, setQuarter, useCustom, s
 
 export default function GstF7Page() {
   const { selectedCompany } = useAuth();
+  const workingYear = useWorkingYearBounds();
+  const yearChoices = Array.from(new Set([workingYear.year, YEAR - 2, YEAR - 1, YEAR, YEAR + 1])).sort((a, b) => a - b);
 
   const [origYear, setOrigYear]     = useState(YEAR);
   const [origQ, setOrigQ]           = useState(Math.max(0, CURRENT_Q - 1));
@@ -134,6 +138,13 @@ export default function GstF7Page() {
   const [amdCustom, setAmdCustom]   = useState(false);
   const [amdFrom, setAmdFrom]       = useState("");
   const [amdTo, setAmdTo]           = useState("");
+  useEffect(() => {
+    if (!workingYear.active) return;
+    setOrigYear(workingYear.year);
+    setAmdYear(workingYear.year);
+    setOrigCustom(false);
+    setAmdCustom(false);
+  }, [workingYear.active, workingYear.year]);
 
   const [pdfLoading, setPdfLoading] = useState(false);
 
@@ -192,6 +203,7 @@ export default function GstF7Page() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <QuarterPicker
           label="Original Period (as submitted)"
+          years={yearChoices}
           year={origYear} setYear={setOrigYear}
           quarter={origQ} setQuarter={setOrigQ}
           useCustom={origCustom} setUseCustom={setOrigCustom}
@@ -200,6 +212,7 @@ export default function GstF7Page() {
         />
         <QuarterPicker
           label="Amended Period (corrected data)"
+          years={yearChoices}
           year={amdYear} setYear={setAmdYear}
           quarter={amdQ} setQuarter={setAmdQ}
           useCustom={amdCustom} setUseCustom={setAmdCustom}

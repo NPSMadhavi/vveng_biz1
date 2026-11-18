@@ -1,8 +1,10 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptyInvoiceManpower, invoiceManpowerSchema, ManpowerInvoiceWorkLocation, ManpowerLineItemsTable } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { ContactAutocomplete } from "@/components/contact-autocomplete";
 import { useGetInvoice, useUpdateInvoice, getGetInvoiceQueryKey, getListInvoicesQueryKey, useGetSettings, getGetSettingsQueryKey, useListPurchaseOrders, getListPurchaseOrdersQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -83,6 +85,7 @@ const schema = z.object({
   paymentTerms: z.string().optional(),
   poRefNo: z.string().optional(),
   salesPerson: z.string().optional(),
+  manpowerDetails: invoiceManpowerSchema.optional(),
   notes: z.string().optional(),
   termsAndConditions: z.string().optional(),
   deliveryInstructions: z.string().optional(),
@@ -99,7 +102,8 @@ const schema = z.object({
 export default function InvoiceEdit() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany, user, canManage } = useAuth();
   const { salesPersons } = useSalesPersons();
@@ -187,7 +191,8 @@ export default function InvoiceEdit() {
       currency: "SGD", status: "draft", tax: 9,
       discountAmount: 0,
       isPrivate: false,
-      items: [{ type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" }],
+      manpowerDetails: { ...emptyInvoiceManpower },
+      items: [{ type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" }],
     },
   });
 
@@ -226,6 +231,10 @@ export default function InvoiceEdit() {
         isPrivate: (doc as any).isPrivate ?? false,
         poRefNo: (doc as any).poRefNo || "",
         salesPerson: (doc as any).salesPerson || "",
+        manpowerDetails: {
+          ...emptyInvoiceManpower,
+          ...((doc as any).manpowerDetails || {}),
+        },
         items: items.length > 0 ? items.map((i: any) => ({
           type: i.type || "item",
           sectionLabel: i.sectionLabel || "",
@@ -459,7 +468,7 @@ export default function InvoiceEdit() {
     const filledItems = values.items.filter(i =>
       (i as any).type === "section"
         ? plainText((i as any).sectionLabel) !== ""
-        : plainText(i.partNumber) !== "" || plainText(i.description) !== ""
+        : plainText(i.partNumber) !== "" || plainText(i.description) !== "" || (isManpower && Number(i.unitPrice) > 0)
     );
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -508,7 +517,7 @@ export default function InvoiceEdit() {
       .filter(Boolean)
       .join("\n\n");
 
-    updateMutation.mutate({ id, data: {
+    const payload: any = {
       ...values,
       status: "confirmed",
       discountAmount: values.discountAmount,
@@ -517,7 +526,9 @@ export default function InvoiceEdit() {
       items: itemsWithAmount,
       createDeliveryOrder,
       exchangeRate: currency !== "SGD" ? parseFloat(exchangeRate) || 1 : 1,
-    } as any }, {
+    };
+    if (!isManpower) delete payload.manpowerDetails;
+    updateMutation.mutate({ id, data: payload }, {
       onSuccess: async (saved: any) => {
         try {
           queryClient.setQueryData(getListInvoicesQueryKey(), (old: any) => {
@@ -789,6 +800,7 @@ export default function InvoiceEdit() {
                     {(doc as any)?.soNumber || "—"}
                   </p>
                 </div>
+                {isManpower ? <ManpowerInvoiceWorkLocation control={form.control} /> : (
                 <FormField control={form.control} name="salesPerson" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Sales Person</FormLabel>
@@ -809,6 +821,7 @@ export default function InvoiceEdit() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                )}
                 <FormField control={form.control} name="isPrivate" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Private Document</FormLabel>
@@ -869,15 +882,19 @@ export default function InvoiceEdit() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/30 hover:bg-primary/5" onClick={() => setImportPOOpen(true)}>
                     <FileInput className="h-3 w-3" /> Import from PO
                   </Button>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 flex-wrap">
                   <div className="flex items-center gap-3">
@@ -898,6 +915,7 @@ export default function InvoiceEdit() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -1123,6 +1141,7 @@ export default function InvoiceEdit() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

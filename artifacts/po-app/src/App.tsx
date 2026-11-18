@@ -171,9 +171,36 @@ const PayrollConfigNewPage = lazy(() => import("@/operations-8june/pages/payroll
 const PayrollConfigEditPage = lazy(() => import("@/operations-8june/pages/payroll-config-edit"));
 const PayrollProcessPage = lazy(() => import("@/operations-8june/pages/payroll-process"));
 
+const CustomerDeploymentList = lazy(() => import("@/pages/manpower/employee-deployment-list").then((m) => ({ default: m.CustomerDeploymentList })));
+const SupplierDeploymentList = lazy(() => import("@/pages/manpower/employee-deployment-list").then((m) => ({ default: m.SupplierDeploymentList })));
+const CustomerDeploymentForm = lazy(() => import("@/pages/manpower/employee-deployment-form").then((m) => ({ default: m.CustomerDeploymentForm })));
+const SupplierDeploymentForm = lazy(() => import("@/pages/manpower/employee-deployment-form").then((m) => ({ default: m.SupplierDeploymentForm })));
+const CustomerTimesheetList = lazy(() => import("@/pages/manpower/timesheet-list").then((m) => ({ default: m.CustomerTimesheetList })));
+const SupplierTimesheetList = lazy(() => import("@/pages/manpower/timesheet-list").then((m) => ({ default: m.SupplierTimesheetList })));
+const CustomerTimesheetForm = lazy(() => import("@/pages/manpower/timesheet-form").then((m) => ({ default: m.CustomerTimesheetForm })));
+const SupplierTimesheetForm = lazy(() => import("@/pages/manpower/timesheet-form").then((m) => ({ default: m.SupplierTimesheetForm })));
+const CustomerTimesheetReport = lazy(() => import("@/pages/manpower/timesheet-report").then((m) => ({ default: m.CustomerTimesheetReport })));
+const SupplierTimesheetReport = lazy(() => import("@/pages/manpower/timesheet-report").then((m) => ({ default: m.SupplierTimesheetReport })));
+
 // ── Route title map ────────────────────────────────────────────────────────
 const ROUTE_TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
+  "/manpower/suppliers/employee-deployment/new": "New Employee Deployment",
+  "/manpower/customers/employee-deployment/new": "New Employee Deployment",
+  "/manpower/suppliers/employee-deployment": "Employee Deployment",
+  "/manpower/customers/employee-deployment": "Employee Deployment",
+  "/manpower/suppliers/quotations": "Supplier Quotation",
+  "/manpower/suppliers/purchase-orders": "Supplier Purchase Order",
+  "/manpower/suppliers/timesheets/new": "New Timesheet",
+  "/manpower/customers/timesheets/new": "New Timesheet",
+  "/manpower/suppliers/timesheets/report": "Timesheet Report",
+  "/manpower/customers/timesheets/report": "Timesheet Report",
+  "/manpower/suppliers/timesheets": "Time Sheet Management",
+  "/manpower/suppliers/vendor-invoices": "Vendor Invoice",
+  "/manpower/customers/quotations": "Customer Quotation",
+  "/manpower/customers/sales-orders": "Sales Order",
+  "/manpower/customers/timesheets": "Time Sheet Management",
+  "/manpower/customers/tax-invoices": "Tax Invoice",
   "/purchase-quotations": "Purchase Quotations",
   "/purchase-orders": "Purchase Orders",
   "/quotations": "Quotations",
@@ -482,6 +509,49 @@ function Router() {
           <Route path="/delivery-orders/new">{() => <ProtectedRoute component={DeliveryOrderNew} module="delivery_orders" />}</Route>
           <Route path="/delivery-orders/:id/edit">{() => <ProtectedRoute component={DeliveryOrderEdit} module="delivery_orders" />}</Route>
           <Route path="/delivery-orders/:id">{() => <ProtectedRoute component={DeliveryOrderView} module="delivery_orders" />}</Route>
+
+          <Route path="/manpower/suppliers/quotations/new">{() => <ProtectedRoute component={PurchaseQuotationNew} />}</Route>
+          <Route path="/manpower/suppliers/quotations/:id/edit">{() => <ProtectedRoute component={PurchaseQuotationEdit} />}</Route>
+          <Route path="/manpower/suppliers/quotations/:id">{() => <ProtectedRoute component={PurchaseQuotationView} />}</Route>
+          <Route path="/manpower/suppliers/quotations">{() => <ProtectedRoute component={PurchaseQuotationList} />}</Route>
+          <Route path="/manpower/suppliers/purchase-orders/new">{() => <ProtectedRoute component={PurchaseOrderNew} />}</Route>
+          <Route path="/manpower/suppliers/purchase-orders/:id/edit">{() => <ProtectedRoute component={PurchaseOrderEdit} />}</Route>
+          <Route path="/manpower/suppliers/purchase-orders/:id">{() => <ProtectedRoute component={PurchaseOrderView} />}</Route>
+          <Route path="/manpower/suppliers/purchase-orders">{() => <ProtectedRoute component={PurchaseOrderList} />}</Route>
+          <Route path="/manpower/suppliers/employee-deployment/new">{() => <ProtectedRoute component={SupplierDeploymentForm} />}</Route>
+          <Route path="/manpower/suppliers/employee-deployment/:id/edit">{() => <ProtectedRoute component={SupplierDeploymentForm} />}</Route>
+          <Route path="/manpower/suppliers/employee-deployment/:id">{() => <ProtectedRoute component={SupplierDeploymentForm} />}</Route>
+          <Route path="/manpower/suppliers/employee-deployment">{() => <ProtectedRoute component={SupplierDeploymentList} />}</Route>
+          <Route path="/manpower/suppliers/timesheets/new">{() => <ProtectedRoute component={SupplierTimesheetForm} />}</Route>
+          <Route path="/manpower/suppliers/timesheets/report">{() => <ProtectedRoute component={SupplierTimesheetReport} />}</Route>
+          <Route path="/manpower/suppliers/timesheets/:id/edit">{() => <ProtectedRoute component={SupplierTimesheetForm} />}</Route>
+          <Route path="/manpower/suppliers/timesheets/:id">{() => <ProtectedRoute component={SupplierTimesheetForm} />}</Route>
+          <Route path="/manpower/suppliers/timesheets">{() => <ProtectedRoute component={SupplierTimesheetList} />}</Route>
+          <Route path="/manpower/suppliers/vendor-invoices/new">{() => <ProtectedRoute component={VendorInvoiceNew} />}</Route>
+          <Route path="/manpower/suppliers/vendor-invoices/:id/edit">{() => <ProtectedRoute component={VendorInvoiceEdit} />}</Route>
+          <Route path="/manpower/suppliers/vendor-invoices/:id">{() => <ProtectedRoute component={VendorInvoiceView} />}</Route>
+          <Route path="/manpower/suppliers/vendor-invoices">{() => <ProtectedRoute component={VendorInvoiceList} />}</Route>
+          <Route path="/manpower/customers/quotations/new">{() => <ProtectedRoute component={QuotationNew} />}</Route>
+          <Route path="/manpower/customers/quotations/:id/edit">{() => <ProtectedRoute component={QuotationEdit} />}</Route>
+          <Route path="/manpower/customers/quotations/:id">{() => <ProtectedRoute component={QuotationView} />}</Route>
+          <Route path="/manpower/customers/quotations">{() => <ProtectedRoute component={QuotationList} />}</Route>
+          <Route path="/manpower/customers/sales-orders/new">{() => <ProtectedRoute component={SalesOrderNew} />}</Route>
+          <Route path="/manpower/customers/sales-orders/:id/edit">{() => <ProtectedRoute component={SalesOrderEdit} />}</Route>
+          <Route path="/manpower/customers/sales-orders/:id">{() => <ProtectedRoute component={SalesOrderView} />}</Route>
+          <Route path="/manpower/customers/sales-orders">{() => <ProtectedRoute component={SalesOrderList} />}</Route>
+          <Route path="/manpower/customers/employee-deployment/new">{() => <ProtectedRoute component={CustomerDeploymentForm} />}</Route>
+          <Route path="/manpower/customers/employee-deployment/:id/edit">{() => <ProtectedRoute component={CustomerDeploymentForm} />}</Route>
+          <Route path="/manpower/customers/employee-deployment/:id">{() => <ProtectedRoute component={CustomerDeploymentForm} />}</Route>
+          <Route path="/manpower/customers/employee-deployment">{() => <ProtectedRoute component={CustomerDeploymentList} />}</Route>
+          <Route path="/manpower/customers/timesheets/new">{() => <ProtectedRoute component={CustomerTimesheetForm} />}</Route>
+          <Route path="/manpower/customers/timesheets/report">{() => <ProtectedRoute component={CustomerTimesheetReport} />}</Route>
+          <Route path="/manpower/customers/timesheets/:id/edit">{() => <ProtectedRoute component={CustomerTimesheetForm} />}</Route>
+          <Route path="/manpower/customers/timesheets/:id">{() => <ProtectedRoute component={CustomerTimesheetForm} />}</Route>
+          <Route path="/manpower/customers/timesheets">{() => <ProtectedRoute component={CustomerTimesheetList} />}</Route>
+          <Route path="/manpower/customers/tax-invoices/new">{() => <ProtectedRoute component={InvoiceNew} />}</Route>
+          <Route path="/manpower/customers/tax-invoices/:id/edit">{() => <ProtectedRoute component={InvoiceEdit} />}</Route>
+          <Route path="/manpower/customers/tax-invoices/:id">{() => <ProtectedRoute component={InvoiceView} />}</Route>
+          <Route path="/manpower/customers/tax-invoices">{() => <ProtectedRoute component={InvoiceList} />}</Route>
 
           {/* Point of Sale */}
           <Route path="/point-of-sale/reports/closing">{() => <ProtectedRoute component={PosSalesReportPage} />}</Route>

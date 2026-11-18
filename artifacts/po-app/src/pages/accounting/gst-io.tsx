@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,9 +103,10 @@ function downloadCsv(data: GstIoData, from: string, to: string) {
 
 interface PeriodSelectorProps {
   fromDate: string; toDate: string;
+  focusYear: number;
   setFromDate: (v: string) => void; setToDate: (v: string) => void;
 }
-function PeriodSelector({ fromDate, toDate, setFromDate, setToDate }: PeriodSelectorProps) {
+function PeriodSelector({ fromDate, toDate, focusYear, setFromDate, setToDate }: PeriodSelectorProps) {
   const chipCls = (active: boolean) =>
     `px-3 py-1 rounded-full text-xs font-medium border transition-colors cursor-pointer ${
       active ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border text-muted-foreground hover:border-primary hover:text-foreground"
@@ -128,18 +130,18 @@ function PeriodSelector({ fromDate, toDate, setFromDate, setToDate }: PeriodSele
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {[YEAR, YEAR - 1].map(y => (
+            {Array.from(new Set([focusYear, YEAR, YEAR - 1])).sort((a, b) => b - a).map(y => (
               <button key={y} type="button"
                 className={chipCls(isActive(`${y}-01-01`, `${y}-12-31`))}
                 onClick={() => { setFromDate(`${y}-01-01`); setToDate(`${y}-12-31`); }}>
                 FY {y}
               </button>
             ))}
-            {QUARTERS.map((q, i) => (
+            {QUARTERS.map((q) => (
               <button key={q.label} type="button"
-                className={chipCls(isActive(`${YEAR}${q.from}`, `${YEAR}${q.to}`))}
-                onClick={() => { setFromDate(`${YEAR}${q.from}`); setToDate(`${YEAR}${q.to}`); }}>
-                {q.label} {YEAR}
+                className={chipCls(isActive(`${focusYear}${q.from}`, `${focusYear}${q.to}`))}
+                onClick={() => { setFromDate(`${focusYear}${q.from}`); setToDate(`${focusYear}${q.to}`); }}>
+                {q.label} {focusYear}
               </button>
             ))}
           </div>
@@ -163,8 +165,14 @@ function TaxBadge({ type }: { type: string }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function GstIoListing() {
+  const workingYear = useWorkingYearBounds();
   const [fromDate, setFromDate] = useState(`${YEAR}-01-01`);
   const [toDate,   setToDate]   = useState(`${YEAR}-12-31`);
+  useEffect(() => {
+    if (!workingYear.active) return;
+    setFromDate(workingYear.from);
+    setToDate(workingYear.to);
+  }, [workingYear.active, workingYear.from, workingYear.to]);
   const [activeTab, setActiveTab] = useState<"output" | "input">("output");
 
   const { data, isLoading, error } = useQuery<GstIoData>({
@@ -209,7 +217,7 @@ export default function GstIoListing() {
       </div>
 
       {/* Period selector */}
-      <PeriodSelector fromDate={fromDate} toDate={toDate} setFromDate={setFromDate} setToDate={setToDate} />
+      <PeriodSelector fromDate={fromDate} toDate={toDate} focusYear={workingYear.active ? workingYear.year : YEAR} setFromDate={setFromDate} setToDate={setToDate} />
 
       {/* Summary cards */}
       {summary && (

@@ -88,6 +88,22 @@ function isGenericOtherIncomeKey(id: string): boolean {
   return id.includes("other_income") || id.includes("other_benefit");
 }
 
+function isPayrollMetaKey(id: string): boolean {
+  return (
+    id === "hourlynormalrate" ||
+    id === "hourlynormalhours" ||
+    id === "hourlyactualhours" ||
+    id === "hourlynormalpay" ||
+    id === "perhourcharge" ||
+    id === "normalworkingdays" ||
+    id === "actualworkingdays" ||
+    id === "hourlyotdays" ||
+    id === "hourlyotrate" ||
+    id === "assignedcustomerid" ||
+    id === "assignedcustomername"
+  );
+}
+
 export function classifyEarningKey(key: string): EarningBucket {
   const id = normalizeEarningKey(key);
   if (!id || id === "overtime") return "overtime";
@@ -142,6 +158,7 @@ export function splitEarnings(value: unknown): EarningsSplit {
   const split = emptyEarningsSplit();
   let genericOtherIncome = 0;
   for (const [key, raw] of Object.entries(asEarningMap(value))) {
+    if (isPayrollMetaKey(normalizeEarningKey(key))) continue;
     const amount = readAmount(raw);
     if (!amount) continue;
     const bucket = classifyEarningKey(key);

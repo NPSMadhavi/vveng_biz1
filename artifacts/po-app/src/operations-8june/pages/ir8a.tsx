@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { recordVisibleInWorkingYear } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -101,7 +103,11 @@ function formDataFor(
 export default function Ir8aPage() {
   const { selectedCompany } = useAuth();
   const [, setLocation] = useLocation();
+  const workingYear = useWorkingYearBounds();
   const [year, setYear] = useState(String(new Date().getFullYear()));
+  useEffect(() => {
+    if (workingYear.active) setYear(String(workingYear.year));
+  }, [workingYear.active, workingYear.year]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -136,14 +142,18 @@ export default function Ir8aPage() {
   });
 
   const assessmentYear = Number(year);
+  const visibleEmployees = useMemo(
+    () => employees.filter((employee) => recordVisibleInWorkingYear(employee.joinDate || employee.createdAt, workingYear)),
+    [employees, workingYear],
+  );
   const lines = useMemo(
-    () => employees.map((employee) => {
+    () => visibleEmployees.map((employee) => {
       const config = payrollConfigs.find(
         (item) => Number(item.employeeId) === Number(employee.id) && item.isActive !== false,
       ) || payrollConfigs.find((item) => Number(item.employeeId) === Number(employee.id));
       return buildIr8aLine(employee, payrollRecords, config, assessmentYear, submittedIds.includes(employee.id));
     }),
-    [employees, payrollRecords, payrollConfigs, assessmentYear, submittedIds],
+    [visibleEmployees, payrollRecords, payrollConfigs, assessmentYear, submittedIds],
   );
   const linesRef = useRef(lines);
   linesRef.current = lines;

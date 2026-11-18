@@ -15,7 +15,8 @@ import { Plus, Search, Eye, Trash2, BookOpen } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { usePagination } from "@/hooks/use-pagination";
 import { ListPagination } from "@/components/list-pagination";
-import { ClosedYearBanner, usePeriodReadOnly } from "@/components/financial-year-controls";
+import { ClosedYearBanner, usePeriodReadOnly, useWorkingYearBounds } from "@/components/financial-year-controls";
+import { isoInBounds } from "@/lib/date-range";
 
 interface JournalEntry {
   id: number;
@@ -24,6 +25,7 @@ interface JournalEntry {
   description: string;
   refType: string;
   refId: number | null;
+  sourcePath?: string | null;
   status: string;
   createdBy: number;
   createdAt: string;
@@ -76,6 +78,7 @@ export default function JournalEntriesList() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { readOnly } = usePeriodReadOnly();
+  const workingYear = useWorkingYearBounds();
 
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -102,8 +105,11 @@ export default function JournalEntriesList() {
   const filtered = useMemo(() => {
     const list = entries.filter(e => {
       const normalizedDate = normalizeEntryDate(e.entryDate);
-      if (fromDate && normalizedDate && normalizedDate < fromDate) return false;
-      if (toDate && normalizedDate && normalizedDate > toDate) return false;
+      const fromBound = fromDate || (workingYear.active ? workingYear.from : "");
+      const toBound = toDate || (workingYear.active ? workingYear.to : "");
+      if (fromBound && normalizedDate && normalizedDate < fromBound) return false;
+      if (toBound && normalizedDate && normalizedDate > toBound) return false;
+      if (workingYear.active && !fromDate && !toDate && !isoInBounds(normalizedDate, workingYear.from, workingYear.to)) return false;
       if (search) {
         const q = search.toLowerCase();
         return e.description.toLowerCase().includes(q) || String(e.id).includes(q);
@@ -119,7 +125,7 @@ export default function JournalEntriesList() {
       if (dA !== dB) return dB.localeCompare(dA);
       return (b.id ?? 0) - (a.id ?? 0);
     });
-  }, [entries, fromDate, toDate, search]);
+  }, [entries, fromDate, toDate, search, workingYear.active, workingYear.from, workingYear.to]);
 
   const { page, setPage, totalPages, paginatedItems } = usePagination(filtered);
 
@@ -212,12 +218,21 @@ export default function JournalEntriesList() {
                     <td className="px-4 py-3">
                       {entry.refType === "manual" || !entry.refType
                         ? <Badge variant="secondary" className="text-xs">Manual</Badge>
-                        : <Badge className="text-xs bg-violet-100 text-violet-700 hover:bg-violet-100">
-                            {entry.refType === "vendor_invoice" ? "Vendor Invoice"
-                              : entry.refType === "vendor_payment" ? "Vendor Payment"
-                              : entry.refType === "invoice" ? "Invoice"
-                              : entry.refType.replace(/_/g, " ")}
-                          </Badge>
+                        : (
+                          <button
+                            type="button"
+                            className={entry.sourcePath ? "underline-offset-2 hover:underline" : undefined}
+                            onClick={() => entry.sourcePath && setLocation(entry.sourcePath)}
+                            disabled={!entry.sourcePath}
+                          >
+                            <Badge className="text-xs bg-violet-100 text-violet-700 hover:bg-violet-100">
+                              {entry.refType === "vendor_invoice" ? "Vendor Invoice"
+                                : entry.refType === "vendor_payment" ? "Vendor Payment"
+                                : entry.refType === "invoice" ? "Invoice"
+                                : entry.refType.replace(/_/g, " ")}
+                            </Badge>
+                          </button>
+                        )
                       }
                     </td>
                     <td className="px-4 py-3">

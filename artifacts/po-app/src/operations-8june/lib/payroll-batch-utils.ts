@@ -60,6 +60,27 @@ export function isPayPeriodDateDisabled(date: Date, now = new Date()): boolean {
   return false;
 }
 
+function parseIsoDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Pay period that sits inside the open financial year. */
+export function payPeriodForFinancialYear(from: string, to: string, now = new Date()) {
+  const start = parseIsoDate(from);
+  const end = parseIsoDate(to);
+  if (!start || !end) return getLastCompletedPayPeriod(now);
+  const last = getLastCompletedPayPeriod(now);
+  const lastStart = parseIsoDate(last.payPeriodStart);
+  if (lastStart && lastStart >= start && lastStart <= end) return last;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (today < start) return getPayPeriodForMonth(start.getFullYear(), start.getMonth() + 1);
+  if (today > end) return getPayPeriodForMonth(end.getFullYear(), end.getMonth() + 1);
+  return getPayPeriodForMonth(today.getFullYear(), today.getMonth() + 1);
+}
+
 export function getPayPeriodForMonth(year: number, month: number) {
   const lastDay = new Date(year, month, 0).getDate();
   return {

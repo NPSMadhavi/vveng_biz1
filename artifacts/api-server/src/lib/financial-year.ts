@@ -322,6 +322,7 @@ async function accountBalancesAsOf(companyId: number, asOf: string) {
       AND je.company_id = ${companyId}
       AND je.status IN ('posted', 'reversed')
       AND je.entry_date <= ${asOf}
+      AND COALESCE(je.ref_type, '') <> 'fy_opening'
     WHERE a.company_id = ${companyId} AND a.is_active = true
     GROUP BY a.id, a.code, a.name, a.type, a.sub_type
     ORDER BY a.code
@@ -510,7 +511,24 @@ export async function generateOpeningBalancesIdempotent(opts: {
     .limit(1);
   if (!newFy) throw new Error("New financial year not found");
   if (newFy.openingBalancesGenerated) {
-    return { alreadyGenerated: true, financialYear: newFy };
+    const [existingLine] = await db
+      .select({ id: glOpeningBalancesTable.id })
+      .from(glOpeningBalancesTable)
+      .where(eq(glOpeningBalancesTable.financialYearId, newFyId))
+      .limit(1);
+    const [existingCustomer] = await db
+      .select({ id: customerOpeningBalancesTable.id })
+      .from(customerOpeningBalancesTable)
+      .where(eq(customerOpeningBalancesTable.financialYearId, newFyId))
+      .limit(1);
+    const [existingVendor] = await db
+      .select({ id: vendorOpeningBalancesTable.id })
+      .from(vendorOpeningBalancesTable)
+      .where(eq(vendorOpeningBalancesTable.financialYearId, newFyId))
+      .limit(1);
+    if (existingLine || existingCustomer || existingVendor) {
+      return { alreadyGenerated: true, financialYear: newFy };
+    }
   }
 
   const preview = await previewOpeningBalances(companyId, previousFyId);
@@ -647,6 +665,73 @@ export async function generateOpeningBalancesIdempotent(opts: {
     .where(eq(financialYearsTable.id, newFyId))
     .limit(1);
   return { alreadyGenerated: false, financialYear: updated, preview };
+}
+
+export async function openingSummary(companyId: number, financialYearId: number) {
+  const gl = await db
+    .select()
+    .from(glOpeningBalancesTable)
+    .where(and(eq(glOpeningBalancesTable.companyId, companyId), eq(glOpeningBalancesTable.financialYearId, financialYearId)));
+  const customers = await db
+    .select()
+    .from(customerOpeningBalancesTable)
+    .where(and(eq(customerOpeningBalancesTable.companyId, companyId), eq(customerOpeningBalancesTable.financialYearId, financialYearId)));
+  const vendors = await db
+    .select()
+    .from(vendorOpeningBalancesTable)
+    .where(and(eq(vendorOpeningBalancesTable.companyId, companyId), eq(vendorOpeningBalancesTable.financialYearId, financialYearId)));
+  const receivables = customers.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const payables = vendors.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  return {
+    generated: gl.length > 0 || customers.length > 0 || vendors.length > 0,
+    receivables,
+    payables,
+    lines: gl.map((row) => ({
+      accountCode: row.accountCode,
+      accountName: row.accountName,
+      accountType: row.accountType,
+      debit: Number(row.debit) || 0,
+      credit: Number(row.credit) || 0,
+    })),
+  };
+}
+
+/** Create the carried-forward balances when the new year was activated without them. */
+export async function ensureOpeningBalances(companyId: number, financialYearId: number, userId: number) {
+  const [fy] = await db
+    .select()
+    .from(financialYearsTable)
+    .where(and(eq(financialYearsTable.id, financialYearId), eq(financialYearsTable.companyId, companyId)))
+    .limit(1);
+  if (!fy) return null;
+  const years = await db
+    .select()
+    .from(financialYearsTable)
+    .where(eq(financialYearsTable.companyId, companyId))
+    .orderBy(asc(financialYearsTable.startDate));
+  const prev = years.filter((year) => year.endDate < fy.startDate).sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
+  if (!prev || prev.status !== "closed") return openingSummary(companyId, financialYearId);
+
+  let summary = await openingSummary(companyId, financialYearId);
+  if (fy.openingBalancesGenerated && summary.generated) return summary;
+
+  if (fy.openingBalancesGenerated && !summary.generated) {
+    const preview = await previewOpeningBalances(companyId, prev.id);
+    const hasAmounts = preview.glLines.length > 0 || preview.customers.length > 0 || preview.vendors.length > 0;
+    if (!hasAmounts) return summary;
+    await db
+      .update(financialYearsTable)
+      .set({ openingBalancesGenerated: false, openingJournalEntryId: null })
+      .where(eq(financialYearsTable.id, financialYearId));
+  }
+
+  await generateOpeningBalancesIdempotent({
+    companyId,
+    previousFyId: prev.id,
+    newFyId: financialYearId,
+    userId,
+  });
+  return openingSummary(companyId, financialYearId);
 }
 
 export { CLOSED_MSG };

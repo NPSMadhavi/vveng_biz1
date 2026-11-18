@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Lock,
@@ -18,6 +19,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -123,7 +125,7 @@ export function CloseFyStartNextWizard({
 }) {
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
-  const { applyDateRange } = useDateRangeOptional();
+  const { selectFinancialYear } = useDateRangeOptional();
   const qc = useQueryClient();
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -279,9 +281,7 @@ export function CloseFyStartNextWizard({
 
       // Only move Dashboard when the next year is confirmed active — never jump to an empty inactive FY.
       if (next?.status === "active" && next.startDate && next.endDate) {
-        const from = fromInputDate(next.startDate);
-        const to = fromInputDate(next.endDate);
-        if (from && to) applyDateRange("custom", from, to);
+        selectFinancialYear(next);
       }
 
       toast({ title: "Financial year successfully closed", description: closeRes.message });
@@ -509,7 +509,7 @@ export function FinancialYearControls({
 } = {}) {
   const { toast } = useToast();
   const { canManage, isAdmin, selectedCompany } = useAuth();
-  const { rangeFrom, rangeTo, periodPreset, applyDateRange } = useDateRangeOptional();
+  const { rangeFrom, rangeTo, periodPreset, applyDateRange, selectFinancialYear } = useDateRangeOptional();
   const qc = useQueryClient();
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [activateOpen, setActivateOpen] = useState(false);
@@ -604,6 +604,9 @@ export function FinancialYearControls({
       toast({ title: "Financial year activated", description: res.message });
       setActivateOpen(false);
       qc.invalidateQueries({ queryKey: ["financial-years"] });
+      if (res?.financialYear?.startDate && res?.financialYear?.endDate) {
+        selectFinancialYear(res.financialYear);
+      }
     },
     onError: (e: any) => toast({ title: "Cannot activate", description: e.message, variant: "destructive" }),
   });
@@ -838,17 +841,115 @@ export function usePeriodReadOnly() {
     (countryRaw.toLowerCase().includes("singapore") || countryRaw.toUpperCase() === "SG");
   const mid = toInputDate(new Date((rangeFrom.getTime() + rangeTo.getTime()) / 2));
 
+  const { data: yearsData } = useQuery({
+    queryKey: ["financial-years", selectedCompany?.id],
+    queryFn: () => api("/api/financial-years"),
+    enabled,
+  });
   const { data } = useQuery({
     queryKey: ["financial-years-for-date", selectedCompany?.id, mid],
     queryFn: () => api(`/api/financial-years/for-date?date=${mid}`),
     enabled,
   });
 
+  const localFy = ((yearsData?.years || []) as Fy[]).find(
+    (year) => year.startDate <= mid && year.endDate >= mid,
+  );
+  const financialYear = (data?.financialYear as Fy | undefined) || localFy;
+  const readOnly = localFy?.status === "closed" || financialYear?.status === "closed" || !!data?.readOnly;
+
   return {
-    readOnly: !!data?.readOnly,
-    financialYear: data?.financialYear as Fy | undefined,
-    access: (data?.access as string) || "FULL",
+    readOnly,
+    financialYear,
+    access: readOnly ? "VIEW_ONLY" : ((data?.access as string) || "FULL"),
   };
+}
+
+export function FinancialYearSwitcher() {
+  const { selectedCompany } = useAuth();
+  const { rangeFrom, rangeTo, selectFinancialYear, reconcileAgainstFinancialYears } = useDateRangeOptional();
+  const countryRaw = String((selectedCompany as { country?: string } | null)?.country || "").trim();
+  const enabled =
+    !!selectedCompany &&
+    (countryRaw.toLowerCase().includes("singapore") || countryRaw.toUpperCase() === "SG");
+
+  const { data } = useQuery({
+    queryKey: ["financial-years", selectedCompany?.id],
+    queryFn: () => api("/api/financial-years"),
+    enabled,
+  });
+
+  const years: Fy[] = data?.years || [];
+  const active: Fy | null = data?.active || null;
+
+  useEffect(() => {
+    if (!years.length) return;
+    reconcileAgainstFinancialYears(years, active);
+  }, [years, active, reconcileAgainstFinancialYears]);
+
+  const selected = useMemo(() => {
+    const mid = toInputDate(new Date((rangeFrom.getTime() + rangeTo.getTime()) / 2));
+    return years.find((y) => y.startDate <= mid && y.endDate >= mid) || active;
+  }, [years, rangeFrom, rangeTo, active]);
+
+  if (!enabled || years.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-2 pb-2" data-allow-when-closed>
+      <Select
+        value={selected ? String(selected.id) : undefined}
+        onValueChange={(id) => {
+          const fy = years.find((y) => String(y.id) === id);
+          if (fy) selectFinancialYear(fy);
+        }}
+      >
+        <SelectTrigger className="h-9 w-[210px] bg-card text-sm">
+          <SelectValue placeholder="Financial year" />
+        </SelectTrigger>
+        <SelectContent>
+          {years.map((y) => (
+            <SelectItem key={y.id} value={String(y.id)}>
+              {y.label}
+              {y.status === "closed" ? " · View only" : y.status === "active" ? " · Open" : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+export function useWorkingYearBounds() {
+  const { financialYear } = usePeriodReadOnly();
+  if (financialYear?.startDate && financialYear?.endDate) {
+    const year = Number(financialYear.startDate.slice(0, 4)) || new Date().getFullYear();
+    return {
+      active: true,
+      from: financialYear.startDate,
+      to: financialYear.endDate,
+      year,
+      label: financialYear.label || `FY ${year}`,
+      readOnly: financialYear.status === "closed",
+    };
+  }
+  return {
+    active: false,
+    from: "",
+    to: "",
+    year: new Date().getFullYear(),
+    label: "",
+    readOnly: false,
+  };
+}
+
+export function useFollowWorkingYear(locked: boolean, apply: (from: string, to: string) => void) {
+  const { active, from, to } = useWorkingYearBounds();
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(() => {
+    if (locked || !active || !from || !to) return;
+    applyRef.current(from, to);
+  }, [locked, active, from, to]);
 }
 
 export function ClosedYearBanner() {
@@ -863,14 +964,121 @@ export function ClosedYearBanner() {
           Financial Year: {fy?.label} · Status: CLOSED · Access: VIEW ONLY
         </p>
         <p className="text-xs mt-0.5">
-          Records dated in this year cannot be saved. Choose a date in the open financial year to add Income or Expenses.
+          This year is view only. Create, edit, save, and delete are locked. Select the open year to make changes.
         </p>
       </div>
     </div>
   );
 }
 
-export function ClosedPeriodWriteGuard({ children }: { children: React.ReactNode }) {
+const WRITE_METHOD = /^(POST|PUT|PATCH|DELETE)$/i;
+const WRITE_LABEL = /\b(edit|delete|save|create|update|remove|void|confirm|record|submit)\b|\b(new|add)\b/i;
+
+function controlLabel(el: Element) {
+  return [el.getAttribute("aria-label"), el.getAttribute("title"), el.textContent]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isClosedYearWriteTarget(node: EventTarget | null) {
+  const start = node as HTMLElement | null;
+  if (!start?.closest) return false;
+  if (start.closest("[data-allow-when-closed]")) return false;
+  const el = start.closest("a,button,[role='menuitem'],[role='button']");
+  const titled = start.closest("[title],[aria-label]");
+  const href = el?.getAttribute("href") || "";
+  if (el && /\/(new|edit|delete)(\/|$|\?)/.test(href)) return true;
+  const label = [titled, el].filter((item): item is Element => !!item).map(controlLabel).join(" ");
+  if (!label || label.length > 80) return false;
+  if (/\b(view|export|download|print|preview|search|cancel|close|back)\b/i.test(label) && !WRITE_LABEL.test(label)) {
+    return false;
+  }
+  return WRITE_LABEL.test(label);
+}
+
+function isAllowedClosedWrite(url: string, method: string) {
+  if (!WRITE_METHOD.test(method)) return true;
+  const path = url.replace(/^https?:\/\/[^/]+/i, "");
+  if (/\/api\/(auth|login|logout)\b/i.test(path)) return true;
+  if (/\/api\/financial-years\b/i.test(path)) return true;
+  if (/\/(pdf|export|print|preview|download)(\/|$|\?)/i.test(path)) return true;
+  return false;
+}
+
+export function ClosedPeriodWriteGuard({ children }: { children: ReactNode }) {
+  const { readOnly, financialYear: fy } = usePeriodReadOnly();
+  const [location] = useLocation();
+  const { toast } = useToast();
+  const toastAt = useRef(0);
+  const writeRoute = /\/(new|edit|delete)(\/|$|\?)/.test(location);
+  const label = fy?.label || "This financial year";
+
+  const notify = useRef(() => {});
+  notify.current = () => {
+    const now = Date.now();
+    if (now - toastAt.current < 1500) return;
+    toastAt.current = now;
+    toast({
+      title: `${label} is view only`,
+      description: "Create, edit, save, and delete are locked. Select the open year to make changes.",
+      variant: "destructive",
+    });
+  };
+
+  useEffect(() => {
+    if (!readOnly) return;
+    const original = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!isAllowedClosedWrite(url, method)) {
+        notify.current();
+        return new Response(
+          JSON.stringify({ error: `${label} is view only. Select the open year to save changes.` }),
+          { status: 403, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return original(input, init);
+    };
+
+    const block = (event: Event) => {
+      const target = event.target;
+      if (event.type === "submit") {
+        const form = target as HTMLElement | null;
+        if (form?.closest?.("[data-allow-when-closed]")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        notify.current();
+        return;
+      }
+      if (!isClosedYearWriteTarget(target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      notify.current();
+    };
+
+    document.addEventListener("click", block, true);
+    document.addEventListener("submit", block, true);
+    return () => {
+      window.fetch = original;
+      document.removeEventListener("click", block, true);
+      document.removeEventListener("submit", block, true);
+    };
+  }, [readOnly, label]);
+
+  if (readOnly && writeRoute) {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-950">
+        <p className="font-semibold">{label} is closed. View only.</p>
+        <p className="mt-1">Create, edit, and save are locked. Select the open financial year to add or change records.</p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <ClosedYearBanner />

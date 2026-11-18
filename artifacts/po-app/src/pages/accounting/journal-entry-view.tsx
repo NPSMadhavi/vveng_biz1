@@ -34,6 +34,7 @@ interface JournalEntryDetail {
   description: string;
   refType: string;
   refId: number | null;
+  sourcePath?: string | null;
   status: string;
   createdBy: number;
   createdAt: string;
@@ -167,7 +168,13 @@ export default function JournalEntryView() {
           {entry.refId && (
             <div>
               <span className="text-muted-foreground">Reference ID</span>
-              <p className="font-medium mt-0.5 font-mono">#{entry.refId}</p>
+              {entry.sourcePath ? (
+                <button type="button" className="mt-0.5 block font-medium font-mono text-primary underline" onClick={() => setLocation(entry.sourcePath!)}>
+                  #{entry.refId}
+                </button>
+              ) : (
+                <p className="font-medium mt-0.5 font-mono">#{entry.refId}</p>
+              )}
             </div>
           )}
         </CardContent>

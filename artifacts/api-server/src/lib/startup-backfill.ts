@@ -571,6 +571,10 @@ export async function runStartupMigrations(): Promise<void> {
       sql: sql`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS do_number text`,
     },
     {
+      name: "sales_orders.manpower_details",
+      sql: sql`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
+    },
+    {
       name: "invoices.so_id",
       sql: sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS so_id integer`,
     },
@@ -583,12 +587,32 @@ export async function runStartupMigrations(): Promise<void> {
       sql: sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS is_modified boolean NOT NULL DEFAULT false`,
     },
     {
+      name: "invoices.manpower_details",
+      sql: sql`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
+    },
+    {
+      name: "purchase_quotations.manpower_details",
+      sql: sql`ALTER TABLE purchase_quotations ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
+    },
+    {
+      name: "purchase_orders.manpower_details",
+      sql: sql`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
+    },
+    {
+      name: "vendor_invoices.manpower_details",
+      sql: sql`ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
+    },
+    {
       name: "quotations.valid_until",
       sql: sql`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS valid_until text`,
     },
     {
       name: "quotations.sales_person",
       sql: sql`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS sales_person text`,
+    },
+    {
+      name: "quotations.manpower_details",
+      sql: sql`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
     },
     {
       name: "delivery_orders.so_id",

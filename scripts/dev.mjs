@@ -2,6 +2,7 @@ import { spawn, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { waitForApi } from "./dev-api-proxy.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const apiDir = path.join(root, "artifacts", "api-server");
@@ -243,6 +244,11 @@ if (!viteJs) {
   console.error("Cannot find vite. Run `npm install` from the repo root first.");
   process.exit(1);
 }
+console.log(`Waiting for API on http://localhost:${API_PORT} ...`);
+const apiReady = await waitForApi(Number(API_PORT));
+if (apiReady) console.log(`API is ready on http://localhost:${API_PORT}`);
+else console.warn(`API was not ready yet. The frontend will retry safe /api requests while it starts.`);
+
 console.log(`Starting frontend on http://localhost:${WEB_PORT} ...`);
 children.push(
   run(

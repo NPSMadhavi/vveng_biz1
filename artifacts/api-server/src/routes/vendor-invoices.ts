@@ -30,6 +30,15 @@ declare module "express-session" {
 
 const router: IRouter = Router();
 
+async function ensureManpowerDetails(): Promise<void> {
+  try {
+    await pool.query(`ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS manpower_details jsonb`);
+  } catch (error: any) {
+    if (error?.code === "42P01") return;
+    throw error;
+  }
+}
+
 function requireAuth(req: any, res: any): boolean {
   if (!req.session.userId) { res.status(401).json({ error: "Not authenticated" }); return false; }
   return true;
@@ -100,6 +109,7 @@ async function recalcPI(piId: number, companyId: number): Promise<void> {
 }
 
 router.get("/vendor-invoices", async (req, res): Promise<void> => {
+  await ensureManpowerDetails();
   if (!requireAuth(req, res)) return;
   const companyId = req.session.companyId;
   if (!companyId) { res.status(400).json({ error: "No company selected" }); return; }
@@ -127,13 +137,14 @@ router.get("/vendor-invoices", async (req, res): Promise<void> => {
 
 router.post("/vendor-invoices", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   if (!requireCompany(req, res)) return;
   const companyId = req.session.companyId!;
   const userId = req.session.userId!;
 
     const { piNumber, piDate, vendorName, poIds, poNumbers, currency, totalAmount, notes, expenseAccountId,
       gstTreatment, gstRate, gstAmount, gstInclusive, exchangeRate, paymentTerms, dueDate,
-      plannedPaymentDate, remindersEnabled, reminderStartAfterDay, reminderEmails, salesPerson, items,
+      plannedPaymentDate, remindersEnabled, reminderStartAfterDay, reminderEmails, salesPerson, items, manpowerDetails,
       customerNote, deliveryInstructions, termsAndConditions, authorisedSignature, discountAmount } = req.body;
   if (!vendorName?.trim()) { res.status(400).json({ error: "Vendor name is required" }); return; }
   if (!totalAmount || isNaN(Number(totalAmount)) || Number(totalAmount) <= 0) {
@@ -187,6 +198,7 @@ router.post("/vendor-invoices", async (req, res): Promise<void> => {
       discountAmount: parseFloat(String(discountAmount ?? "0")).toFixed(2),
       expenseAccountId: parsedExpenseAccountId,
       salesPerson: salesPerson || null,
+      manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null,
       items: normalizedItems,
       subtotal: netAmount.toFixed(2),
       tax: parseFloat(String(gstAmount ?? "0")).toFixed(2),
@@ -293,6 +305,7 @@ router.get("/vendor-invoices/:id", async (req, res): Promise<void> => {
 
 router.put("/vendor-invoices/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
@@ -301,8 +314,14 @@ router.put("/vendor-invoices/:id", async (req, res): Promise<void> => {
 
     const { piNumber, piDate, vendorName, poIds, poNumbers, currency, totalAmount, notes,
       gstTreatment, gstRate, gstAmount, gstInclusive, exchangeRate, paymentTerms, dueDate,
-      plannedPaymentDate, remindersEnabled, reminderStartAfterDay, reminderEmails, salesPerson, items,
+      plannedPaymentDate, remindersEnabled, reminderStartAfterDay, reminderEmails, salesPerson, items, manpowerDetails,
       customerNote, deliveryInstructions, termsAndConditions, authorisedSignature, discountAmount, expenseAccountId } = req.body;
+  const existingPeriod = await assertPeriodWritable(existing.companyId, String(existing.piDate || "").slice(0, 10));
+  if (!existingPeriod.ok) { res.status(existingPeriod.status).json({ error: existingPeriod.error }); return; }
+  if (piDate) {
+    const nextPeriod = await assertPeriodWritable(existing.companyId, String(piDate).slice(0, 10));
+    if (!nextPeriod.ok) { res.status(nextPeriod.status).json({ error: nextPeriod.error }); return; }
+  }
   const updates: any = { updatedAt: new Date() };
   if (piNumber !== undefined) updates.piNumber = piNumber.trim();
   if (piDate !== undefined) updates.piDate = piDate;
@@ -337,6 +356,7 @@ router.put("/vendor-invoices/:id", async (req, res): Promise<void> => {
   if (gstInclusive !== undefined) updates.gstInclusive = !!gstInclusive;
   if (exchangeRate !== undefined) updates.exchangeRate = parseFloat(exchangeRate).toFixed(6);
   if (salesPerson !== undefined) updates.salesPerson = salesPerson || null;
+  updates.manpowerDetails = manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null;
   if (expenseAccountId !== undefined) {
     updates.expenseAccountId = expenseAccountId === null || expenseAccountId === "" || expenseAccountId === "none"
       ? null
@@ -436,6 +456,8 @@ router.delete("/vendor-invoices/:id", async (req, res): Promise<void> => {
       : eq(vendorInvoicesTable.id, id),
   );
   if (!toDelete) { res.status(404).json({ error: "Not found" }); return; }
+  const deletePeriod = await assertPeriodWritable(toDelete.companyId, String(toDelete.piDate || "").slice(0, 10));
+  if (!deletePeriod.ok) { res.status(deletePeriod.status).json({ error: deletePeriod.error }); return; }
 
   // JE reverse is non-fatal (missing journals/accounts on incomplete tenants).
   try {

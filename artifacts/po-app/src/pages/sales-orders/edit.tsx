@@ -1,8 +1,10 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptySalesManpower, ManpowerLineItemsTable, ManpowerSalesCustomerFields, ManpowerSalesDateFields, salesManpowerSchema } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { ContactAutocomplete } from "@/components/contact-autocomplete";
 import { useGetSalesOrder, useUpdateSalesOrder, getGetSalesOrderQueryKey, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
 import { useVoucherAttachment } from "@/components/voucher-document-upload";
@@ -77,12 +79,14 @@ const schema = z.object({
   discountAmount: z.coerce.number().min(0).default(0),
   isPrivate: z.boolean().default(false),
   items: z.array(itemSchema).min(1),
+  manpowerDetails: salesManpowerSchema.optional(),
 });
 
 export default function SalesOrderEdit() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
   const queryClient = useQueryClient();
@@ -159,6 +163,7 @@ export default function SalesOrderEdit() {
         tax: derivedTaxPct,
         discountAmount: Number((doc as any).discountAmount) || 0,
         isPrivate: (doc as any).isPrivate ?? false,
+        manpowerDetails: { ...emptySalesManpower, ...((doc as any).manpowerDetails || {}) },
         items: items.length > 0 ? items.map((i: any) => (
           i.type === "section"
             ? { type: "section" as const, sectionLabel: i.sectionLabel || "", sectionAlign: i.sectionAlign || "left", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "", selectedSerials: [], selectedSerialIds: [] }
@@ -255,7 +260,7 @@ export default function SalesOrderEdit() {
     setIsSubmitting(true);
     const filledItems = values.items.filter(i => {
       if ((i as any).type === "section") return ((i as any).sectionLabel || "").trim() !== "";
-      return i.partNumber.trim() !== "" || i.description.trim() !== "";
+      return (i.partNumber || "").trim() !== "" || (i.description || "").trim() !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -270,7 +275,9 @@ export default function SalesOrderEdit() {
     });
     const isCancelled = values.status === "cancelled";
     const newStatus = isCancelled ? "cancelled" : (openPreview ? "confirmed" : "draft");
-    updateMutation.mutate({ id, data: { ...values, qtId: linkedQt.current.qtId, qtNumber: values.qtNumber?.trim() || null, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount, ...attachment.payload } as any }, {
+    const payload: any = { ...values, qtId: linkedQt.current.qtId, qtNumber: values.qtNumber?.trim() || null, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount, ...attachment.payload };
+    if (!isManpower) delete payload.manpowerDetails;
+    updateMutation.mutate({ id, data: payload }, {
       onSuccess: async () => {
         await queryClient.refetchQueries({ queryKey: getGetSalesOrderQueryKey(id) });
         await invalidateDocumentList(queryClient, "sales-orders");
@@ -477,6 +484,7 @@ export default function SalesOrderEdit() {
                     </FormItem>
                   )} />
                 </div>
+                {isManpower && <ManpowerSalesCustomerFields control={form.control} />}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <FormField control={form.control} name="customerAddress" render={({ field }) => (
                     <FormItem>
@@ -494,7 +502,8 @@ export default function SalesOrderEdit() {
                 <CardTitle className="text-lg">Sales Order Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isManpower ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
+                  {!isManpower && (
                   <FormField control={form.control} name="status" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Status</FormLabel>
@@ -505,6 +514,7 @@ export default function SalesOrderEdit() {
                       </select>
                     </FormItem>
                   )} />
+                  )}
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
@@ -527,7 +537,30 @@ export default function SalesOrderEdit() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {isManpower && (
+                  <FormField control={form.control} name="isPrivate" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Private Document</FormLabel>
+                      <div className="flex h-10 items-center gap-3 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3">
+                        <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <p className="flex-1 text-xs text-muted-foreground">Only you &amp; admins</p>
+                        <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                      </div>
+                    </FormItem>
+                  )} />
+                  )}
                 </div>
+                {isManpower ? (
+                  <ManpowerSalesDateFields control={form.control}>
+                    <FormField control={form.control} name="deliveryDate" render={({ field }) => (
+                      <FormItem className="min-w-0">
+                        <FormLabel>Delivery Date</FormLabel>
+                        <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </ManpowerSalesDateFields>
+                ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <FormField control={form.control} name="isPrivate" render={({ field }) => (
                     <FormItem>
@@ -547,6 +580,19 @@ export default function SalesOrderEdit() {
                     </FormItem>
                   )} />
                 </div>
+                )}
+                {isManpower && (
+                <FormField control={form.control} name="status" render={({ field }) => (
+                  <FormItem className="max-w-xs">
+                    <FormLabel>Status</FormLabel>
+                    <select value={field.value} onChange={e => field.onChange(e.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring">
+                      <option value="draft">Draft</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </FormItem>
+                )} />
+                )}
               </CardContent>
             </Card>
           </div>
@@ -556,12 +602,14 @@ export default function SalesOrderEdit() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportQtOpen(true)}>
                     <Copy className="h-3 w-3" /> Import from Quotation
                   </Button>
@@ -588,6 +636,7 @@ export default function SalesOrderEdit() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -738,6 +787,7 @@ export default function SalesOrderEdit() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

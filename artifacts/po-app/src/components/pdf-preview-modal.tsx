@@ -426,7 +426,7 @@ export function PdfPreviewModal({
             <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
             <div className="flex items-center gap-2 pr-8">
               {onEdit && (
-                <Button variant="outline" size="sm" onClick={onEdit}>
+                <Button variant="outline" size="sm" type="button" onClick={onEdit}>
                   Edit
                 </Button>
               )}

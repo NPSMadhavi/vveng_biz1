@@ -1,5 +1,6 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useGetQuotation, getGetQuotationQueryKey, getListQuotationsQueryKey, useDeleteQuotation, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,7 +75,7 @@ function buildQuotationCopyPrefill(doc: any) {
 export default function QuotationView() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { setLocation } = useDocNav();
   const { toast } = useToast();
   const { selectedCompany, canManage } = useAuth();
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -329,6 +330,18 @@ export default function QuotationView() {
           <CardHeader><CardTitle className="text-base">Customer</CardTitle></CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div><span className="font-medium text-base">{doc.customerName}</span></div>
+            {(doc as any).manpowerDetails?.phone && (
+              <div className="text-sm">
+                <span className="text-muted-foreground">Phone: </span>
+                <span>{(doc as any).manpowerDetails.phone}</span>
+              </div>
+            )}
+            {(doc as any).manpowerDetails?.workLocation && (
+              <div className="text-sm">
+                <span className="text-muted-foreground">Work Location / Site: </span>
+                <span>{(doc as any).manpowerDetails.workLocation}</span>
+              </div>
+            )}
             {doc.customerAddress && <p className="text-muted-foreground whitespace-pre-line">{doc.customerAddress}</p>}
             {doc.customerContact && (
               <div className="text-sm">
@@ -366,6 +379,26 @@ export default function QuotationView() {
           </CardContent>
         </Card>
       </div>
+
+      {(doc as any).manpowerDetails && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Manpower Requirements</CardTitle></CardHeader>
+          <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+            {(doc as any).manpowerDetails.serviceStartDate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Service Start Date</span><span>{fmtDate((doc as any).manpowerDetails.serviceStartDate)}</span></div>}
+            {(doc as any).manpowerDetails.serviceEndDate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Service End Date</span><span>{fmtDate((doc as any).manpowerDetails.serviceEndDate)}</span></div>}
+            <div className="flex justify-between gap-4"><span className="text-muted-foreground">Manpower Source</span><span>{(doc as any).manpowerDetails.source === "supplier" ? "Supplier Manpower" : "Own Employees"}</span></div>
+            {(doc as any).manpowerDetails.designation && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Designation</span><span>{(doc as any).manpowerDetails.designation}</span></div>}
+            {(doc as any).manpowerDetails.workers && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Number of Workers</span><span>{(doc as any).manpowerDetails.workers}</span></div>}
+            {(doc as any).manpowerDetails.billingType && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Billing Type</span><span>{(doc as any).manpowerDetails.billingType}</span></div>}
+            {(doc as any).manpowerDetails.customerRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Customer Rate (SGD)</span><span>{(doc as any).manpowerDetails.customerRate}</span></div>}
+            {(doc as any).manpowerDetails.standardHours && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Standard Hours / Day</span><span>{(doc as any).manpowerDetails.standardHours}</span></div>}
+            {(doc as any).manpowerDetails.weekdayOtRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">OT Customer Rate</span><span>{(doc as any).manpowerDetails.weekdayOtRate}</span></div>}
+            {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.supplierRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Supplier Rate</span><span>{(doc as any).manpowerDetails.supplierRate}</span></div>}
+            {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.workingDates && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Working Days</span><span>{(doc as any).manpowerDetails.workingDates}</span></div>}
+            {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.otSupplierRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">OT Supplier Rate</span><span>{(doc as any).manpowerDetails.otSupplierRate}</span></div>}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <div className="overflow-x-auto">

@@ -81,8 +81,14 @@ async function resolveAgentAuth(req: any, pool: pg.Pool): Promise<{
   const agentKey = ((req.headers["x-backup-agent-key"] as string) || (req.query.agentKey as string) || "").trim();
   const configuredKey = process.env.BACKUP_AGENT_KEY || "bizone-backup-sync-key";
 
-  // 1. Session admin authentication
-  if (req.session?.userId && (req.session.isAdmin || req.session.userRole === "admin")) {
+  // 1. Logged-in company admin / accountant (same people who can open Backup & Restore)
+  const sessionRole = String(req.session?.userRole || "").toLowerCase();
+  const sessionCanBackup =
+    Boolean(req.session?.isAdmin) ||
+    sessionRole === "admin" ||
+    sessionRole === "administrator" ||
+    sessionRole === "accountant";
+  if (req.session?.userId && sessionCanBackup) {
     const compId = Number(req.session.companyId || req.query.companyId || 0);
     if (compId) {
       const cRes = await pool.query("SELECT * FROM companies WHERE id = $1", [compId]);
@@ -336,6 +342,103 @@ router.post("/system-backups/agent/run-local", async (req, res): Promise<void> =
   }
 });
 
+// POST /system-backups/agent/install-task - register the daily Windows download task for the saved path and time
+router.post("/system-backups/agent/install-task", async (req, res): Promise<void> => {
+  const companyId = await requireCompanyAuth(req, res);
+  if (!companyId) return;
+
+  if (process.platform !== "win32") {
+    res.json({
+      installed: false,
+      reason: "The server cannot write to a Windows folder. This browser will download into the linked folder at the scheduled time.",
+    });
+    return;
+  }
+
+  const masterDbUrl = process.env.DATABASE_URL;
+  if (!masterDbUrl) {
+    res.status(500).json({ error: "Database not configured" });
+    return;
+  }
+
+  const pool = new pg.Pool({ connectionString: masterDbUrl });
+  try {
+    await ensureBackupSchema(pool);
+    const schedRes = await pool.query("SELECT * FROM backup_schedules WHERE company_id = $1 LIMIT 1", [companyId]);
+    const schedule = schedRes.rows[0];
+    if (!schedule) {
+      res.status(404).json({ error: "Save the backup schedule first." });
+      return;
+    }
+
+    const rootDir = path.resolve(process.cwd());
+    const possiblePaths = [
+      path.join(rootDir, "scripts", "setup-windows-agent.ps1"),
+      path.join(rootDir, "..", "scripts", "setup-windows-agent.ps1"),
+      path.join(rootDir, "..", "..", "scripts", "setup-windows-agent.ps1"),
+      "C:\\BizOne_SG\\scripts\\setup-windows-agent.ps1",
+    ];
+    const setupScript = possiblePaths.find((p) => fs.existsSync(p));
+    if (!setupScript) {
+      res.status(404).json({ error: "setup-windows-agent.ps1 was not found on this computer." });
+      return;
+    }
+
+    const serverUrl = String(req.body?.serverUrl || "").trim() || `${req.protocol}://${req.get("host")}`;
+    const folder = String(schedule.local_destination_dir || "C:\\BizOneBackups");
+    const time = String(schedule.local_download_time || "02:30");
+    const frequency = String(schedule.local_download_frequency || "daily");
+    const freqLabel = frequency.charAt(0).toUpperCase() + frequency.slice(1);
+    const agentKey = String(schedule.agent_token || process.env.BACKUP_AGENT_KEY || "bizone-backup-sync-key");
+
+    const ps = spawn(
+      "powershell.exe",
+      [
+        "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", setupScript,
+        "-Folder", folder,
+        "-ServerUrl", serverUrl,
+        "-CompanyId", String(companyId),
+        "-Time", time,
+        "-Frequency", freqLabel,
+        "-AgentKey", agentKey,
+      ],
+      { windowsHide: true },
+    );
+
+    let output = "";
+    let replied = false;
+    const reply = (status: number, body: Record<string, unknown>) => {
+      if (replied) return;
+      replied = true;
+      res.status(status).json(body);
+    };
+    ps.stdout.on("data", (data) => { output += data.toString(); });
+    ps.stderr.on("data", (data) => { output += data.toString(); });
+    ps.on("close", (code) => {
+      if (code === 0) {
+        reply(200, {
+          installed: true,
+          folder,
+          time,
+          message: `Daily download task registered for ${folder} at ${time}.`,
+        });
+      } else {
+        reply(500, {
+          error: "Could not register the Windows download task.",
+          output: output.split("\n").slice(-8).join("\n"),
+        });
+      }
+    });
+    ps.on("error", (err) => {
+      reply(500, { error: err.message || "Failed to launch the Windows task setup." });
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to install the download task." });
+  } finally {
+    await pool.end();
+  }
+});
+
 // GET /system-backups/download-history - fetch local Windows agent download history
 router.get("/system-backups/download-history", async (req, res): Promise<void> => {
   const masterDbUrl = process.env.DATABASE_URL;
@@ -461,16 +564,25 @@ router.post("/system-backups/browse-folder", async (req, res): Promise<void> => 
   const rawPath = typeof req.body?.initialPath === "string" ? req.body.initialPath.trim() : "";
   const initialPath = rawPath || "C:\\BizOneBackups";
 
+  const safeInitial = initialPath.replace(/["`$\r\n]/g, "");
   const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
+$start = "${safeInitial}"
+if (-not (Test-Path -LiteralPath $start)) { $start = "C:\\" }
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+$owner.Show()
+$owner.Activate()
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = "Select Local Backup Destination Folder"
-$dialog.SelectedPath = "${initialPath.replace(/["`$]/g, "")}"
+$dialog.Description = "Select the folder where backups should be saved"
+$dialog.SelectedPath = $start
 $dialog.ShowNewFolderButton = $true
-$result = $dialog.ShowDialog()
+$result = $dialog.ShowDialog($owner)
+$owner.Close()
 if ($result -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    Write-Output $dialog.SelectedPath
+    [Console]::Out.WriteLine($dialog.SelectedPath)
 }
 `;
 

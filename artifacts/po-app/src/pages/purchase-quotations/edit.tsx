@@ -1,8 +1,10 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard, ManpowerServiceDateFields } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { ContactAutocomplete } from "@/components/contact-autocomplete";
 import { useGetPurchaseQuotation, useUpdatePurchaseQuotation, getGetPurchaseQuotationQueryKey, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -64,13 +66,15 @@ const schema = z.object({
   tax: z.coerce.number().min(0).max(100).default(9),
   discountAmount: z.coerce.number().min(0).default(0),
   isPrivate: z.boolean().default(false),
+  manpowerDetails: manpowerDetailsSchema.optional(),
   items: z.array(itemSchema).min(1),
 });
 
 export default function PurchaseQuotationEdit() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
   const queryClient = useQueryClient();
@@ -130,6 +134,7 @@ export default function PurchaseQuotationEdit() {
         notes: doc.notes || "",
         currency: doc.currency || "SGD",
         status: doc.status as any,
+        manpowerDetails: { ...emptyManpowerDetails, ...((doc as any).manpowerDetails || {}) },
         tax: derivedTaxPct,
         discountAmount: Number((doc as any).discountAmount) || 0,
         isPrivate: (doc as any).isPrivate ?? false,
@@ -211,7 +216,7 @@ export default function PurchaseQuotationEdit() {
     setIsSubmitting(true);
     const filledItems = values.items.filter(i => {
       if ((i as any).type === "section") return ((i as any).sectionLabel || "").trim() !== "";
-      return i.partNumber.trim() !== "" || i.description.trim() !== "";
+      return i.partNumber.trim() !== "" || i.description.trim() !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -226,7 +231,9 @@ export default function PurchaseQuotationEdit() {
     });
     const isCancelled = values.status === "cancelled";
     const newStatus = isCancelled ? "cancelled" : (openPreview ? "confirmed" : "draft");
-    updateMutation.mutate({ id, data: { ...values, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount } as any }, {
+    const payload: any = { ...values, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount };
+    if (!isManpower) delete payload.manpowerDetails;
+    updateMutation.mutate({ id, data: payload }, {
       onSuccess: async () => {
         await queryClient.refetchQueries({ queryKey: getGetPurchaseQuotationQueryKey(id) });
         await invalidateDocumentList(queryClient, "purchase-quotations");
@@ -382,12 +389,14 @@ export default function PurchaseQuotationEdit() {
                     <FormControl><Input type="email" {...field} /></FormControl><FormMessage /></FormItem>
                 )} />
                 </div>
+                {isManpower ? <ManpowerCustomerExtraFields control={form.control} addressName="vendorAddress" /> : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <FormField control={form.control} name="vendorAddress" render={({ field }) => (
                   <FormItem><FormLabel>Address</FormLabel>
                     <FormControl><Textarea className="resize-none" rows={3} {...field} /></FormControl></FormItem>
                 )} />
                 </div>
+                )}
               </CardContent>
             </Card>
 
@@ -410,10 +419,14 @@ export default function PurchaseQuotationEdit() {
                     </FormControl><FormMessage />
                   </FormItem>
                 )} />
+                {isManpower && <ManpowerServiceDateFields control={form.control} />}
+                {!isManpower && (
                 <FormField control={form.control} name="paymentTerms" render={({ field }) => (
                   <FormItem><FormLabel>Payment Terms</FormLabel>
                     <FormControl><PaymentTermsSelect value={field.value} onChange={field.onChange} /></FormControl></FormItem>
                 )} />
+                )}
+                {!isManpower && (
                 <FormField control={form.control} name="isPrivate" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Private Document</FormLabel>
@@ -424,15 +437,43 @@ export default function PurchaseQuotationEdit() {
                     </div>
                   </FormItem>
                 )} />
+                )}
+                {!isManpower && (
                 <FormField control={form.control} name="deliveryDate" render={({ field }) => (
                   <FormItem className="sm:col-span-2 lg:col-span-3">
                     <FormLabel>Delivery Date</FormLabel>
                     <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} /></FormControl><FormMessage />
                   </FormItem>
                 )} />
+                )}
                 </div>
+                {isManpower && (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,1.8fr)]">
+                  <FormField control={form.control} name="paymentTerms" render={({ field }) => (
+                    <FormItem className="min-w-0"><FormLabel>Payment Terms</FormLabel>
+                      <FormControl><PaymentTermsSelect value={field.value} onChange={field.onChange} /></FormControl></FormItem>
+                  )} />
+                  <FormField control={form.control} name="isPrivate" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Private Document</FormLabel>
+                      <div className="flex h-10 items-center gap-3 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3">
+                        <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <p className="flex-1 text-xs text-muted-foreground">Only you &amp; admins</p>
+                        <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                      </div>
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Delivery Date</FormLabel>
+                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl><FormMessage />
+                    </FormItem>
+                  )} />
+                </div>
+                )}
               </CardContent>
             </Card>
+            {isManpower && <ManpowerRequirementsCard control={form.control} />}
           </div>
 
           <Card className="overflow-hidden">
@@ -440,12 +481,14 @@ export default function PurchaseQuotationEdit() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportOpen(true)}>
                     <Upload className="h-3 w-3" /> Import from PDF/Excel
                   </Button>
@@ -469,6 +512,7 @@ export default function PurchaseQuotationEdit() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -619,6 +663,7 @@ export default function PurchaseQuotationEdit() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

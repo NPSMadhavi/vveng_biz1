@@ -44,6 +44,8 @@ import { useAuth } from "@/contexts/auth-context";
 import { CURRENCIES } from "@/lib/currencies";
 import { isInternationalParty } from "@/lib/countries";
 import { usePagination } from "@/hooks/use-pagination";
+import { PartyUsageField } from "@/components/party-usage-field";
+import type { PartyUsage } from "@/lib/party-usage";
 
 interface Customer {
   id: number;
@@ -62,15 +64,19 @@ interface Customer {
   creditLimit: string | null;
   shipToAddress: string | null;
   quotationTerms: string | null;
+  perHourAmount?: string | null;
+  usageType?: PartyUsage;
   isActive: boolean;
   createdAt: string;
+  employeeIds?: number[];
+  assignedEmployees?: { id: number; employeeId: string; name: string }[];
 }
 
 const blank = (): Partial<Customer> => ({
   name: "", address: "", postalCode: "", country: "Singapore", contactPerson: "",
   contactEmail: "", phone: "", currency: "SGD", gstRegistered: false, gstNo: "",
   creditLimitEnabled: false, creditLimit: "",
-  shipToAddress: "", quotationTerms: "", isActive: true,
+  shipToAddress: "", quotationTerms: "", perHourAmount: "", usageType: "general", isActive: true, employeeIds: [],
 });
 
 function customerToForm(c: Customer | Record<string, any>): Partial<Customer> {
@@ -98,7 +104,20 @@ function customerToForm(c: Customer | Record<string, any>): Partial<Customer> {
     creditLimit: rawLimit != null && rawLimit !== "" ? String(rawLimit) : "",
     quotationTerms: c.quotationTerms ?? (c as any).quotation_terms ?? "",
     shipToAddress: c.shipToAddress ?? (c as any).ship_to_address ?? "",
+    perHourAmount: c.perHourAmount != null && c.perHourAmount !== ""
+      ? String(c.perHourAmount)
+      : (c as any).per_hour_amount != null
+        ? String((c as any).per_hour_amount)
+        : "",
+    usageType: (c as any).usageType === "manpower" || (c as any).usage_type === "manpower" ? "manpower" : "general",
     isActive: (c.isActive ?? (c as any).is_active) !== false,
+    employeeIds: Array.isArray((c as any).assignedEmployees)
+      ? (c as any).assignedEmployees
+          .map((employee: { id?: number }) => Number(employee.id))
+          .filter((id: number) => Number.isFinite(id))
+      : Array.isArray((c as any).employeeIds)
+        ? (c as any).employeeIds
+        : [],
   };
 }
 
@@ -273,12 +292,12 @@ export default function CustomersPage() {
     }
   }, []);
 
-  const filtered = useMemo(() => customers.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.country || "").toLowerCase().includes(search.toLowerCase()) ||
-    (c.contactEmail || "").toLowerCase().includes(search.toLowerCase()) ||
-    (c.postalCode || "").includes(search)
-  ), [customers, search]);
+  const filtered = useMemo(() => customers.filter(c => {
+    return c.name.toLowerCase().includes(search.toLowerCase()) ||
+      (c.country || "").toLowerCase().includes(search.toLowerCase()) ||
+      (c.contactEmail || "").toLowerCase().includes(search.toLowerCase()) ||
+      (c.postalCode || "").includes(search);
+  }), [customers, search]);
 
   const { page, setPage, totalPages, paginatedItems } = usePagination(filtered);
 
@@ -405,7 +424,18 @@ export default function CustomersPage() {
           setDialogMode("create");
         }
       }}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-lg max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(event) => {
+            if (document.body.hasAttribute("data-employee-picker-open")) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (document.body.hasAttribute("data-employee-picker-open")) event.preventDefault();
+          }}
+          onFocusOutside={(event) => {
+            if (document.body.hasAttribute("data-employee-picker-open")) event.preventDefault();
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
               {dialogMode === "view" ? "View Customer" : editing ? "Edit Customer" : "New Customer"}
@@ -554,6 +584,10 @@ export default function CustomersPage() {
               <p className="text-[11px] text-muted-foreground">Shown on invoices when this customer is selected.</p>
             </div>
 
+            <PartyUsageField
+              value={form.usageType === "manpower" ? "manpower" : "general"}
+              onChange={(usageType) => setField("usageType", usageType)}
+            />
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Contact Person</Label>
@@ -563,6 +597,19 @@ export default function CustomersPage() {
                 <Label>Contact Email</Label>
                 <Input type="email" value={form.contactEmail || ""} onChange={e => setField("contactEmail", e.target.value)} />
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Per hour amount</Label>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={form.perHourAmount || ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "" || /^\d*\.?\d*$/.test(value)) setField("perHourAmount", value);
+                }}
+              />
             </div>
 
             {isInternational ? (

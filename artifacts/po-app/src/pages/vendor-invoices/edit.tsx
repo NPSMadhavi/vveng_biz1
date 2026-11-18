@@ -1,3 +1,4 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
 import { useAuth } from "@/contexts/auth-context";
-import { useLocation, useParams } from "wouter";
+import { useParams } from "wouter";
 import { Check, AlertTriangle, RefreshCw, Plus, ArrowLeft, Eye, BookOpen } from "lucide-react";
 import { VendorCreateDialog } from "@/components/vendor-create-dialog";
 import { useVoucherAttachment } from "@/components/voucher-document-upload";
@@ -20,9 +21,11 @@ import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
+import { isGeneralParty, isManpowerParty } from "@/lib/party-usage";
 import { withReturnTo } from "@/lib/return-to";
 import { CURRENCIES, formatExchangeRate } from "@/lib/currencies";
 import { CurrencySelect } from "@/components/currency-select";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
 import { VendorInvoiceLineItems } from "@/components/vendor-invoice-line-items";
 import { VendorInvoiceAdditionalInfo } from "@/components/vendor-invoice-additional-info";
@@ -49,13 +52,16 @@ export default function VendorInvoiceEdit() {
   const id = Number(params.id);
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const qc = useQueryClient();
 
   const [saving, setSaving] = useState(false);
   const [savedDoc, setSavedDoc] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const editingFromPreview = useRef(false);
   const [salesPerson, setSalesPerson] = useState("");
+  const [workLocation, setWorkLocation] = useState("");
   const [newVendorOpen, setNewVendorOpen] = useState(false);
   const initialized = useRef(false);
   const skipNextRateFetch = useRef(false);
@@ -189,6 +195,7 @@ export default function VendorInvoiceEdit() {
     setGstTreatment(pi.gstTreatment || "standard_rated");
     setGstInclusive(isGstInclusive);
     setSalesPerson(pi.salesPerson || "");
+    setWorkLocation(pi.manpowerDetails?.workLocation || "");
     setExpenseAccountId(pi.expenseAccountId ? String(pi.expenseAccountId) : "none");
     setExchangeRate(
       pi.exchangeRate != null && pi.exchangeRate !== ""
@@ -206,10 +213,12 @@ export default function VendorInvoiceEdit() {
   }, [piDate, paymentTerms, pi?.dueDate]);
 
   const filteredVendors = useMemo(() => {
-    if (!vendorSearch.trim()) return vendors.slice(0, 50);
+    const partyOk = location.startsWith("/manpower/") ? isManpowerParty : isGeneralParty;
+    const matching = vendors.filter((v: any) => partyOk(v));
+    if (!vendorSearch.trim()) return matching.slice(0, 50);
     const q = vendorSearch.toLowerCase();
-    return vendors.filter((v: any) => v.name.toLowerCase().includes(q)).slice(0, 50);
-  }, [vendors, vendorSearch]);
+    return matching.filter((v: any) => v.name.toLowerCase().includes(q)).slice(0, 50);
+  }, [vendors, vendorSearch, location]);
 
   const vendorName = selectedVendor ? selectedVendor.name : vendorSearch.trim();
 
@@ -408,6 +417,7 @@ export default function VendorInvoiceEdit() {
           authorisedSignature: authorisedSignature || null,
           discountAmount,
           salesPerson: salesPerson || null,
+          manpowerDetails: isManpower ? { workLocation } : (pi as any)?.manpowerDetails || null,
           ...attachment.payload,
           expenseAccountId: (expenseAccountId && expenseAccountId !== "none") ? parseInt(expenseAccountId) : null,
         }),
@@ -482,7 +492,7 @@ export default function VendorInvoiceEdit() {
             </div>
             <div className="space-y-1.5">
               <Label>Vendor Invoice Date</Label>
-              <Input type="date" value={piDate} onChange={e => setPiDate(e.target.value)} />
+              <SyncBridgeDatePicker value={piDate} onChange={setPiDate} />
             </div>
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
@@ -553,8 +563,8 @@ export default function VendorInvoiceEdit() {
           <div className="rounded-md border bg-muted/20 p-3 space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1.5"><Label>Payment Terms</Label><PaymentTermsSelect value={paymentTerms} onChange={setPaymentTerms} /></div>
-              <div className="space-y-1.5"><Label>Due Date</Label><Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="bg-muted/40" /></div>
-              <div className="space-y-1.5"><Label>Planned Payment Date</Label><Input type="date" value={plannedPaymentDate} onChange={e => setPlannedPaymentDate(e.target.value)} /></div>
+              <div className="space-y-1.5"><Label>Due Date</Label><SyncBridgeDatePicker value={dueDate} onChange={setDueDate} /></div>
+              <div className="space-y-1.5"><Label>Planned Payment Date</Label><SyncBridgeDatePicker value={plannedPaymentDate} onChange={setPlannedPaymentDate} /></div>
             </div>
             <div className="rounded-md border bg-background p-3 space-y-3">
               <div className="flex items-center justify-between"><div><Label>Payment reminders</Label><p className="text-xs text-muted-foreground">Daily reminders begin after the selected day.</p></div><Switch checked={remindersEnabled} onCheckedChange={setRemindersEnabled} /></div>
@@ -749,7 +759,7 @@ export default function VendorInvoiceEdit() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className={`grid grid-cols-1 gap-4 ${isManpower ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
             <div className="space-y-1.5">
               <Label>GST Treatment</Label>
               <Select value={gstTreatment} onValueChange={v => { setGstTreatment(v); if (v !== "standard_rated") setGstInclusive(false); }}>
@@ -770,6 +780,12 @@ export default function VendorInvoiceEdit() {
                 </div>
               )}
             </div>
+            {isManpower && (
+              <div className="space-y-1.5">
+                <Label>Work Location / Site</Label>
+                <Input value={workLocation} onChange={(e) => setWorkLocation(e.target.value)} />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Notes</Label>
               <Input
@@ -851,6 +867,7 @@ export default function VendorInvoiceEdit() {
       )}
 
       <VendorInvoiceLineItems
+        manpower={isManpower}
         items={lineItems}
         onChange={(items) => { setLineItems(items); setItemsAutoFilled(false); }}
         currency={currency}
@@ -916,6 +933,10 @@ export default function VendorInvoiceEdit() {
           onOpenChange={(open) => {
             if (!open) {
               setShowPreview(false);
+              if (editingFromPreview.current) {
+                editingFromPreview.current = false;
+                return;
+              }
               setLocation("/vendor-invoices");
             }
           }}
@@ -934,7 +955,12 @@ export default function VendorInvoiceEdit() {
             currency: savedDoc.currency || "SGD",
             totalAmount: Number(savedDoc.totalAmount) || 0,
           }}
-          onEdit={() => setLocation(`/vendor-invoices/${savedDoc.id}/edit`)}
+          onEdit={() => {
+            const editId = savedDoc.id ?? id;
+            editingFromPreview.current = true;
+            setShowPreview(false);
+            setLocation(`/vendor-invoices/${editId}/edit`);
+          }}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const UOM_OPTIONS = [
-  "Unit", "Nos", "Pcs", "Set", "Pair", "Lot",
+  "Hour", "Unit", "Nos", "Pcs", "Set", "Pair", "Lot",
   "Box", "Carton", "Roll", "Sheet",
   "Kg", "g", "L", "mL", "m", "cm",
 ];

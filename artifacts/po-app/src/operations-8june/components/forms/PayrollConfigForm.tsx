@@ -25,6 +25,7 @@ import { apiRequest, queryClient } from "@/operations-8june/lib/queryClient";
 import { insertEmployeePayrollSchema } from "@shared/schema";
 import {
   Calculator,
+  Check,
   ChevronDown,
   DollarSign,
   Pencil,
@@ -48,6 +49,8 @@ import { ModalSectionHeader } from "@/operations-8june/components/forms/FormModa
 import { EmployeeCombobox } from "@/operations-8june/components/forms/EmployeeCombobox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { parseLocalDate } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { calculateSyncBridgePayrollPreview, CPF_WAGE_CEILING } from "@/operations-8june/lib/payroll-utils";
 import { listEmployeePayrollMonths, recordPayrollMonthYear } from "@/operations-8june/lib/payroll-batch-utils";
@@ -155,6 +158,10 @@ function formatCurrency(amount: number) {
   }).format(amount || 0);
 }
 
+function roundMoney(amount: number) {
+  return Math.round((Number(amount) || 0) * 100) / 100;
+}
+
 const ALL_EMPLOYEES_ID = 0;
 
 const PAYROLL_MONTH_OPTIONS = [
@@ -172,10 +179,56 @@ const PAYROLL_MONTH_OPTIONS = [
   { value: 12, label: "December" },
 ] as const;
 
+/** Months of the open financial year, with the calendar year on each label. Months before the year starts stay disabled. */
+function financialYearMonthChoices(from: string, to: string) {
+  const start = parseLocalDate(from);
+  const end = parseLocalDate(to);
+  if (!start || !end || end < start) {
+    const year = new Date().getFullYear();
+    return PAYROLL_MONTH_OPTIONS.map((month) => ({
+      month: month.value,
+      year,
+      label: `${month.label} ${year}`,
+      enabled: true,
+    }));
+  }
+  const choices: { month: number; year: number; label: string; enabled: boolean }[] = [];
+  const startMonth = start.getMonth() + 1;
+  const startYear = start.getFullYear();
+  for (let month = 1; month < startMonth; month += 1) {
+    const name = PAYROLL_MONTH_OPTIONS[month - 1].label;
+    choices.push({ month, year: startYear, label: `${name} ${startYear}`, enabled: false });
+  }
+  const cursor = new Date(startYear, start.getMonth(), 1);
+  const last = new Date(end.getFullYear(), end.getMonth(), 1);
+  while (cursor <= last && choices.length < 24) {
+    const month = cursor.getMonth() + 1;
+    const year = cursor.getFullYear();
+    const name = PAYROLL_MONTH_OPTIONS[month - 1].label;
+    choices.push({ month, year, label: `${name} ${year}`, enabled: true });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return choices;
+}
+
 /** Calendar days in a month (28/29/30/31) for the given year. */
 function getDaysInMonth(month: number, year = new Date().getFullYear()): number {
   if (!Number.isInteger(month) || month < 1 || month > 12) return 30;
   return new Date(year, month, 0).getDate();
+}
+
+const HOURS_PER_WORKING_DAY = 8;
+
+/** Monday to Friday in the selected month. */
+function countWeekdays(year: number, month: number): number {
+  if (!Number.isInteger(month) || month < 1 || month > 12) return 0;
+  const days = new Date(year, month, 0).getDate();
+  let count = 0;
+  for (let day = 1; day <= days; day += 1) {
+    const dow = new Date(year, month - 1, day).getDay();
+    if (dow !== 0 && dow !== 6) count += 1;
+  }
+  return count;
 }
 
 /**
@@ -239,6 +292,17 @@ const RESERVED_EARNING_IDS = new Set([
   "overtime",
   "bonus",
   "income_tax_borne_by_employee",
+  "hourlyNormalRate",
+  "hourlyNormalHours",
+  "hourlyActualHours",
+  "hourlyNormalPay",
+  "perHourCharge",
+  "normalWorkingDays",
+  "actualWorkingDays",
+  "hourlyOtDays",
+  "hourlyOtRate",
+  "assignedCustomerId",
+  "assignedCustomerName",
 ]);
 const SEPARATE_EARNING_IDS = new Set(["bonus", "income_tax_borne_by_employee"]);
 const RESERVED_DEDUCTION_IDS = new Set(["medical", "advance", "others"]);
@@ -626,7 +690,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   const deductionCatalog = useMemo(() => visiblePayheads("deduction", deductionStore), [deductionStore]);
 
   const selectedEmployeeId = form.watch("employeeId");
-  const isAllEmployees = Number(selectedEmployeeId) === ALL_EMPLOYEES_ID;
+  const isAllEmployees = String(selectedEmployeeId) === String(ALL_EMPLOYEES_ID);
   const selectedEmployee = useMemo(
     () =>
       isAllEmployees
@@ -641,18 +705,38 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     queryKey: ["/api/payroll/records"],
   });
 
+  const { data: customers = [] } = useQuery<any[]>({
+    queryKey: ["/api/customers"],
+  });
+
+  const [customerId, setCustomerId] = useState("");
+  const [hourlyRateInput, setHourlyRateInput] = useState("");
+  const [normalHours, setNormalHours] = useState("");
+  const [actualHours, setActualHours] = useState("");
+
   const [selectedPayrollYear, setSelectedPayrollYear] = useState<number>(new Date().getFullYear());
   const savedMonths = useMemo(
     () => listEmployeePayrollMonths(payrollRecords, Number(selectedEmployeeId) || 0),
     [payrollRecords, selectedEmployeeId],
   );
+  const workingYear = useWorkingYearBounds();
+  const payrollMonthChoices = useMemo(
+    () => financialYearMonthChoices(workingYear.from, workingYear.to),
+    [workingYear.from, workingYear.to],
+  );
+  const selectedMonthLabel =
+    payrollMonthChoices.find(
+      (month) => month.month === selectedPayrollMonth && month.year === selectedPayrollYear,
+    )?.label ?? "Select month";
 
   const applyMonthSelection = (month: number, year = new Date().getFullYear()) => {
     setSelectedPayrollMonth(month);
     setSelectedPayrollYear(year);
     setMonthError("");
     setMonthMenuOpen(false);
-    form.setValue("workingDays", getDaysInMonth(month, year), {
+    const hourly = String(selectedEmployee?.workType || "") === "hourly";
+    const weekdays = countWeekdays(year, month);
+    form.setValue("workingDays", hourly ? weekdays : getDaysInMonth(month, year), {
       shouldDirty: true,
       shouldValidate: true,
     });
@@ -666,11 +750,21 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
         period.month === month
       );
     });
-    const savedSalary = saved?.basic || Number(record?.baseSalary);
-    const employeeSalary = parseFloat(selectedEmployee?.salary || "0") || 0;
-    const salary = savedSalary > 0 ? savedSalary : employeeSalary;
-    if (salary > 0) {
-      form.setValue("baseSalary", salary, { shouldDirty: true, shouldValidate: true });
+    if (hourly) {
+      const savedAllowances = (saved?.allowances || record?.allowances || {}) as Record<string, unknown>;
+      if (savedAllowances.hourlyNormalHours != null && savedAllowances.hourlyNormalHours !== "") {
+        setNormalHours(String(savedAllowances.hourlyNormalHours));
+      }
+      if (savedAllowances.hourlyActualHours != null && savedAllowances.hourlyActualHours !== "") {
+        setActualHours(String(savedAllowances.hourlyActualHours));
+      }
+    } else {
+      const savedSalary = saved?.basic || Number(record?.baseSalary);
+      const employeeSalary = parseFloat(selectedEmployee?.salary || "0") || 0;
+      const salary = savedSalary > 0 ? savedSalary : employeeSalary;
+      if (salary > 0) {
+        form.setValue("baseSalary", salary, { shouldDirty: true, shouldValidate: true });
+      }
     }
     const allowances = (saved?.allowances || record?.allowances || {}) as Record<string, number>;
     const deductions = (saved?.deductions || record?.deductions || {}) as Record<string, number>;
@@ -691,16 +785,61 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   const workingDaysRaw = form.watch("workingDays");
   const selectedMonthDays =
     selectedPayrollMonth != null ? getDaysInMonth(selectedPayrollMonth) : null;
-  const basicSalaryForCpf = calcBasicSalaryForCpf(
-    baseSalary,
-    workingDaysRaw,
-    selectedMonthDays
-  );
   const age = Number(form.watch("age") || 0);
   const citizenshipStatus = form.watch("citizenshipStatus");
   const overtimeHours = Number(form.watch("overtimeRate") || 0); // field labeled Overtime Hours
   const forHoursInSgd = Number(form.watch("hourlyRate") || 0); // field labeled Overtime pay (SGD)
-  const overtimePay = Math.round(overtimeHours * forHoursInSgd * 100) / 100;
+  const isHourlyEmployee = String(selectedEmployee?.workType || "") === "hourly";
+  const customersForEmployee = useMemo(() => {
+    if (!selectedEmployee || isAllEmployees) return [];
+    const employeeId = Number(selectedEmployee.id);
+    return customers.filter((customer) =>
+      Array.isArray(customer.assignedEmployees) &&
+      customer.assignedEmployees.some((employee: { id?: number }) => Number(employee.id) === employeeId),
+    );
+  }, [customers, selectedEmployee, isAllEmployees]);
+  const customerChoices = customersForEmployee.length > 0 ? customersForEmployee : customers;
+  const visibleEmployeeOptions = useMemo(() => {
+    if (!customerId) return employeeOptions;
+    const customer = customers.find((item) => String(item.id) === customerId);
+    const ids = new Set(
+      (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
+        .map((employee: { id?: number }) => Number(employee.id))
+        .filter((id: number) => Number.isFinite(id)),
+    );
+    const matched = employeeOptions.filter((employee) => ids.has(Number(employee.id)));
+    return [
+      {
+        id: ALL_EMPLOYEES_ID,
+        name: "All Employees",
+        employeeId: `${matched.length} assigned`,
+        designation: "Process payroll for everyone on this customer",
+      },
+      ...matched,
+    ];
+  }, [customerId, customers, employeeOptions]);
+  const perHourCharge = Number(selectedEmployee?.perHourCharge) || Number(hourlyRateInput) || 0;
+  const hourlyWorkingDays = isHourlyEmployee && selectedPayrollMonth != null
+    ? (Number(workingDaysRaw) || countWeekdays(selectedPayrollYear, selectedPayrollMonth))
+    : 0;
+  const autoNormalHours = hourlyWorkingDays > 0 ? hourlyWorkingDays * HOURS_PER_WORKING_DAY : 0;
+  const normalHourlyRate = perHourCharge;
+  const normalWorkingHours = autoNormalHours;
+  const actualWorkingHours = actualHours === "" ? autoNormalHours : (Number(actualHours) || 0);
+  const normalPay = roundMoney(perHourCharge * normalWorkingHours);
+  const hourlyOtHours = roundMoney(Math.max(0, actualWorkingHours - normalWorkingHours));
+  const hourlyOtRate = roundMoney(normalHourlyRate * 1.5);
+  const hourlyOtPay = roundMoney(hourlyOtHours * hourlyOtRate);
+  const overtimePay = isHourlyEmployee
+    ? hourlyOtPay
+    : Math.round(overtimeHours * forHoursInSgd * 100) / 100;
+  const basicSalaryForCpf = isHourlyEmployee
+    ? normalPay
+    : calcBasicSalaryForCpf(
+        baseSalary,
+        workingDaysRaw,
+        selectedMonthDays
+      );
   const allowanceTransport = Number(form.watch("allowanceTransport") || 0);
   const allowanceMeal = Number(form.watch("allowanceMeal") || 0);
   const allowancePhone = Number(form.watch("allowancePhone") || 0);
@@ -832,6 +971,79 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     populateFromEmployee(selectedEmployee);
   }, [selectedEmployee?.id, isEditMode]);
 
+  useEffect(() => {
+    const saved = (editData?.allowances || {}) as Record<string, unknown>;
+    if (isEditMode && saved.assignedCustomerId != null) {
+      setCustomerId(String(saved.assignedCustomerId));
+    }
+  }, [selectedEmployee?.id, isEditMode]);
+
+  useEffect(() => {
+    if (!isHourlyEmployee) return;
+    const charge = selectedEmployee?.perHourCharge;
+    setHourlyRateInput(charge != null && String(charge) !== "" ? String(charge) : "");
+    setNormalHours("");
+    setActualHours("");
+  }, [isHourlyEmployee, selectedEmployee?.id]);
+
+  useEffect(() => {
+    if (!isHourlyEmployee || selectedPayrollMonth == null) return;
+    const days = countWeekdays(selectedPayrollYear, selectedPayrollMonth);
+    const hours = String(days * HOURS_PER_WORKING_DAY);
+    form.setValue("workingDays", days, { shouldDirty: true });
+    setNormalHours(hours);
+    const saved = savedMonths.find((item) => item.year === selectedPayrollYear && item.month === selectedPayrollMonth);
+    const record = payrollRecords.find((item) => {
+      const period = recordPayrollMonthYear(item);
+      return (
+        Number(item.employeeId) === Number(selectedEmployeeId) &&
+        period.year === selectedPayrollYear &&
+        period.month === selectedPayrollMonth
+      );
+    });
+    const savedAllowances = (saved?.allowances || record?.allowances || {}) as Record<string, unknown>;
+    const savedActual = savedAllowances.hourlyActualHours;
+    setActualHours(savedActual != null && String(savedActual) !== "" ? String(savedActual) : hours);
+  }, [isHourlyEmployee, selectedPayrollMonth, selectedPayrollYear, selectedEmployee?.id]);
+
+  useEffect(() => {
+    if (!isHourlyEmployee) return;
+    if (normalPay <= 0) return;
+    form.setValue("baseSalary", normalPay, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+  }, [isHourlyEmployee, normalPay]);
+
+  useEffect(() => {
+    if (!selectedEmployee || isAllEmployees) return;
+    if (customersForEmployee.length === 1) {
+      setCustomerId(String(customersForEmployee[0].id));
+      return;
+    }
+    if (customersForEmployee.length > 1) {
+      setCustomerId((current) =>
+        customersForEmployee.some((customer) => String(customer.id) === current) ? current : "",
+      );
+    }
+  }, [selectedEmployee?.id, isAllEmployees, customersForEmployee]);
+
+  const handleCustomerChange = (id: string) => {
+    setCustomerId(id);
+    const customer = customers.find((item) => String(item.id) === id);
+    const ids = (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
+      .map((employee: { id?: number }) => Number(employee.id))
+      .filter((employeeId: number) => Number.isFinite(employeeId));
+    const current = Number(form.getValues("employeeId"));
+    if (current === ALL_EMPLOYEES_ID) return;
+    if (!current || !ids.includes(current)) {
+      form.setValue("employeeId", ids.length === 1 ? ids[0] : (undefined as unknown as number), {
+        shouldDirty: true,
+        shouldValidate: ids.length === 1,
+      });
+    }
+  };
+
   const savePayrollConfigMutation = useMutation({
     mutationFn: async (data: PayrollConfigFormData) => {
       const creatingForEveryone = !editData?.id && Number(data.employeeId) === ALL_EMPLOYEES_ID;
@@ -859,9 +1071,52 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
       const monthDays = selectedPayrollMonth != null ? getDaysInMonth(selectedPayrollMonth) : null;
       const earningIds = earningCatalog.map((item) => item.id);
       const deductionIds = deductionCatalog.map((item) => item.id);
+      if (isHourlyEmployee && (!perHourCharge || !hourlyWorkingDays)) {
+        throw new Error("Select the month. Salary is the employee's per hour charge times that month's working days.");
+      }
+      const payrollData: PayrollConfigFormData = isHourlyEmployee
+        ? {
+            ...data,
+            baseSalary: normalPay > 0 ? normalPay : data.baseSalary,
+            hourlyRate: undefined,
+            overtimeRate: undefined,
+          }
+        : data;
+      const selectedCustomer = customers.find((customer) => String(customer.id) === customerId);
+
+      const withHourlyDetails = (
+        payload: Record<string, any>,
+        hourly?: { rate: number; days: number; normalHours: number; actualHours: number; pay: number; otHours: number; otRate: number; otPay: number },
+      ) => {
+        const useHourly = hourly != null || isHourlyEmployee;
+        if (!useHourly && !selectedCustomer) return payload;
+        const allowances = { ...(payload.allowances || {}) };
+        if (useHourly) {
+          allowances.perHourCharge = hourly?.rate ?? perHourCharge;
+          allowances.normalWorkingDays = hourly?.days ?? hourlyWorkingDays;
+          allowances.hourlyNormalRate = hourly?.rate ?? perHourCharge;
+          allowances.hourlyNormalHours = hourly?.normalHours ?? normalWorkingHours;
+          allowances.hourlyActualHours = hourly?.actualHours ?? actualWorkingHours;
+          allowances.hourlyNormalPay = hourly?.pay ?? normalPay;
+          allowances.overtime = hourly?.otPay ?? hourlyOtPay;
+        }
+        if (selectedCustomer) {
+          allowances.assignedCustomerId = Number(selectedCustomer.id);
+          allowances.assignedCustomerName = selectedCustomer.name;
+        }
+        return { ...payload, allowances };
+      };
 
       if (creatingForEveryone) {
+        const customerEmployeeIds = selectedCustomer
+          ? new Set(
+              (Array.isArray(selectedCustomer.assignedEmployees) ? selectedCustomer.assignedEmployees : [])
+                .map((employee: { id?: number }) => Number(employee.id))
+                .filter((id: number) => Number.isFinite(id)),
+            )
+          : null;
         const targets = activeEmployees.filter((employee) => {
+          if (customerEmployeeIds && !customerEmployeeIds.has(Number(employee.id))) return false;
           if (!employee.dateOfBirth) return false;
           return calculateAge(new Date(employee.dateOfBirth)) >= 16;
         });
@@ -873,7 +1128,19 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
           const dob = new Date(employee.dateOfBirth);
           const age = calculateAge(dob);
           const citizenship = mapNationalityToCitizenship(employee.nationality);
-          const payload = {
+          const employeeHourly = String(employee.workType || "") === "hourly";
+          const employeeBasic = parseFloat(employee.salary || "0") || Number(data.baseSalary) || 0;
+          const employeeRate = employeeHourly ? Number(employee.perHourCharge) || 0 : 0;
+          const employeeDays = employeeHourly && selectedPayrollMonth != null
+            ? countWeekdays(selectedPayrollYear, selectedPayrollMonth)
+            : 0;
+          const employeeNormalHours = employeeHourly ? employeeDays * HOURS_PER_WORKING_DAY : 0;
+          const employeeActualHours = employeeHourly ? employeeNormalHours : 0;
+          const employeeNormalPay = employeeHourly ? roundMoney(employeeRate * employeeNormalHours) : 0;
+          const employeeOtHours = employeeHourly ? roundMoney(Math.max(0, employeeActualHours - employeeNormalHours)) : 0;
+          const employeeOtRate = employeeHourly ? roundMoney(employeeRate * 1.5) : 0;
+          const employeeOtPay = employeeHourly ? roundMoney(employeeOtHours * employeeOtRate) : 0;
+          const payload = withHourlyDetails({
             ...buildPayrollConfigPayload(
               {
                 ...data,
@@ -881,6 +1148,13 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                 age,
                 dateOfBirth: toDateInputValue(dob),
                 citizenshipStatus: citizenship,
+                ...(employeeHourly
+                  ? {
+                      baseSalary: employeeNormalPay > 0 ? employeeNormalPay : employeeBasic,
+                      overtimeRate: undefined,
+                      hourlyRate: undefined,
+                    }
+                  : {}),
               },
               employee,
               citizenship,
@@ -893,16 +1167,18 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
             ),
             payrollMonth: selectedPayrollMonth,
             payrollYear: selectedPayrollYear,
-          };
+          }, employeeHourly
+            ? { rate: employeeRate, days: employeeDays, normalHours: employeeNormalHours, actualHours: employeeActualHours, pay: employeeNormalPay, otHours: employeeOtHours, otRate: employeeOtRate, otPay: employeeOtPay }
+            : undefined);
           const res = await apiRequest("POST", "/api/employee-payroll", payload);
           created.push(await res.json());
         }
         return created;
       }
 
-      const payload = {
+      const payload = withHourlyDetails({
         ...buildPayrollConfigPayload(
-          data,
+          payrollData,
           selectedEmployee,
           data.citizenshipStatus || "citizen",
           resolvedAge,
@@ -914,7 +1190,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
         ),
         payrollMonth: selectedPayrollMonth,
         payrollYear: selectedPayrollYear,
-      };
+      });
 
       const res = editData?.id
         ? await apiRequest("PUT", `/api/employee-payroll/${editData.id}`, payload)
@@ -1060,7 +1336,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
             className="space-y-8"
           >
             <section className="space-y-4">
-              <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
                 <FormField
                   control={form.control}
                   name="employeeId"
@@ -1084,7 +1360,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       ) : (
                         <FormControl>
                           <EmployeeCombobox
-                            employees={employeeOptions}
+                            employees={visibleEmployeeOptions}
                             value={field.value}
                             onChange={(id) => field.onChange(id)}
                             disabled={employeesLoading}
@@ -1100,6 +1376,30 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                 />
 
                 <FormItem>
+                  <FormLabel className={formLabelClass}>Customer</FormLabel>
+                  <Select
+                    value={customerId || undefined}
+                    onValueChange={handleCustomerChange}
+                    disabled={customerChoices.length === 0}
+                  >
+                    <SelectTrigger>
+                      <SelectValue
+                        placeholder={
+                          customerChoices.length === 0 ? "No customers" : "Select customer"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customerChoices.map((customer) => (
+                        <SelectItem key={customer.id} value={String(customer.id)}>
+                          {customer.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormItem>
+
+                <FormItem>
                   <FormLabel className={formLabelClass}>Month *</FormLabel>
                   <Popover open={monthMenuOpen} onOpenChange={setMonthMenuOpen}>
                     <PopoverTrigger asChild>
@@ -1108,29 +1408,40 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                         className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm focus:outline-none focus:border-[#2563EB] focus-visible:border-[#2563EB] focus-visible:ring-1 focus-visible:ring-[#2563EB] focus-visible:ring-offset-0 data-[state=open]:border-[#2563EB] data-[state=open]:ring-1 data-[state=open]:ring-[#2563EB]"
                       >
                         <span className={selectedPayrollMonth == null ? "text-muted-foreground" : "text-[#111827]"}>
-                          {PAYROLL_MONTH_OPTIONS.find((month) => month.value === selectedPayrollMonth)?.label ?? "Select month"}
+                          {selectedMonthLabel}
                         </span>
                         <ChevronDown className="h-4 w-4 opacity-50" />
                       </button>
                     </PopoverTrigger>
                     <PopoverContent
                       align="start"
-                      className="w-[var(--radix-popover-trigger-width)] p-2"
+                      className="w-[var(--radix-popover-trigger-width)] min-w-[320px] p-2"
                     >
                       <div className="grid grid-cols-3 gap-2">
-                        {PAYROLL_MONTH_OPTIONS.map((month) => {
-                          const selected = selectedPayrollMonth === month.value;
+                        {payrollMonthChoices.map((month) => {
+                          const selected = selectedPayrollMonth === month.month && selectedPayrollYear === month.year;
+                          const done = savedMonths.some((row) => row.year === month.year && row.month === month.month);
                           return (
                             <button
-                              key={month.value}
+                              key={`${month.year}-${month.month}`}
                               type="button"
+                              disabled={!month.enabled}
                               className={cn(
-                                "rounded-md border border-[#BFDBFE] bg-white px-2 py-2 text-center text-sm text-[#111827] hover:bg-[#EFF6FF]",
+                                "relative rounded-md border px-2 py-2 text-center text-xs text-[#111827]",
+                                month.enabled
+                                  ? "border-[#BFDBFE] bg-white hover:bg-[#EFF6FF]"
+                                  : "cursor-not-allowed border-[#E5E7EB] bg-[#F3F4F6] text-[#9CA3AF]",
                                 selected && "border-[#2563EB] bg-[#EFF6FF] font-medium text-[#1D4ED8]",
                               )}
-                              onClick={() => applyMonthSelection(month.value)}
+                              onClick={() => {
+                                if (!month.enabled) return;
+                                applyMonthSelection(month.month, month.year);
+                              }}
                             >
                               {month.label}
+                              {done ? (
+                                <Check className="absolute right-1 top-1 h-3.5 w-3.5 text-[#16A34A]" />
+                              ) : null}
                             </button>
                           );
                         })}
@@ -1189,17 +1500,26 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       <InfoItem label="Employee Name" value={selectedEmployee.name || "-"} />
                       <InfoItem label="Department" value={selectedEmployee.department || "-"} />
                       <InfoItem label="Designation" value={selectedEmployee.designation || "-"} />
-                      <InfoItem
-                        label="Basic Salary"
-                        value={formatCurrency(parseFloat(selectedEmployee.salary || "0"))}
-                      />
-                      <InfoItem
-                        label="Annual Salary"
-                        value={formatCurrency(
-                          parseFloat(selectedEmployee.annualSalary || "0") ||
-                            (parseFloat(selectedEmployee.salary || "0") || 0) * 12
-                        )}
-                      />
+                      {isHourlyEmployee ? (
+                        <InfoItem
+                          label="Per hour charge"
+                          value={perHourCharge > 0 ? perHourCharge.toFixed(2) : "-"}
+                        />
+                      ) : (
+                        <>
+                          <InfoItem
+                            label="Basic Salary"
+                            value={formatCurrency(parseFloat(selectedEmployee.salary || "0"))}
+                          />
+                          <InfoItem
+                            label="Annual Salary"
+                            value={formatCurrency(
+                              parseFloat(selectedEmployee.annualSalary || "0") ||
+                                (parseFloat(selectedEmployee.salary || "0") || 0) * 12
+                            )}
+                          />
+                        </>
+                      )}
                       <InfoItem label="Nationality" value={formatNationalityDisplay(selectedEmployee)} />
                       <InfoItem label="PR Status" value={formatPrStatusDisplay(selectedEmployee.prStatus)} />
                       <InfoItem
@@ -1225,23 +1545,9 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                     <div className="space-y-1.5 text-sm">
                       <div className="flex justify-between">
                         <span className="text-[#6B7280]">Basic Salary</span>
-                        <span className="font-medium text-[#111827]">{formatCurrency(baseSalary)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Basic salary for CPF</span>
-                        <span className="font-medium text-[#111827]">{formatCurrency(basicSalaryForCpf)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Allowances</span>
-                        <span className="font-medium text-[#111827]">{formatCurrency(allowancesTotal)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Bonus</span>
-                        <span className="font-medium text-[#111827]">{formatCurrency(bonusTotal)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Other Income / Benefits</span>
-                        <span className="font-medium text-[#111827]">{formatCurrency(otherIncomeTotal)}</span>
+                        <span className="font-medium text-[#111827]">
+                          {formatCurrency(isHourlyEmployee ? normalPay : baseSalary)}
+                        </span>
                       </div>
                       {overtimePay > 0 ? (
                         <div className="flex justify-between">
@@ -1252,10 +1558,6 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
                         <span className="font-semibold text-[#111827]">Gross Salary</span>
                         <span className="font-semibold text-[#111827]">{formatCurrency(grossSalary)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Deductions</span>
-                        <span className="font-medium text-[#DC2626]">-{formatCurrency(deductionsTotal)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-[#6B7280]">CPF Rate (Employee)</span>
@@ -1277,10 +1579,6 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                         <span className="text-[#6B7280]">Total CPF</span>
                         <span className="text-[#111827]">{formatCurrency(totalCpf)}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Total Deductions</span>
-                        <span className="font-medium text-[#DC2626]">-{formatCurrency(deductionsTotal + employeeCpf)}</span>
-                      </div>
                       <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
                         <span className="text-base font-semibold text-[#111827]">Net Salary</span>
                         <span className="text-lg font-bold text-[#16A34A]">{formatCurrency(netSalary)}</span>
@@ -1291,6 +1589,71 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
               )}
             </section>
 
+            {isHourlyEmployee && (
+              <section className="space-y-4 rounded-lg border border-[#E5E7EB] bg-white p-4">
+                <h3 className="text-lg font-semibold text-[#111827]">Per hour</h3>
+                <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-4">
+                  <div className="space-y-1.5">
+                    <label className={payheadLabelClass}>Per hour cost</label>
+                    <Input readOnly value={perHourCharge > 0 ? perHourCharge.toFixed(2) : ""} className={readOnlyInputClass} />
+                    <p className="text-xs text-[#6B7280]">From the employee per hour charge</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className={payheadLabelClass}>Working days</label>
+                    <Input
+                      readOnly
+                      value={selectedPayrollMonth == null ? "" : String(hourlyWorkingDays)}
+                      className={readOnlyInputClass}
+                    />
+                    <p className="text-xs text-[#6B7280]">Weekdays in the selected month</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className={payheadLabelClass}>Normal Working Hours</label>
+                    <Input
+                      readOnly
+                      value={selectedPayrollMonth == null ? "" : String(normalWorkingHours)}
+                      className={readOnlyInputClass}
+                    />
+                    <p className="text-xs text-[#6B7280]">
+                      {hourlyWorkingDays > 0 ? `${hourlyWorkingDays} working days × ${HOURS_PER_WORKING_DAY} hours` : "Select a month"}
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className={payheadLabelClass}>Actual Working Hours</label>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={selectedPayrollMonth == null ? "" : (actualHours === "" ? String(autoNormalHours) : actualHours)}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (value === "" || /^\d*\.?\d*$/.test(value)) setActualHours(value);
+                      }}
+                    />
+                    <p className="text-xs text-[#6B7280]">Hours above normal working hours are overtime</p>
+                  </div>
+                </div>
+                <div className="space-y-2 border-t border-[#E5E7EB] pt-3 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-[#111827]">Normal Pay</span>
+                    <span className="font-medium text-[#111827]">{formatCurrency(normalPay)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#111827]">OT Hours</span>
+                    <span className="font-medium text-[#111827]">{hourlyOtHours.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#111827]">OT Rate (1.5×)</span>
+                    <span className="font-medium text-[#111827]">{formatCurrency(hourlyOtRate)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#111827]">OT Pay</span>
+                    <span className="font-medium text-[#111827]">{formatCurrency(hourlyOtPay)}</span>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {!isHourlyEmployee && (
             <section className="space-y-4">
               <div className="mb-1">
                 <h3 className="text-lg font-semibold text-[#111827]">Payheads</h3>
@@ -1392,6 +1755,8 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       </FormItem>
                     )}
                   />
+                  {!isHourlyEmployee && (
+                    <>
                   <FormField
                     control={form.control}
                     name="overtimeRate"
@@ -1418,6 +1783,8 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       </FormItem>
                     )}
                   />
+                    </>
+                  )}
                   {earningCatalog.length > 0 && (
                     <div className="col-span-full grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       {earningCatalog.map((item) => {
@@ -1538,6 +1905,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                 </FormItem>
               </div>
             </section>
+            )}
 
             <div className="flex justify-end gap-3">
               <Button

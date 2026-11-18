@@ -1,9 +1,11 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptySalesManpower, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerSalesDateFields, salesManpowerSchema } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import type { FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useLocation, useSearch } from "wouter";
+import { useSearch } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCreatePurchaseOrder, useGetSettings, getGetSettingsQueryKey, getListPurchaseOrdersQueryKey, useGetQuotation, getGetQuotationQueryKey } from "@workspace/api-client-react";
 import { invalidateDocumentList } from "@/lib/invalidate-document-lists";
@@ -30,6 +32,7 @@ import { useVedaFormFill } from "@/hooks/useVedaFormFill";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
 import { Trash2, Save, Eye, Lock, Users, Plus, Layers, AlignCenter, AlignLeft, Package, ArrowLeft, Upload } from "lucide-react";
 import { cn, plainText } from "@/lib/utils";
+import { isGeneralParty, isManpowerParty } from "@/lib/party-usage";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { generatePO_PDF } from "@/lib/pdf";
@@ -55,6 +58,8 @@ const itemSchema = z.object({
   description: z.coerce.string(),
   qty: z.coerce.number().min(0).default(1),
   unitPrice: z.coerce.number().min(0, "Cannot be negative"),
+  discount: z.coerce.number().min(0).default(0),
+  isFoc: z.boolean().default(false),
   isStockItem: z.boolean().default(false),
   stockItemId: z.number().nullish(),
   warehouseId: z.number().nullish(),
@@ -79,11 +84,13 @@ const poSchema = z.object({
   customerId: z.number().nullable().optional(),
   customerPoRef: z.string().optional(),
   tax: z.coerce.number().min(0).max(100).default(0),
+  manpowerDetails: salesManpowerSchema.optional(),
   items: z.array(itemSchema).min(1, "At least one item is required"),
 });
 
 export default function PurchaseOrderNew() {
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const search = useSearch();
   const urlParams = new URLSearchParams(search);
   const urlQuotationId = urlParams.get("quotationId");
@@ -137,6 +144,7 @@ export default function PurchaseOrderNew() {
       isPrivate: false,
       customerId: null,
       customerPoRef: "",
+      manpowerDetails: { ...emptySalesManpower },
       tax: 9,
       items: [{ partNumber: "", description: "", qty: 1, unitPrice: 0, isStockItem: false, itemImage: "" }],
     },
@@ -357,7 +365,11 @@ export default function PurchaseOrderNew() {
     return () => subscription.unsubscribe();
   }, [form, append]);
 
-  const subtotal = items.reduce((sum, item) => (item as any).type === "section" ? sum : sum + (Number(item.qty) || 0) * (Number(item.unitPrice) || 0), 0);
+  const subtotal = items.reduce((sum, item) => {
+    if ((item as any).type === "section" || (item as any).isFoc) return sum;
+    const disc = Number((item as any).discount) || 0;
+    return sum + (Number(item.qty) || 0) * (Number(item.unitPrice) || 0) * (1 - disc / 100);
+  }, 0);
   const taxAmount = subtotal * (taxPercent / 100);
   const totalAmount = subtotal + taxAmount;
 
@@ -385,7 +397,7 @@ export default function PurchaseOrderNew() {
     const filledItems = values.items.filter(
       (item) => (item as any).type === "section"
         ? plainText((item as any).sectionLabel) !== ""
-        : (plainText(item.partNumber) !== "" || plainText(item.description) !== "")
+        : (plainText(item.partNumber) !== "" || plainText(item.description) !== "" || (isManpower && Number(item.unitPrice) > 0))
     );
     const realItems = filledItems.filter((item: any) => item.type !== "section");
     if (realItems.length === 0) {
@@ -396,7 +408,7 @@ export default function PurchaseOrderNew() {
       ...item,
       partNumber: plainText(item.partNumber),
       description: item.description,
-      amount: (item as any).type === "section" ? 0 : item.qty * item.unitPrice,
+      amount: (item as any).type === "section" || (item as any).isFoc ? 0 : item.qty * item.unitPrice * (1 - (Number((item as any).discount) || 0) / 100),
       isStockItem: item.isStockItem === true || Number((item as any).stockItemId) > 0,
       stockItemId: Number((item as any).stockItemId) > 0 ? Number((item as any).stockItemId) : undefined,
       warehouseId: Number((item as any).warehouseId) > 0 ? Number((item as any).warehouseId) : undefined,
@@ -405,7 +417,7 @@ export default function PurchaseOrderNew() {
 
     return new Promise<any>((resolve, reject) => {
       createMutation.mutate(
-        { data: { ...values, items: itemsWithAmount, status, customerId: values.customerId ?? undefined, ...attachment.payload } as any },
+        { data: (() => { const payload: any = { ...values, items: itemsWithAmount, status, customerId: values.customerId ?? undefined, ...attachment.payload }; if (!isManpower) delete payload.manpowerDetails; return payload; })() },
         {
           onSuccess: async (data) => {
             // Show the new PO in the list immediately (no manual refresh).
@@ -663,6 +675,7 @@ export default function PurchaseOrderNew() {
                   )}
                 />
                 </div>
+                {isManpower ? <ManpowerCustomerExtraFields control={form.control} addressName="vendorAddress" /> : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <FormField
  control={form.control}
@@ -676,6 +689,7 @@ export default function PurchaseOrderNew() {
                   )}
                 />
                 </div>
+                )}
               </CardContent>
             </Card>
 
@@ -704,7 +718,7 @@ export default function PurchaseOrderNew() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {customers.map((c: any) => (
+                          {customers.filter((c: any) => (location.startsWith("/manpower/") ? isManpowerParty(c) : isGeneralParty(c)) || String(c.id) === String(field.value)).map((c: any) => (
                             <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
                           ))}
                         </SelectContent>
@@ -777,7 +791,18 @@ export default function PurchaseOrderNew() {
                   )}
                 />
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {isManpower && (
+                <ManpowerSalesDateFields control={form.control}>
+                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Delivery Date</FormLabel>
+                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                </ManpowerSalesDateFields>
+                )}
+                {!isManpower && (
                 <FormField
  control={form.control}
  name="deliveryDate"
@@ -791,6 +816,8 @@ export default function PurchaseOrderNew() {
                     </FormItem>
                   )}
                 />
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2">
                 <FormField
  control={form.control}
  name="deliveryAddress"
@@ -812,12 +839,14 @@ export default function PurchaseOrderNew() {
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3 flex-wrap">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item", sectionLabel: "", sectionAlign: "left", partNumber: "", uom: "", description: "", qty: 1, unitPrice: 0, isStockItem: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item", sectionLabel: "", sectionAlign: "left", partNumber: "", uom: isManpower ? "Hourly" : "", description: "", qty: 1, unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section", sectionLabel: "", sectionAlign: "left", partNumber: "", uom: "", description: "", qty: 1, unitPrice: 0, isStockItem: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportOpen(true)}>
                     <Upload className="h-3 w-3" /> Import from PDF/Excel
                   </Button>
@@ -840,6 +869,7 @@ export default function PurchaseOrderNew() {
                 <div className="text-sm text-destructive mt-2">{form.formState.errors.items.root.message}</div>
               )}
             </CardHeader>
+            {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={(v) => formatCurrencySafe(v, currency)} /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -1001,23 +1031,9 @@ export default function PurchaseOrderNew() {
                 </tbody>
               </table>
             </div>
+            )}
             <div className="bg-muted/20 border-t p-6">
-              <div className="flex flex-col md:flex-row justify-between gap-6">
-                <div className="flex-1 max-w-md">
-                  <FormField
- control={form.control}
- name="notes"
- render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-muted-foreground">Additional Notes</FormLabel>
-                        <FormControl>
-                          <RichTextEditor value={field.value ?? ""} onChange={field.onChange} placeholder="" className="min-h-[96px]" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                </div>
+              <div className="flex flex-col md:flex-row justify-end gap-6">
                 <div className="w-full md:w-72 space-y-4">
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-muted-foreground">Subtotal</span>

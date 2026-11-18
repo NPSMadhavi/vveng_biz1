@@ -14,6 +14,7 @@ export const vendorsTable = pgTable("vendors", {
   currency: text("currency"),
   gstRegistered: boolean("gst_registered").notNull().default(false),
   gstNo: text("gst_no"),
+  usageType: text("usage_type").notNull().default("general"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

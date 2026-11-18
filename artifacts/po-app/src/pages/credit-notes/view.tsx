@@ -259,7 +259,7 @@ export default function CreditNoteView() {
         <PdfPreviewModal
           open={showPreview}
           onOpenChange={setShowPreview}
-          title={doc.cnNumber}
+          title={`Credit Note ${doc.cnNumber}`}
           generatePdf={(opts) => generateCreditNote_PDF(doc as any, selectedCompany, opts)}
           pdfFilename={`${doc.cnNumber}.pdf`}
           defaultEmailTo={doc.contactEmail || ""}

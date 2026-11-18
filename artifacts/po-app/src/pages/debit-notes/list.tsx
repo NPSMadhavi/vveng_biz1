@@ -1,4 +1,6 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -71,13 +73,17 @@ function fmtDate(d: string | null) {
 export default function DebitNoteList() {
   const [search, setSearch] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const workingYear = useWorkingYearBounds();
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  useEffect(() => {
+    if (workingYear.active) setFilterYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const qc = useQueryClient();
   const { selectedCompany } = useAuth();
   const [, setLocation] = useLocation();
-  const currentYear = new Date().getFullYear();
+  const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
 
   const { data = [], isLoading } = useQuery<DebitNote[]>({
     queryKey: ["debit-notes"],
@@ -89,7 +95,9 @@ export default function DebitNoteList() {
   });
 
   const filteredByDate = useMemo(() => {
-    if (filterMode === "all") return data;
+    if (filterMode === "all") {
+      return workingYear.active ? data.filter((d) => isoInBounds(d.issueDate, workingYear.from, workingYear.to)) : data;
+    }
     if (filterMode === "custom") {
       if (!customFrom && !customTo) return data;
       return data.filter(d => {
@@ -107,7 +115,7 @@ export default function DebitNoteList() {
       const dt = new Date(d.issueDate + "T00:00:00");
       return dt.getFullYear() === filterYear && months.includes(dt.getMonth());
     });
-  }, [data, filterMode, filterYear, customFrom, customTo]);
+  }, [data, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: DebitNote) => d.customerName || "";
   const bulk = useBulkPartyEmail<DebitNote>({ allDocs: data, dateFiltered: filteredByDate, getPartyName });
@@ -166,7 +174,7 @@ export default function DebitNoteList() {
           {(["all","q1","q2","q3","q4"] as FilterMode[]).map(m => (
             <button key={m} onClick={() => setFilterMode(m)}
               className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${filterMode===m?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}
-            >{m==="all"?"All Time":m.toUpperCase()}</button>
+            >{m==="all"?(workingYear.active ? workingYear.label : "All Time"):m.toUpperCase()}</button>
           ))}
           <button onClick={() => setFilterMode("custom")}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors flex items-center gap-1 ${filterMode==="custom"?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}

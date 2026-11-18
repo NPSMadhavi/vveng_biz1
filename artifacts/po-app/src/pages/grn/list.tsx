@@ -1,4 +1,6 @@
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -50,17 +52,23 @@ export default function GrnList() {
   const [, setLocation] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const workingYear = useWorkingYearBounds();
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  useEffect(() => {
+    if (workingYear.active) setFilterYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const currentYear = new Date().getFullYear();
+  const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
   const { selectedCompany } = useAuth();
 
   const { data: grns, isLoading } = useQuery({ queryKey: ["grns"], queryFn: fetchGrns });
 
   const filteredByDate = useMemo(() => {
     const all = grns ?? [];
-    if (filterMode === "all") return all;
+    if (filterMode === "all") {
+      return workingYear.active ? all.filter((d) => isoInBounds(d.createdAt, workingYear.from, workingYear.to)) : all;
+    }
     if (filterMode === "custom") {
       if (!customFrom && !customTo) return all;
       return all.filter(d => {
@@ -77,7 +85,7 @@ export default function GrnList() {
       const dt = new Date(d.createdAt);
       return dt.getFullYear() === filterYear && months.includes(dt.getMonth());
     });
-  }, [grns, filterMode, filterYear, customFrom, customTo]);
+  }, [grns, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: Grn) => d.vendorName || "";
   const bulk = useBulkPartyEmail<Grn>({ allDocs: grns ?? [], dateFiltered: filteredByDate, getPartyName });
@@ -113,7 +121,7 @@ export default function GrnList() {
           {(["all","q1","q2","q3","q4"] as FilterMode[]).map(m => (
             <button key={m} onClick={() => setFilterMode(m)}
               className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${filterMode===m?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}
-            >{m==="all"?"All Time":m.toUpperCase()}</button>
+            >{m==="all"?(workingYear.active ? workingYear.label : "All Time"):m.toUpperCase()}</button>
           ))}
           <button onClick={() => setFilterMode("custom")}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors flex items-center gap-1 ${filterMode==="custom"?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}

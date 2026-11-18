@@ -209,6 +209,13 @@ function pickField(data: AssetRecord, camel: string, snake: string): unknown {
   return data[camel] ?? data[snake];
 }
 
+function residualFieldValue(value: unknown): string {
+  if (value == null || String(value).trim() === "") return "";
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return "";
+  return String(value);
+}
+
 function normalizeAssetRecord(data: AssetRecord): AssetRecord {
   const type =
     pickField(data, "type", "asset_type") ??
@@ -341,7 +348,7 @@ function mapAssetToFormValues(data: AssetRecord): AssetFormData {
       matchSelectValue(normalized.usefulLifeUnit || "Years", usefulLifeUnits) || "Years",
     depreciationMethod:
       matchSelectValue(normalized.depreciationMethod, depreciationMethods) || "straight line",
-    residualValue: String(normalized.residualValue ?? "0.00"),
+    residualValue: residualFieldValue(normalized.residualValue),
     depreciationFrequency:
       matchSelectValue(normalized.depreciationFrequency || "Monthly", depreciationFrequencies) ||
       "Monthly",
@@ -376,7 +383,7 @@ const emptyFormValues: AssetFormData = {
   usefulLifeYears: undefined,
   usefulLifeUnit: "Years",
   depreciationMethod: "straight line",
-  residualValue: "0.00",
+  residualValue: "",
   depreciationFrequency: "Monthly",
   depreciationBook: "Financial (SFRS(I))",
   assetImage: "",
@@ -1697,7 +1704,7 @@ export default function AssetForm({ assetId, initialAsset, onSuccess, formId, hi
                         <Input
                           className="pl-9"
                           inputMode="decimal"
-                          placeholder="0.00"
+                          placeholder=""
                           {...field}
                           value={field.value ?? ""}
                         />

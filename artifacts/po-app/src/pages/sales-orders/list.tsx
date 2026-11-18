@@ -1,10 +1,13 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useListSalesOrders, getListSalesOrdersQueryKey } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { Search, Plus, Eye, Pencil, Trash2, X } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,7 +28,7 @@ import { useDeleteSalesOrder } from "@workspace/api-client-react";
 import { formatCurrency as formatCurrencySafe } from "@/lib/currencies";
 
 export default function SalesOrderList() {
-  const [, setLocation] = useLocation();
+  const { setLocation, href } = useDocNav();
   const [searchTerm, setSearchTerm] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; soNumber: string } | null>(null);
   const { toast } = useToast();
@@ -39,12 +42,16 @@ export default function SalesOrderList() {
 
   const deleteMutation = useDeleteSalesOrder();
 
+  const workingYear = useWorkingYearBounds();
   const getPartyName = (d: { customerName?: string }) => d.customerName || "";
   const bulk = useBulkPartyEmail({ allDocs: salesOrders ?? [], dateFiltered: salesOrders ?? [], getPartyName });
 
   const filteredOrders = useMemo(() => {
     const t = searchTerm.toLowerCase().trim();
-    const all = (salesOrders ?? []).filter(d => bulk.matchesParty(d));
+    const yearScoped = workingYear.active
+      ? (salesOrders ?? []).filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to))
+      : (salesOrders ?? []);
+    const all = yearScoped.filter(d => bulk.matchesParty(d));
     if (!t) return all;
     return all.filter(
       (d) =>
@@ -52,7 +59,7 @@ export default function SalesOrderList() {
         d.customerName.toLowerCase().includes(t) ||
         ((d as any).qtNumber || "").toLowerCase().includes(t),
     );
-  }, [salesOrders, searchTerm, bulk.partyFilter, bulk.matchesParty]);
+  }, [salesOrders, searchTerm, bulk.partyFilter, bulk.matchesParty, workingYear.active, workingYear.from, workingYear.to]);
 
   const { page, setPage, totalPages, paginatedItems } = usePagination(filteredOrders);
   const { sendable, allSelected, someSelected } = bulk.selectionState(filteredOrders);
@@ -105,7 +112,7 @@ export default function SalesOrderList() {
           <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Sales Orders</h1>
         </div>
         <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-          <Link href="/sales-orders/new">
+          <Link href={href("/sales-orders/new")}>
             <Button className="gap-2 w-full sm:w-auto"><Plus className="h-4 w-4" />Create Sales Order</Button>
           </Link>
         </div>

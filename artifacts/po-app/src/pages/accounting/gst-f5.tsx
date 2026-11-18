@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -152,12 +153,19 @@ function SortTh<T extends string = string>({ col, sortKey, sortDir, onSort, righ
 
 export default function GstF5Page() {
   const { selectedCompany } = useAuth();
+  const workingYear = useWorkingYearBounds();
+  const yearChoices = Array.from(new Set([workingYear.year, YEAR - 2, YEAR - 1, YEAR, YEAR + 1])).sort((a, b) => a - b);
 
   const [selYear,    setSelYear]    = useState(YEAR);
   const [selQuarter, setSelQuarter] = useState<number>(CURRENT_Q);
   const [useCustom,  setUseCustom]  = useState(false);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo,   setCustomTo]   = useState("");
+  useEffect(() => {
+    if (!workingYear.active) return;
+    setSelYear(workingYear.year);
+    setUseCustom(false);
+  }, [workingYear.active, workingYear.year]);
 
   const [showInvoices,       setShowInvoices]       = useState(false);
   const [showVendorInvoices, setShowVendorInvoices] = useState(false);
@@ -310,7 +318,7 @@ export default function GstF5Page() {
                 value={selYear}
                 onChange={e => { setSelYear(Number(e.target.value)); setUseCustom(false); }}
               >
-                {[YEAR - 2, YEAR - 1, YEAR, YEAR + 1].map(y => <option key={y} value={y}>{y}</option>)}
+                {yearChoices.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
               <div className="flex gap-2">
                 {QUARTERS.map((q, i) => (

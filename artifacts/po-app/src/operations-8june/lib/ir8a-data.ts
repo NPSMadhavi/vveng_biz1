@@ -17,6 +17,7 @@ export type Ir8aEmployeeRow = {
   prStatus?: string | null;
   dateOfBirth?: string | null;
   joinDate?: string | null;
+  createdAt?: string | null;
   status?: string | null;
 };
 

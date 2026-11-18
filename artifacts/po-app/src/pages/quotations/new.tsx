@@ -1,8 +1,9 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useLocation } from "wouter";
+
 import { useQueryClient } from "@tanstack/react-query";
 import { useCreateQuotation, useGetSettings, getGetSettingsQueryKey, getListQuotationsQueryKey } from "@workspace/api-client-react";
 import { invalidateDocumentList } from "@/lib/invalidate-document-lists";
@@ -27,8 +28,11 @@ import { generateQuotation_PDF } from "@/lib/pdf";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
 import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField, getToday } from "@/components/issue-date-field";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
 import { DirectoryPickerButton } from "@/components/directory-picker-button";
+import { manpowerLineFromCustomer } from "@/lib/customer-manpower-line";
+import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard } from "@/components/manpower-quotation-fields";
 import { CurrencyMismatchDialog } from "@/components/currency-mismatch-dialog";
 import { useAuth } from "@/contexts/auth-context";
 import { ItemImageField } from "@/components/item-image-field";
@@ -75,10 +79,12 @@ const schema = z.object({
   discountAmount: z.coerce.number().min(0).default(0),
   isPrivate: z.boolean().default(false),
   items: z.array(itemSchema).min(1, "At least one item is required"),
+  manpowerDetails: manpowerDetailsSchema.optional(),
 });
 
 export default function QuotationNew() {
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { selectedCompany } = useAuth();
@@ -108,7 +114,8 @@ export default function QuotationNew() {
       tax: 9,
       discountAmount: 0,
       isPrivate: false,
-      items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
+      manpowerDetails: { ...emptyManpowerDetails },
+      items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
     },
   });
   useVedaFormFill(form);
@@ -323,7 +330,7 @@ export default function QuotationNew() {
     setIsSubmitting(true);
     const filledItems = values.items.filter(i => {
       if ((i as any).type === "section") return plainText((i as any).sectionLabel) !== "";
-      return plainText(i.partNumber) !== "" || plainText(i.description) !== "";
+      return plainText(i.partNumber) !== "" || plainText(i.description) !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -337,7 +344,9 @@ export default function QuotationNew() {
       const partNumber = plainText(i.partNumber);
       return { ...i, partNumber, discount: disc, isFoc: !!(i as any).isFoc, amount: (i.qty * i.unitPrice * (1 - disc / 100)).toFixed(2) };
     });
-    createMutation.mutate({ data: { ...values, status: openPreview ? "confirmed" : "draft", discountAmount: values.discountAmount, items: itemsWithAmount } as any }, {
+    const payload: any = { ...values, status: openPreview ? "confirmed" : "draft", discountAmount: values.discountAmount, items: itemsWithAmount };
+    if (!isManpower) delete payload.manpowerDetails;
+    createMutation.mutate({ data: payload }, {
       onSuccess: async (data) => {
         // Show the new quotation in the list immediately (no manual refresh).
         queryClient.setQueryData(getListQuotationsQueryKey(), (old: any) =>
@@ -471,6 +480,7 @@ export default function QuotationNew() {
                             form.setValue("customerAddress", c.fullAddress);
                             form.setValue("customerContact", c.contactPerson);
                             form.setValue("customerContactEmail", c.contactEmail);
+                            if (c.phone) form.setValue("manpowerDetails.phone", c.phone);
                             if (c.effectiveGstRate !== undefined) { form.setValue("tax", c.effectiveGstRate); setIsOverseas(!!c.isOverseas); }
                             if (c.currency) {
                               form.setValue("currency", c.currency);
@@ -482,6 +492,30 @@ export default function QuotationNew() {
                               form.setValue("notes", c.quotationTerms);
                             } else {
                               form.setValue("notes", settings?.quotationTerms ?? "");
+                            }
+                            const manpower = manpowerLineFromCustomer(c);
+                            if (manpower) {
+                              const items = form.getValues("items");
+                              const index = items.findIndex((item) => item.type !== "section");
+                              if (index < 0) {
+                                append({
+                                  type: "item" as const,
+                                  sectionLabel: "",
+                                  sectionAlign: "left" as const,
+                                  partNumber: "",
+                                  description: manpower.description,
+                                  qty: 1,
+                                  uom: manpower.uom,
+                                  unitPrice: manpower.unitPrice,
+                                  discount: 0,
+                                  isFoc: false,
+                                  itemImage: "",
+                                });
+                              } else {
+                                form.setValue(`items.${index}.description`, manpower.description);
+                                form.setValue(`items.${index}.unitPrice`, manpower.unitPrice);
+                                form.setValue(`items.${index}.uom`, manpower.uom);
+                              }
                             }
                           }}
                         />
@@ -518,6 +552,7 @@ export default function QuotationNew() {
                     </FormItem>
                   )} />
                 </div>
+                {isManpower ? <ManpowerCustomerExtraFields control={form.control} /> : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <FormField control={form.control} name="customerAddress" render={({ field }) => (
                     <FormItem>
@@ -527,6 +562,7 @@ export default function QuotationNew() {
                     </FormItem>
                   )} />
                 </div>
+                )}
               </CardContent>
             </Card>
 
@@ -535,7 +571,7 @@ export default function QuotationNew() {
                 <CardTitle className="text-lg">Quotation Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isManpower ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
@@ -548,16 +584,38 @@ export default function QuotationNew() {
                     <FormItem>
                       <FormLabel>Quotation Valid Upto <span className="text-destructive">*</span></FormLabel>
                       <FormControl>
-                        <Input
-                          type="date"
+                        <SyncBridgeDatePicker
                           value={field.value || ""}
-                          min={form.watch("issueDate") || undefined}
                           onChange={field.onChange}
+                          placeholder="DD/MM/YYYY"
                         />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {isManpower && (
+                    <>
+                      <FormField control={form.control} name="manpowerDetails.serviceStartDate" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Service Start Date</FormLabel>
+                          <FormControl>
+                            <SyncBridgeDatePicker value={field.value || ""} onChange={field.onChange} placeholder="DD/MM/YYYY" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={form.control} name="manpowerDetails.serviceEndDate" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Service End Date</FormLabel>
+                          <FormControl>
+                            <SyncBridgeDatePicker value={field.value || ""} onChange={field.onChange} placeholder="DD/MM/YYYY" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                    </>
+                  )}
+                  {!isManpower && (
                   <FormField control={form.control} name="paymentTerms" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Payment Terms</FormLabel>
@@ -565,8 +623,18 @@ export default function QuotationNew() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  )}
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 ${isManpower ? "md:grid-cols-[minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,1.8fr)]" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
+                  {isManpower && (
+                  <FormField control={form.control} name="paymentTerms" render={({ field }) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Payment Terms</FormLabel>
+                      <FormControl><PaymentTermsSelect value={field.value} onChange={field.onChange} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  )}
                   <FormField control={form.control} name="isPrivate" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Private Document</FormLabel>
@@ -578,15 +646,17 @@ export default function QuotationNew() {
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                    <FormItem className="sm:col-span-2">
+                    <FormItem className={isManpower ? "min-w-0" : "sm:col-span-2"}>
                       <FormLabel>Delivery Date</FormLabel>
-                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} /></FormControl>
+                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap={isManpower} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
                 </div>
               </CardContent>
             </Card>
+
+            {isManpower && <ManpowerRequirementsCard control={form.control} />}
           </div>
 
           <Card className="overflow-hidden">
@@ -594,12 +664,14 @@ export default function QuotationNew() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportQtOpen(true)}>
                     <Copy className="h-3 w-3" /> Import from Quotation
                   </Button>
@@ -626,6 +698,7 @@ export default function QuotationNew() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -793,6 +866,7 @@ export default function QuotationNew() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

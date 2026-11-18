@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -331,8 +333,22 @@ export default function WhtRegister() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["wht"] }),
   });
 
-  const s = data?.summary;
-  const records = data?.records ?? [];
+  const workingYear = useWorkingYearBounds();
+  const records = useMemo(() => {
+    const all = data?.records ?? [];
+    if (!workingYear.active) return all;
+    return all.filter((record) => isoInBounds(record.paymentDate, workingYear.from, workingYear.to));
+  }, [data?.records, workingYear]);
+  const s = useMemo(() => {
+    if (!data) return null;
+    return {
+      total: records.length,
+      pending: records.filter((record) => record.status === "pending" && !(record.filingDeadline && record.filingDeadline < today)).length,
+      filed: records.filter((record) => record.status === "filed").length,
+      overdue: records.filter((record) => record.status === "pending" && !!record.filingDeadline && record.filingDeadline < today).length,
+      totalWht: records.reduce((sum, record) => sum + (Number(record.whtAmount) || 0), 0),
+    };
+  }, [data, records]);
   const { page, setPage, totalPages, paginatedItems } = usePagination(records);
   const vendors = data?.vendors ?? [];
 

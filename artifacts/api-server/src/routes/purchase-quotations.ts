@@ -16,6 +16,15 @@ import { ensureCompanyDocumentTables } from "../lib/company-database.js";
 
 const router: IRouter = Router();
 
+async function ensureManpowerDetails(): Promise<void> {
+  try {
+    await pool.query(`ALTER TABLE purchase_quotations ADD COLUMN IF NOT EXISTS manpower_details jsonb`);
+  } catch (error: any) {
+    if (error?.code === "42P01") return;
+    throw error;
+  }
+}
+
 function isMissingRelationError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   const code = (err as { code?: string })?.code;
@@ -139,6 +148,7 @@ router.get("/purchase-quotations/stats", async (req, res): Promise<void> => {
 
 router.get("/purchase-quotations", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const companyId = req.session.companyId;
   try {
     const docs = await withDocumentSchemaRetry(() =>
@@ -161,6 +171,7 @@ router.get("/purchase-quotations", async (req, res): Promise<void> => {
 
 router.post("/purchase-quotations", async (req, res): Promise<void> => {
   if (!requireAuth(req, res) || !requireCompany(req, res)) return;
+  await ensureManpowerDetails();
   const { vendorName, vendorAddress, vendorContact, vendorContactEmail, deliveryAddress, issueDate,
     deliveryDate, paymentTerms, notes, items, currency, isPrivate, status } = req.body;
   if (!vendorName || !Array.isArray(items)) {
@@ -193,6 +204,7 @@ router.post("/purchase-quotations", async (req, res): Promise<void> => {
         tax: totals.tax.toFixed(2),
         totalAmount: totals.totalAmount.toFixed(2),
         status: status || "draft",
+        manpowerDetails: req.body.manpowerDetails && typeof req.body.manpowerDetails === "object" ? req.body.manpowerDetails : null,
         createdBy: req.session.userId!,
       }).returning(),
     );
@@ -206,6 +218,7 @@ router.post("/purchase-quotations", async (req, res): Promise<void> => {
 
 router.get("/purchase-quotations/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) {
     res.status(400).json({ error: "Invalid ID" });
@@ -225,6 +238,7 @@ router.get("/purchase-quotations/:id", async (req, res): Promise<void> => {
 
 router.put("/purchase-quotations/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res) || !requireCompany(req, res)) return;
+  await ensureManpowerDetails();
   const id = Number(req.params.id);
   const [existing] = await db.select().from(purchaseQuotationsTable).where(and(
     eq(purchaseQuotationsTable.id, id),
@@ -258,6 +272,9 @@ router.put("/purchase-quotations/:id", async (req, res): Promise<void> => {
   if (req.body.currency !== undefined) data.currency = req.body.currency;
   if (req.body.isPrivate !== undefined) data.isPrivate = req.body.isPrivate === true;
   if (req.body.status) data.status = req.body.status;
+  data.manpowerDetails = req.body.manpowerDetails && typeof req.body.manpowerDetails === "object"
+    ? req.body.manpowerDetails
+    : existing.manpowerDetails ?? null;
   const [updated] = await db.update(purchaseQuotationsTable).set(data)
     .where(eq(purchaseQuotationsTable.id, id)).returning();
   await upsertVendor(req.session.companyId!, data.vendorName, data.vendorAddress, data.vendorContact, data.vendorContactEmail);
@@ -355,6 +372,14 @@ router.post("/purchase-quotations/:id/convert-to-po", async (req, res): Promise<
     currency: quotation.currency,
     status: "draft",
     isPrivate: quotation.isPrivate,
+    manpowerDetails: quotation.manpowerDetails && typeof quotation.manpowerDetails === "object"
+      ? {
+          ...quotation.manpowerDetails,
+          workLocation: (quotation.manpowerDetails as any).workLocation || "",
+          poStartDate: (quotation.manpowerDetails as any).poStartDate || (quotation.manpowerDetails as any).serviceStartDate || "",
+          poEndDate: (quotation.manpowerDetails as any).poEndDate || (quotation.manpowerDetails as any).serviceEndDate || "",
+        }
+      : null,
     createdBy: req.session.userId!,
   }).returning();
   await db.update(purchaseQuotationsTable).set({
@@ -414,6 +439,9 @@ router.post("/purchase-quotations/:id/convert-to-vendor-invoice", async (req, re
       gstAmount: tax.toFixed(2),
       gstInclusive: false,
       exchangeRate: "1.000000",
+      manpowerDetails: quotation.manpowerDetails && typeof quotation.manpowerDetails === "object"
+        ? { workLocation: (quotation.manpowerDetails as any).workLocation || "" }
+        : null,
       createdBy: req.session.userId!,
     }).returning();
 

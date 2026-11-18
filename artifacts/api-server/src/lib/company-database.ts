@@ -26,7 +26,7 @@ const companyRowEnsured = new Set<string>();
  * database_name → inventory/customers/stock_items heal applied this process.
  * Bump INVENTORY_HEAL_VERSION when adding new columns so older process caches re-run.
  */
-const INVENTORY_HEAL_VERSION = 3;
+const INVENTORY_HEAL_VERSION = 4;
 const inventorySchemaHealed = new Set<string>();
 /**
  * Bump when adding document tables (PQ/SO/VI/GRN/…) so fast-path tenants re-create missing relations.
@@ -412,6 +412,9 @@ async function healTenantInventorySchema(pool: pg.Pool, databaseName: string): P
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS currency text DEFAULT 'SGD'`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_limit_enabled boolean NOT NULL DEFAULT false`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_limit numeric(15,2)`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS per_hour_amount numeric(15,2)`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS usage_type text NOT NULL DEFAULT 'general'`,
+    `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS usage_type text NOT NULL DEFAULT 'general'`,
     // warehouses
     `ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS state text`,
     `ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS pin_code text`,
@@ -901,6 +904,12 @@ async function prepareCompanyPool(databaseUrl: string, databaseName: string, com
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS bc_prefix text DEFAULT 'BC'`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS bc_counter integer NOT NULL DEFAULT 0`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS bc_suffix text DEFAULT ''`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS dep_prefix text DEFAULT 'DEP'`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS dep_counter integer NOT NULL DEFAULT 0`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS dep_suffix text DEFAULT ''`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS ts_prefix text DEFAULT 'TS'`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS ts_counter integer NOT NULL DEFAULT 0`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS ts_suffix text DEFAULT ''`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS allow_negative_stock boolean NOT NULL DEFAULT false`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS auto_deduct_on_do boolean NOT NULL DEFAULT false`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS low_stock_warning numeric(15,3) DEFAULT 0`,

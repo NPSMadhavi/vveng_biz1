@@ -348,7 +348,8 @@ CREATE TABLE IF NOT EXISTS public.customers (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     quotation_terms text,
     credit_limit_enabled boolean DEFAULT false NOT NULL,
-    credit_limit numeric(15,2)
+    credit_limit numeric(15,2),
+    per_hour_amount numeric(15,2)
 );
 CREATE SEQUENCE IF NOT EXISTS public.customers_id_seq
     AS integer
@@ -542,6 +543,8 @@ CREATE TABLE IF NOT EXISTS public.employees (
     status text DEFAULT 'active'::text NOT NULL,
     salary text,
     annual_salary text,
+    work_type text,
+    per_hour_charge text,
     nationality text,
     pr_status text,
     date_of_birth timestamp with time zone,

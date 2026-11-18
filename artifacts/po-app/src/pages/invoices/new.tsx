@@ -1,8 +1,10 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptyInvoiceManpower, invoiceManpowerSchema, ManpowerInvoiceWorkLocation, ManpowerLineItemsTable } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useLocation, useSearch } from "wouter";
+import { useSearch } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCreateInvoice, useGetSettings, getGetSettingsQueryKey, useListPurchaseOrders, getListPurchaseOrdersQueryKey, useGetQuotation, getGetQuotationQueryKey } from "@workspace/api-client-react";
 import { invalidateDocumentList } from "@/lib/invalidate-document-lists";
@@ -81,6 +83,7 @@ const schema = z.object({
   paymentTerms: z.string().optional(),
   poRefNo: z.string().optional(),
   salesPerson: z.string().optional(),
+  manpowerDetails: invoiceManpowerSchema.optional(),
   notes: z.string().optional(),
   termsAndConditions: z.string().optional(),
   deliveryInstructions: z.string().optional(),
@@ -94,7 +97,8 @@ const schema = z.object({
 });
 
 export default function InvoiceNew() {
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const search = useSearch();
   const qtParams = new URLSearchParams(search);
   const qtId = qtParams.get("qtId");
@@ -177,7 +181,7 @@ export default function InvoiceNew() {
     query: { queryKey: getGetQuotationQueryKey(qtIdNum ?? 0), enabled: !!qtIdNum },
   });
 
-  const blankInvItem = { type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
+  const blankInvItem = { type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
 
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -189,6 +193,7 @@ export default function InvoiceNew() {
       tax: 9,
       discountAmount: 0,
       isPrivate: false,
+      manpowerDetails: { ...emptyInvoiceManpower },
       items: [blankInvItem],
     },
   });
@@ -227,6 +232,10 @@ export default function InvoiceNew() {
       })(),
       discountAmount: Number((sourceQt as any).discountAmount ?? 0),
       isPrivate: false,
+      manpowerDetails: {
+        ...emptyInvoiceManpower,
+        workLocation: (sourceQt as any).manpowerDetails?.workLocation || "",
+      },
       items: qtItems.length > 0
         ? qtItems.map((it: any) => ({
             ...blankInvItem,
@@ -360,6 +369,11 @@ export default function InvoiceNew() {
       paymentTerms: prefill.paymentTerms || "30 Days Net",
       poRefNo: prefill.poRefNo || "",
       salesPerson: prefill.salesPerson || "",
+      manpowerDetails: {
+        ...emptyInvoiceManpower,
+        ...(prefill.manpowerDetails || {}),
+        workLocation: prefill.manpowerDetails?.workLocation || prefill.workLocation || "",
+      },
       notes: prefill.notes || "",
       termsAndConditions: prefill.termsAndConditions || "",
       deliveryInstructions: prefill.deliveryInstructions || "",
@@ -537,7 +551,7 @@ export default function InvoiceNew() {
     const filledItems = values.items.filter(i =>
       (i as any).type === "section"
         ? ((i as any).sectionLabel || "").trim() !== ""
-        : (i.partNumber || "").replace(/<[^>]*>/g, "").trim() !== "" || (i.description || "").replace(/<[^>]*>/g, "").trim() !== ""
+        : (i.partNumber || "").replace(/<[^>]*>/g, "").trim() !== "" || (i.description || "").replace(/<[^>]*>/g, "").trim() !== "" || (isManpower && Number(i.unitPrice) > 0)
     );
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -584,7 +598,7 @@ export default function InvoiceNew() {
       .filter(Boolean)
       .join("\n\n");
 
-    const payload = {
+    const payload: any = {
       ...values,
       discountAmount: values.discountAmount,
       deliveryAddress: cleanAddress || null,
@@ -593,6 +607,7 @@ export default function InvoiceNew() {
       createDeliveryOrder,
       exchangeRate: currency !== "SGD" ? parseFloat(exchangeRate) || 1 : 1,
     };
+    if (!isManpower) delete payload.manpowerDetails;
     // Tax invoice always confirms on save so entered stock qty is reduced once
     // (Save Changes used to stay draft and never touch stock).
     createMutation.mutate({ data: { ...payload, status: "confirmed" } as any }, {
@@ -903,6 +918,7 @@ export default function InvoiceNew() {
                   <p className="text-sm font-medium mb-1.5">Sales Order</p>
                   <p className="h-10 flex items-center px-3 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] text-sm font-mono text-muted-foreground">—</p>
                 </div>
+                {isManpower ? <ManpowerInvoiceWorkLocation control={form.control} /> : (
                 <FormField control={form.control} name="salesPerson" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Sales Person</FormLabel>
@@ -923,6 +939,7 @@ export default function InvoiceNew() {
                     <FormMessage />
                   </FormItem>
                 )} />
+                )}
                 <FormField control={form.control} name="isPrivate" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Private Document</FormLabel>
@@ -983,15 +1000,19 @@ export default function InvoiceNew() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/30 hover:bg-primary/5" onClick={() => setImportPOOpen(true)}>
                     <FileInput className="h-3 w-3" /> Import from PO
                   </Button>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 flex-wrap">
                   <div className="flex items-center gap-3">
@@ -1012,6 +1033,7 @@ export default function InvoiceNew() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -1254,6 +1276,7 @@ export default function InvoiceNew() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

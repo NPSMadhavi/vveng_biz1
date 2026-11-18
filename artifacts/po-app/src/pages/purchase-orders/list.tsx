@@ -1,4 +1,7 @@
-import { useState, useMemo } from "react";
+import { useDocNav } from "@/lib/doc-nav";
+import { useEffect, useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useListPurchaseOrders, getListPurchaseOrdersQueryKey, type PurchaseOrder } from "@workspace/api-client-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
@@ -7,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useSearch } from "wouter";
 import { Search, Plus, ArrowRight, MailCheck, Calendar, ChevronLeft, ChevronRight, Mail } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -59,19 +62,23 @@ function isSendable(po: PurchaseOrder) {
 }
 
 export default function PurchaseOrderList() {
-  const [, setLocation] = useLocation();
+  const { setLocation, href } = useDocNav();
   const searchString = useSearch();
   const [searchTerm, setSearchTerm] = useState("");
   const [vendorFilter, setVendorFilter] = useState("all");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [emailOpen, setEmailOpen] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const workingYear = useWorkingYearBounds();
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  useEffect(() => {
+    if (workingYear.active) setFilterYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const { selectedCompany } = useAuth();
   const queryClient = useQueryClient();
-  const currentYear = new Date().getFullYear();
+  const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
 
   // Veda only: /purchase-orders?status=confirmed (no status chips in UI)
   const statusFilter = useMemo(() => {
@@ -116,7 +123,9 @@ export default function PurchaseOrderList() {
 
   const filteredByDate = useMemo(() => {
     const all = pos ?? [];
-    if (filterMode === "all") return all;
+    if (filterMode === "all") {
+      return workingYear.active ? all.filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to)) : all;
+    }
     if (filterMode === "custom") {
       if (!customFrom && !customTo) return all;
       return all.filter(d => {
@@ -133,7 +142,7 @@ export default function PurchaseOrderList() {
       const dt = new Date(d.createdAt);
       return dt.getFullYear() === filterYear && months.includes(dt.getMonth());
     });
-  }, [pos, filterMode, filterYear, customFrom, customTo]);
+  }, [pos, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const filteredPOs = useMemo(() => filteredByDate.filter(po => {
     if (statusFilter && po.status !== statusFilter) return false;
@@ -210,7 +219,7 @@ export default function PurchaseOrderList() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Purchase Orders</h1>
         </div>
-        <Link href="/purchase-orders/new">
+        <Link href={href("/purchase-orders/new")}>
           <Button className="gap-2"><Plus className="h-4 w-4" />Create Purchase Order</Button>
         </Link>
       </div>
@@ -221,7 +230,7 @@ export default function PurchaseOrderList() {
           {(["all","q1","q2","q3","q4"] as FilterMode[]).map(m => (
             <button key={m} onClick={() => setFilterMode(m)}
               className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${filterMode===m?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}
-            >{m==="all"?"All Time":m.toUpperCase()}</button>
+            >{m==="all"?(workingYear.active ? workingYear.label : "All Time"):m.toUpperCase()}</button>
           ))}
           <button onClick={() => setFilterMode("custom")}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors flex items-center gap-1 ${filterMode==="custom"?"bg-background shadow text-foreground":"text-muted-foreground hover:text-foreground"}`}

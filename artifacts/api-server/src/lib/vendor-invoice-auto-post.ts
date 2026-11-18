@@ -18,9 +18,11 @@
  */
 
 import { db, accountsTable, journalEntriesTable, journalLinesTable, vendorInvoicesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
-import { ensureAccountsSeeded } from "./accounts-seed.js";
+import { eq, and, sql } from "drizzle-orm";
+import { ensureAccountsSeeded, ensureNamedAccount } from "./accounts-seed.js";
 import { assertPeriodWritable } from "./financial-year.js";
+
+const COST_OF_SERVICES = { code: "5010", name: "Cost of Services", type: "expense", subType: "cost_of_sales", isSystem: false };
 
 async function getAccountByCode(companyId: number, code: string) {
   const [acct] = await db.select()
@@ -35,31 +37,70 @@ async function getAccountById(id: number) {
   return acct ?? null;
 }
 
+function isManpowerDetails(value: unknown): boolean {
+  return !!value && typeof value === "object" && Object.keys(value as object).length > 0;
+}
+
 async function resolveVendorDebitAccount(pi: {
   id: number;
   companyId: number;
   expenseAccountId?: number | null;
   items?: Array<{ stockItemId?: number | null }> | null;
+  manpowerDetails?: unknown;
 }) {
   if (pi.expenseAccountId) {
     const chosen = await getAccountById(pi.expenseAccountId);
     if (chosen) return chosen;
   }
   let items = pi.items;
-  if (!items) {
-    const [row] = await db.select({ items: vendorInvoicesTable.items })
+  let manpowerDetails = pi.manpowerDetails;
+  if (items == null || manpowerDetails === undefined) {
+    const [row] = await db.select({
+      items: vendorInvoicesTable.items,
+      manpowerDetails: vendorInvoicesTable.manpowerDetails,
+    })
       .from(vendorInvoicesTable)
       .where(and(eq(vendorInvoicesTable.id, pi.id), eq(vendorInvoicesTable.companyId, pi.companyId)))
       .limit(1);
-    items = (row?.items as Array<{ stockItemId?: number | null }> | null) ?? null;
+    if (items == null) items = (row?.items as Array<{ stockItemId?: number | null }> | null) ?? null;
+    if (manpowerDetails === undefined) manpowerDetails = row?.manpowerDetails ?? null;
   }
   const hasStock = Array.isArray(items) && items.some((item) => Number(item?.stockItemId) > 0);
   if (hasStock) {
     const inventory = await getAccountByCode(pi.companyId, "1200");
     if (inventory) return inventory;
   }
+  if (isManpowerDetails(manpowerDetails)) {
+    const services = await ensureNamedAccount(pi.companyId, COST_OF_SERVICES);
+    if (services) return services;
+  }
   return await getAccountByCode(pi.companyId, "5000")
     ?? await getAccountByCode(pi.companyId, "1200");
+}
+
+/** Move already-posted manpower vendor invoices off Cost of Goods Sold. */
+export async function repointManpowerVendorCostOfServices(companyId: number): Promise<void> {
+  try {
+    const services = await ensureNamedAccount(companyId, COST_OF_SERVICES);
+    const cogs = await getAccountByCode(companyId, "5000");
+    if (!services || !cogs || services.id === cogs.id) return;
+    await db.execute(sql`
+      UPDATE journal_lines AS jl
+      SET account_id = ${services.id}
+      FROM journal_entries AS je
+      INNER JOIN vendor_invoices AS vi
+        ON vi.id = je.ref_id AND vi.company_id = je.company_id
+      WHERE jl.journal_entry_id = je.id
+        AND jl.account_id = ${cogs.id}
+        AND je.company_id = ${companyId}
+        AND je.ref_type = 'vendor_invoice'
+        AND vi.manpower_details IS NOT NULL
+        AND vi.manpower_details::text NOT IN ('null', '{}', '""')
+        AND (vi.expense_account_id IS NULL OR vi.expense_account_id = ${cogs.id})
+    `);
+  } catch {
+    /* missing tables on an older tenant must not block the journal screen */
+  }
 }
 
 // ── Vendor Invoice Created ────────────────────────────────────────────────────

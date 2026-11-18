@@ -1,8 +1,10 @@
+import { useDocNav } from "@/lib/doc-nav";
+import { emptySalesManpower, ManpowerLineItemsTable, ManpowerSalesCustomerFields, ManpowerSalesDateFields, salesManpowerSchema } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useLocation, useSearch } from "wouter";
+import { useSearch } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCreateSalesOrder, useGetSettings, getGetSettingsQueryKey, getListSalesOrdersQueryKey, useGetQuotation, getGetQuotationQueryKey } from "@workspace/api-client-react";
 import { invalidateDocumentList } from "@/lib/invalidate-document-lists";
@@ -76,12 +78,14 @@ const schema = z.object({
   discountAmount: z.coerce.number().min(0).default(0),
   isPrivate: z.boolean().default(false),
   items: z.array(itemSchema).min(1, "At least one item is required"),
+  manpowerDetails: salesManpowerSchema.optional(),
 });
 
 const blankItem = () => ({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "", selectedSerials: [] as string[], selectedSerialIds: [] as number[] });
 
 export default function SalesOrderNew() {
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const search = useSearch();
   const urlParams = new URLSearchParams(search);
   const urlQuotationId = urlParams.get("quotationId");
@@ -123,7 +127,8 @@ export default function SalesOrderNew() {
       tax: 9,
       discountAmount: 0,
       isPrivate: false,
-      items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
+      manpowerDetails: { ...emptySalesManpower },
+      items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
     },
   });
   useVedaFormFill(form);
@@ -158,6 +163,12 @@ export default function SalesOrderNew() {
       tax: taxPct,
       discountAmount: disc,
       isPrivate: false,
+      manpowerDetails: {
+        ...emptySalesManpower,
+        workLocation: qt.manpowerDetails?.workLocation || "",
+        poStartDate: qt.manpowerDetails?.serviceStartDate || qt.manpowerDetails?.poStartDate || "",
+        poEndDate: qt.manpowerDetails?.serviceEndDate || qt.manpowerDetails?.poEndDate || "",
+      },
       items: qtItems.length > 0
         ? qtItems.map((it: any) => ({
             ...blankItem(),
@@ -374,7 +385,7 @@ export default function SalesOrderNew() {
     setIsSubmitting(true);
     const filledItems = values.items.filter(i => {
       if ((i as any).type === "section") return ((i as any).sectionLabel || "").trim() !== "";
-      return i.partNumber.trim() !== "" || i.description.trim() !== "";
+      return (i.partNumber || "").trim() !== "" || (i.description || "").trim() !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -389,16 +400,18 @@ export default function SalesOrderNew() {
       return { ...i, discount: disc, isFoc: !!(i as any).isFoc, amount: (i.qty * i.unitPrice * (1 - disc / 100)).toFixed(2) };
     });
     try {
+      const payload: any = {
+        ...values,
+        qtId: selectedQtId,
+        qtNumber: values.qtNumber?.trim() || null,
+        status: openPreview ? "confirmed" : "draft",
+        discountAmount: values.discountAmount,
+        items: itemsWithAmount,
+        ...attachment.payload,
+      };
+      if (!isManpower) delete payload.manpowerDetails;
       const data = await createMutation.mutateAsync({
-        data: {
-          ...values,
-          qtId: selectedQtId,
-          qtNumber: values.qtNumber?.trim() || null,
-          status: openPreview ? "confirmed" : "draft",
-          discountAmount: values.discountAmount,
-          items: itemsWithAmount,
-          ...attachment.payload,
-        } as any,
+        data: payload,
       });
       queryClient.setQueryData(getListSalesOrdersQueryKey(), (old: any) =>
         Array.isArray(old) ? [data, ...old.filter((d: any) => d.id !== (data as any)?.id)] : [data],
@@ -591,6 +604,7 @@ export default function SalesOrderNew() {
                     </FormItem>
                   )} />
                 </div>
+                {isManpower && <ManpowerSalesCustomerFields control={form.control} />}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <FormField control={form.control} name="customerAddress" render={({ field }) => (
                     <FormItem>
@@ -608,7 +622,7 @@ export default function SalesOrderNew() {
                 <CardTitle className="text-lg">Sales Order Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isManpower ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
@@ -631,7 +645,30 @@ export default function SalesOrderNew() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {isManpower && (
+                  <FormField control={form.control} name="isPrivate" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Private Document</FormLabel>
+                      <div className="flex h-10 items-center gap-3 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3">
+                        <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <p className="flex-1 text-xs text-muted-foreground">Only you &amp; admins</p>
+                        <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+                      </div>
+                    </FormItem>
+                  )} />
+                  )}
                 </div>
+                {isManpower ? (
+                  <ManpowerSalesDateFields control={form.control}>
+                    <FormField control={form.control} name="deliveryDate" render={({ field }) => (
+                      <FormItem className="min-w-0">
+                        <FormLabel>Delivery Date</FormLabel>
+                        <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
+                  </ManpowerSalesDateFields>
+                ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <FormField control={form.control} name="isPrivate" render={({ field }) => (
                     <FormItem>
@@ -651,6 +688,7 @@ export default function SalesOrderNew() {
                     </FormItem>
                   )} />
                 </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -660,12 +698,14 @@ export default function SalesOrderNew() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportQtOpen(true)}>
                     <Copy className="h-3 w-3" /> Import from Quotation
                   </Button>
@@ -692,6 +732,7 @@ export default function SalesOrderNew() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -859,6 +900,7 @@ export default function SalesOrderNew() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

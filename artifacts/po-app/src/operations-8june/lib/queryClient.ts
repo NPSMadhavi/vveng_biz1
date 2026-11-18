@@ -10,8 +10,9 @@ async function throwIfResNotOk(res: Response) {
       errorData = { message: text || res.statusText };
     }
     
-    // Log the error for debugging
-    console.error(`API Error ${res.status}:`, errorData);
+    if (!(res.status === 503 && errorData.temporary)) {
+      console.error(`API Error ${res.status}:`, errorData);
+    }
     
     // Clean up authentication error messages
     if (res.status === 401) {
@@ -29,6 +30,10 @@ async function throwIfResNotOk(res: Response) {
     }
     
     // For 500 errors, provide more context
+    if (res.status === 503 && errorData.temporary) {
+      throw new Error(errorData.error || "API is restarting. Try again in a moment.");
+    }
+
     if (res.status === 500) {
       throw new Error(errorData.message || errorData.error || "Internal server error. Please check server logs.");
     }
@@ -113,17 +118,12 @@ export const queryClient = new QueryClient({
       staleTime: 1000 * 60 * 5,  // 5 minutes
       gcTime: 1000 * 60 * 10,   // 10 minutes garbage collection
       retry: (failureCount, error) => {
-        // Don't retry on 401 or 403
-        if (error instanceof Error && 
-            (error.message.includes("401") || 
-             error.message.includes("403") ||
-             error.message.includes("Incorrect credentials"))) {
-          return false;
-        }
-        // Retry up to 2 times for other errors
-        return failureCount < 2;
+        if (failureCount >= 4) return false;
+        const message = error instanceof Error ? error.message : "";
+        if (/401|403|400|404|500|Incorrect credentials|already registered/i.test(message)) return false;
+        return /API is restarting|Failed to fetch|NetworkError|Load failed|ECONNREFUSED/i.test(message);
       },
-      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+      retryDelay: (attemptIndex) => Math.min(400 * 2 ** attemptIndex, 4000),
     },
     mutations: {
       retry: false,

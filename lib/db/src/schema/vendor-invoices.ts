@@ -27,6 +27,7 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
   discountAmount: decimal("discount_amount", { precision: 15, scale: 2 }).notNull().default("0"),
   expenseAccountId: integer("expense_account_id"),
   salesPerson: text("sales_person"),
+  manpowerDetails: jsonb("manpower_details"),
   // Optional line-items payload (WMS / stock receive flows)
   items: jsonb("items").notNull().default([]),
   subtotal: decimal("subtotal", { precision: 15, scale: 2 }).notNull().default("0"),

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ import { useGetSettings } from "@workspace/api-client-react";
 import { VendorCreateDialog } from "@/components/vendor-create-dialog";
 import { CustomerCreateDialog } from "@/components/customer-create-dialog";
 import { isInternationalParty, isSameCountry } from "@/lib/countries";
+import { isGeneralParty, isManpowerParty } from "@/lib/party-usage";
 import { cn } from "@/lib/utils";
 
 interface DirectoryEntry {
@@ -26,10 +28,13 @@ interface DirectoryEntry {
   currency: string | null;
   gstRegistered: boolean;
   gstNo: string | null;
+  usageType?: string | null;
   creditLimitEnabled?: boolean;
   creditLimit?: string | number | null;
   shipToAddress: string | null;
   quotationTerms: string | null;
+  perHourAmount?: string | number | null;
+  assignedEmployees?: { id: number; name?: string | null }[];
   isActive: boolean;
 }
 
@@ -51,6 +56,8 @@ export interface PickedEntry {
   quotationTerms: string;
   creditLimitEnabled: boolean;
   creditLimit: number | null;
+  perHourAmount: number | null;
+  assignedEmployees: { id: number; name?: string | null }[];
 }
 
 interface DirectoryPickerButtonProps {
@@ -60,12 +67,13 @@ interface DirectoryPickerButtonProps {
   className?: string;
 }
 
-async function fetchEntries(type: "vendor" | "customer"): Promise<DirectoryEntry[]> {
+async function fetchEntries(type: "vendor" | "customer", usage: "general" | "manpower"): Promise<DirectoryEntry[]> {
   const url = type === "vendor" ? "/api/vendors" : "/api/customers";
   const res = await fetch(url, { credentials: "include" });
   if (!res.ok) return [];
   const all: DirectoryEntry[] = await res.json();
-  return all.filter(e => e.isActive);
+  const matches = usage === "manpower" ? isManpowerParty : isGeneralParty;
+  return all.filter(e => e.isActive && matches(e));
 }
 
 function buildFullAddress(entry: { address?: string | null; country?: string | null; postalCode?: string | null }): string {
@@ -83,6 +91,8 @@ function buildFullAddress(entry: { address?: string | null; country?: string | n
 }
 
 export function DirectoryPickerButton({ type, onSelect, label, className }: DirectoryPickerButtonProps) {
+  const [location] = useLocation();
+  const usage = location.startsWith("/manpower/") ? "manpower" : "general";
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -94,8 +104,8 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
   const queryKey = type === "vendor" ? "vendors" : "customers";
 
   const { data: entries = [] } = useQuery({
-    queryKey: [queryKey],
-    queryFn: () => fetchEntries(type),
+    queryKey: [queryKey, usage, "directory"],
+    queryFn: () => fetchEntries(type, usage),
     enabled: open,
   });
 
@@ -128,6 +138,8 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
     creditLimit?: string | number | null;
     shipToAddress?: string | null;
     quotationTerms?: string | null;
+    perHourAmount?: string | number | null;
+    assignedEmployees?: { id: number; name?: string | null }[];
   }): PickedEntry {
     const isOverseas = isInternationalParty(entry.country, companyCountry);
     const limitEnabled = !!entry.creditLimitEnabled;
@@ -151,6 +163,10 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
       quotationTerms: entry.quotationTerms || "",
       creditLimitEnabled: limitEnabled,
       creditLimit: Number.isFinite(parsedLimit) && parsedLimit >= 0 ? parsedLimit : null,
+      perHourAmount: entry.perHourAmount != null && entry.perHourAmount !== "" && Number.isFinite(Number(entry.perHourAmount))
+        ? Number(entry.perHourAmount)
+        : null,
+      assignedEmployees: Array.isArray(entry.assignedEmployees) ? entry.assignedEmployees : [],
     };
   }
 
@@ -178,6 +194,8 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
     phone?: string | null; currency?: string | null; gstRegistered?: boolean; gstNo?: string | null;
     creditLimitEnabled?: boolean; creditLimit?: string | number | null;
     shipToAddress?: string | null; quotationTerms?: string | null;
+    perHourAmount?: string | number | null;
+    assignedEmployees?: { id: number; name?: string | null }[];
   }) {
     onSelect(toPickedEntry(entry));
   }
@@ -304,12 +322,14 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
           open={createDialogOpen}
           onOpenChange={setCreateDialogOpen}
           onSuccess={handleCreated}
+          usageType={usage}
         />
       ) : (
         <CustomerCreateDialog
           open={createDialogOpen}
           onOpenChange={setCreateDialogOpen}
           onSuccess={handleCreated}
+          usageType={usage}
         />
       )}
     </>

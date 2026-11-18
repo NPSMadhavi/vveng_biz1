@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,8 @@ import { useAuth } from "@/contexts/auth-context";
 import { Download, Loader2, TrendingUp, TrendingDown, RefreshCw, ChevronDown, ChevronUp, ChevronRight, Users, FileText, Receipt, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { generateProfitLoss_PDF } from "@/lib/pdf";
-import { payrollAmount, payrollEmployeeName, payrollEmployeeSubtitle, payrollPeriodLabel } from "@/pages/accounting/payroll-record-fields";
+import { payrollAmount, payrollEmployeeName, payrollEmployeeSubtitle, payrollPaymentStatus, payrollPeriodLabel } from "@/pages/accounting/payroll-record-fields";
+import { useFollowWorkingYear } from "@/components/financial-year-controls";
 
 interface PnlAccount { code: string; name: string; amount: number; }
 interface PnlData {
@@ -153,6 +154,12 @@ export default function ProfitLoss() {
   const [from, setFrom] = useState(boot.from);
   const [to, setTo]     = useState(boot.to);
   const [applied, setApplied] = useState({ from: boot.from, to: boot.to });
+  const urlLocked = useRef(new URLSearchParams(window.location.search).has("from") || new URLSearchParams(window.location.search).has("to"));
+  useFollowWorkingYear(urlLocked.current, (nextFrom, nextTo) => {
+    setFrom(nextFrom);
+    setTo(nextTo);
+    setApplied({ from: nextFrom, to: nextTo });
+  });
   const [pdfLoading, setPdfLoading] = useState(false);
 
   const { data, isLoading, isFetching, error } = useQuery<PnlData>({
@@ -507,6 +514,7 @@ export default function ProfitLoss() {
             {data.operatingExpenses.length > 0
               ? data.operatingExpenses.map(a => {
                   const isPayroll = a.code === "6000" || a.code === "6010" || /salaries|wages|cpf|staff/i.test(a.name);
+                  const payrollKind: "salary" | "cpf" = a.code === "6010" || /cpf/i.test(a.name) ? "cpf" : "salary";
                   const isExpanded = Boolean(expandedRows[a.code]);
                   const rowExpenses = expenses.filter((e: any) => {
                     if (String(e.category) === String(a.code)) return true;
@@ -561,6 +569,7 @@ export default function ProfitLoss() {
                                     const net = payrollAmount(r, "netPay", "net_pay");
                                     const emprCpf = payrollAmount(r, "cpfEmployer", "cpf_employer");
                                     const totalCost = gross + emprCpf;
+                                    const payStatus = payrollPaymentStatus(r, expenses, payrollKind);
                                     return (
                                       <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                                         <td className="py-2 px-3 whitespace-nowrap">
@@ -575,8 +584,8 @@ export default function ProfitLoss() {
                                         <td className="py-2 px-3 text-right font-mono text-gray-800 whitespace-nowrap">{fmtSGD(net)}</td>
                                         <td className="py-2 px-3 text-right font-mono font-semibold text-blue-700 whitespace-nowrap">{fmtSGD(totalCost)}</td>
                                         <td className="py-2 px-3 text-center whitespace-nowrap">
-                                          <span className="text-[10px] px-2 py-0.5 rounded-full font-medium uppercase bg-emerald-100 text-emerald-700">
-                                            {r.status || "Processed"}
+                                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${payStatus === "Paid" ? "bg-emerald-100 text-emerald-700" : payStatus === "Partial" ? "bg-amber-100 text-amber-700" : "bg-orange-100 text-orange-700"}`}>
+                                            {payStatus}
                                           </span>
                                         </td>
                                       </tr>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { generateBalanceSheet_PDF } from "@/lib/pdf";
 import type { Asset } from "@shared/schema";
 import { AccountActivityPanel } from "@/pages/accounting/account-activity";
 import { payrollAmount, payrollEmployeeId, payrollEmployeeName, payrollEmployeeSubtitle, payrollPeriodLabel } from "@/pages/accounting/payroll-record-fields";
+import { useFollowWorkingYear } from "@/components/financial-year-controls";
 
 
 interface AcctLine { code: string; name: string; subType: string | null; amount: number }
@@ -176,6 +177,12 @@ export default function BalanceSheetPage() {
 
   const [asOf, setAsOf] = useState(boot.asOf);
   const [selYear, setSelYear] = useState(boot.year);
+  const urlLocked = useRef(new URLSearchParams(window.location.search).has("asOf"));
+  useFollowWorkingYear(urlLocked.current, (_from, nextTo) => {
+    setAsOf(nextTo);
+    setSelYear(Number(nextTo.slice(0, 4)) || new Date().getFullYear());
+    setSelQuarter(null);
+  });
   const [selQuarter, setSelQuarter] = useState<number | null>(boot.quarter);
   const [pdfLoading, setPdfLoading] = useState(false);
 

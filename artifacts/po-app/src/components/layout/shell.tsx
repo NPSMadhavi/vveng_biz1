@@ -90,9 +90,10 @@ import bizoneLogo from "@assets/bizone_logo_optimized.webp";
 import bizoneSgLogo from "@assets/bizone_sg_optimized.webp";
 import bizoneIndiaLogo from "@assets/bizone_india_optimized.webp";
 import { AgentPanel } from "@/components/agent-panel";
+import { LocalBackupScheduler } from "@/components/local-backup-scheduler";
 import { cn } from "@/lib/utils";
 import { GlobalSearch } from "@/components/global-search";
-import { ClosedPeriodWriteGuard } from "@/components/financial-year-controls";
+import { ClosedPeriodWriteGuard, FinancialYearSwitcher } from "@/components/financial-year-controls";
 import { StickyHeaderSlotContext } from "@/components/sticky-page-header";
 
 // ── Sidebar collapse context ──────────────────────────────────────────────────
@@ -101,10 +102,8 @@ const SidebarCtx = React.createContext(false);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function getGroupForRoute(loc: string): string | null {
-  if (loc.startsWith("/accounting/bank-reconciliation")) return null;
-  if (loc.startsWith("/assets")) return null;
-  if (
+function isGeneralTransaction(loc: string) {
+  return (
     loc.startsWith("/purchase-quotations") ||
     loc.startsWith("/purchase-orders") ||
     loc.startsWith("/vendor-invoices") ||
@@ -114,13 +113,17 @@ function getGroupForRoute(loc: string): string | null {
     loc.startsWith("/invoices") ||
     loc.startsWith("/delivery-orders") ||
     loc.startsWith("/multi-price-level") ||
-    loc.startsWith("/grn")
-  ) return "documents";
-  if (
+    loc.startsWith("/grn") ||
     loc.startsWith("/credit-notes") ||
     loc.startsWith("/debit-notes") ||
     loc.startsWith("/proforma-invoices")
-  ) return "documents";
+  );
+}
+
+function getGroupForRoute(loc: string): string | null {
+  if (loc.startsWith("/accounting/bank-reconciliation")) return null;
+  if (loc.startsWith("/assets")) return null;
+  if (isGeneralTransaction(loc) || loc.startsWith("/manpower")) return "documents";
   if (loc.startsWith("/projects")) return "projects";
   if (
     loc.startsWith("/employees") ||
@@ -280,6 +283,34 @@ function NavGroup({ id, label, icon: Icon, children, isOpen, onToggle, visible =
   );
 }
 
+function TxnBranch({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition-all ${
+          open ? "bg-[#f0f4ff] text-[#1a73e8]" : "text-[#334155] hover:bg-[#f0f4ff] hover:text-[#1a73e8]"
+        }`}
+      >
+        <span className="flex-1 text-left">{label}</span>
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && <div className="space-y-0.5 py-0.5">{children}</div>}
+    </div>
+  );
+}
+
 // ── CompanyBadge ──────────────────────────────────────────────────────────────
 
 function CompanyBadge() {
@@ -412,6 +443,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const { user, hasModuleAccess, selectedCompany, isAdmin } = useAuth();
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [openGroup, setOpenGroup] = React.useState<string | null>(null);
+  const [txnBranch, setTxnBranch] = React.useState({ general: false, manpower: false });
   const [collapsed, setCollapsed] = React.useState(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; } catch { return false; }
   });
@@ -475,6 +507,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     const group = getGroupForRoute(location);
     if (group) setOpenGroup(group);
+    const path = location.split("?")[0];
+    if (path.startsWith("/manpower")) {
+      setTxnBranch((prev) => ({ ...prev, manpower: true }));
+    } else if (isGeneralTransaction(path)) {
+      setTxnBranch((prev) => ({ ...prev, general: true }));
+    }
   }, [location]);
 
   React.useEffect(() => {
@@ -495,20 +533,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const activeLogo = isSingapore ? bizoneSgLogo : isIndia ? bizoneIndiaLogo : bizoneLogo;
   const accountingGroupModules = MODULE_GROUPS.find(g => g.id === "accounting")?.modules ?? [];
   const hasAnyAccounting = accountingGroupModules.some(m => hasModuleAccess(m as AppModule));
-  const hasDocuments =
-    hasModuleAccess("purchase_quotations") ||
-    hasModuleAccess("purchase_orders") ||
-    hasModuleAccess("vendor_invoices") ||
-    hasModuleAccess("vendor_proforma_invoices") ||
-    hasModuleAccess("quotations") ||
-    hasModuleAccess("sales_orders") ||
-    hasModuleAccess("invoices") ||
-    hasModuleAccess("proforma_invoices") ||
-    hasModuleAccess("credit_notes") ||
-    hasModuleAccess("debit_notes") ||
-    hasModuleAccess("delivery_orders") ||
-    hasModuleAccess("multi_price_level") ||
-    hasModuleAccess("grn");
   const directoryModules = ["vendors", "customers", "address_book"] as const;
   // Directory ONLY for these three — never via PO/Invoice/Documents access
   const hasDirectory = directoryModules.some((m) => hasModuleAccess(m as AppModule));
@@ -660,97 +684,135 @@ export function Shell({ children }: { children: React.ReactNode }) {
         icon={FileText}
         isOpen={openGroup === "documents"}
         onToggle={toggleGroup}
-        visible={hasDocuments}
-        hasActive={
-          location.startsWith("/purchase-quotations") || location.startsWith("/purchase-orders") || location.startsWith("/vendor-invoices") ||
-          location.startsWith("/vendor-proforma-invoices") ||
-          location.startsWith("/quotations") || location.startsWith("/sales-orders") ||
-          location.startsWith("/invoices") ||
-          location.startsWith("/proforma-invoices") || location.startsWith("/credit-notes") ||
-          location.startsWith("/debit-notes") || location.startsWith("/delivery-orders") ||
-          location.startsWith("/grn")
-          || location.startsWith("/multi-price-level")
-        }
+        visible
+        hasActive={isGeneralTransaction(location) || location.startsWith("/manpower")}
       >
-        {/* ── Purchases ── */}
-        {(hasModuleAccess("purchase_quotations") || hasModuleAccess("purchase_orders") || hasModuleAccess("vendor_invoices") || hasModuleAccess("vendor_proforma_invoices") || hasModuleAccess("grn") || hasModuleAccess("debit_notes")) && (
-          <div className="px-3 pt-2 pb-0.5">
-            <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Purchases</span>
-          </div>
-        )}
-        {hasModuleAccess("purchase_quotations") && (
-          <NavItem href="/purchase-quotations" icon={FileSpreadsheet} active={location.startsWith("/purchase-quotations")} inGroup>
-            Purchase Quotations
-          </NavItem>
-        )}
-        {hasModuleAccess("purchase_orders") && (
-          <NavItem href="/purchase-orders" icon={FileText} active={location.startsWith("/purchase-orders")} inGroup>
-            Purchase Orders
-          </NavItem>
-        )}
-        {hasModuleAccess("vendor_proforma_invoices") && (
-          <NavItem href="/vendor-proforma-invoices" icon={FileMinus} active={location.startsWith("/vendor-proforma-invoices")} inGroup>
-            Vendor Proforma Invoice
-          </NavItem>
-        )}
-        {hasModuleAccess("grn") && (
-          <NavItem href="/grn" icon={ClipboardList} active={location.startsWith("/grn")} inGroup>
-            GoodsReceipt Note
-          </NavItem>
-        )}
-        {hasModuleAccess("vendor_invoices") && (
-          <NavItem href="/vendor-invoices" icon={FileInput} active={location.startsWith("/vendor-invoices")} inGroup>
-            Vendor Invoices
-          </NavItem>
-        )}
-        {hasModuleAccess("debit_notes") && (
-          <NavItem href="/debit-notes" icon={FilePlus} active={location.startsWith("/debit-notes")} inGroup>
-            Debit Notes
-          </NavItem>
-        )}
+        <TxnBranch
+          label="General"
+          open={txnBranch.general}
+          onToggle={() => setTxnBranch((prev) => ({ ...prev, general: !prev.general }))}
+        >
+          {(hasModuleAccess("purchase_quotations") || hasModuleAccess("purchase_orders") || hasModuleAccess("vendor_invoices") || hasModuleAccess("vendor_proforma_invoices") || hasModuleAccess("grn") || hasModuleAccess("debit_notes")) && (
+            <div className="px-3 pt-2 pb-0.5">
+              <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Purchases</span>
+            </div>
+          )}
+          {hasModuleAccess("purchase_quotations") && (
+            <NavItem href="/purchase-quotations" icon={FileSpreadsheet} active={location.startsWith("/purchase-quotations")} inGroup>
+              Purchase Quotations
+            </NavItem>
+          )}
+          {hasModuleAccess("purchase_orders") && (
+            <NavItem href="/purchase-orders" icon={FileText} active={location.startsWith("/purchase-orders")} inGroup>
+              Purchase Orders
+            </NavItem>
+          )}
+          {hasModuleAccess("vendor_proforma_invoices") && (
+            <NavItem href="/vendor-proforma-invoices" icon={FileMinus} active={location.startsWith("/vendor-proforma-invoices")} inGroup>
+              Vendor Proforma Invoice
+            </NavItem>
+          )}
+          {hasModuleAccess("grn") && (
+            <NavItem href="/grn" icon={ClipboardList} active={location.startsWith("/grn")} inGroup>
+              GoodsReceipt Note
+            </NavItem>
+          )}
+          {hasModuleAccess("vendor_invoices") && (
+            <NavItem href="/vendor-invoices" icon={FileInput} active={location.startsWith("/vendor-invoices")} inGroup>
+              Vendor Invoices
+            </NavItem>
+          )}
+          {hasModuleAccess("debit_notes") && (
+            <NavItem href="/debit-notes" icon={FilePlus} active={location.startsWith("/debit-notes")} inGroup>
+              Debit Notes
+            </NavItem>
+          )}
 
-        {/* ── Sales ── */}
-        {(hasModuleAccess("quotations") || hasModuleAccess("sales_orders") || hasModuleAccess("invoices") || hasModuleAccess("proforma_invoices") || hasModuleAccess("credit_notes") || hasModuleAccess("delivery_orders") || hasModuleAccess("multi_price_level")) && (
-          <div className="px-3 pt-3 pb-0.5">
-            <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Sales</span>
+          {(hasModuleAccess("quotations") || hasModuleAccess("sales_orders") || hasModuleAccess("invoices") || hasModuleAccess("proforma_invoices") || hasModuleAccess("credit_notes") || hasModuleAccess("delivery_orders") || hasModuleAccess("multi_price_level")) && (
+            <div className="px-3 pt-3 pb-0.5">
+              <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Sales</span>
+            </div>
+          )}
+          {hasModuleAccess("quotations") && (
+            <NavItem href="/quotations" icon={FileSpreadsheet} active={location.startsWith("/quotations")} inGroup>
+              Quotations
+            </NavItem>
+          )}
+          {hasModuleAccess("sales_orders") && (
+            <NavItem href="/sales-orders" icon={ShoppingBag} active={location.startsWith("/sales-orders")} inGroup>
+              Sales Orders
+            </NavItem>
+          )}
+          {hasModuleAccess("proforma_invoices") && (
+            <NavItem href="/proforma-invoices" icon={FileMinus} active={location.startsWith("/proforma-invoices")} inGroup>
+              Proforma Invoices
+            </NavItem>
+          )}
+          {hasModuleAccess("invoices") && (
+            <NavItem href="/invoices" icon={Receipt} active={location.startsWith("/invoices")} inGroup>
+              Tax Invoices
+            </NavItem>
+          )}
+          {hasModuleAccess("delivery_orders") && (
+            <NavItem href="/delivery-orders" icon={Truck} active={location.startsWith("/delivery-orders")} inGroup>
+              Delivery Orders
+            </NavItem>
+          )}
+          {hasModuleAccess("credit_notes") && (
+            <NavItem href="/credit-notes" icon={FileMinus} active={location.startsWith("/credit-notes")} inGroup>
+              Credit Notes
+            </NavItem>
+          )}
+          {false && hasModuleAccess("multi_price_level") && (
+          <NavItem href="/multi-price-level" icon={DollarSign} active={location.startsWith("/multi-price-level")} inGroup>
+            Multiple Price Levels
+          </NavItem>
+          )}
+        </TxnBranch>
+
+        <TxnBranch
+          label="Man power supply"
+          open={txnBranch.manpower}
+          onToggle={() => setTxnBranch((prev) => ({ ...prev, manpower: !prev.manpower }))}
+        >
+          <div className="px-3 pt-2 pb-0.5">
+            <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Vendors</span>
           </div>
-        )}
-        {hasModuleAccess("quotations") && (
-          <NavItem href="/quotations" icon={FileSpreadsheet} active={location.startsWith("/quotations")} inGroup>
-            Quotations
+          <NavItem href="/manpower/suppliers/quotations" icon={FileSpreadsheet} active={location.startsWith("/manpower/suppliers/quotations")} inGroup>
+            Quotation
           </NavItem>
-        )}
-        {hasModuleAccess("sales_orders") && (
-          <NavItem href="/sales-orders" icon={ShoppingBag} active={location.startsWith("/sales-orders")} inGroup>
-            Sales Orders
+          <NavItem href="/manpower/suppliers/purchase-orders" icon={FileText} active={location.startsWith("/manpower/suppliers/purchase-orders")} inGroup>
+            Purchase order
           </NavItem>
-        )}
-        {hasModuleAccess("proforma_invoices") && (
-          <NavItem href="/proforma-invoices" icon={FileMinus} active={location.startsWith("/proforma-invoices")} inGroup>
-            Proforma Invoices
+          <NavItem href="/manpower/suppliers/employee-deployment" icon={UserCheck} active={location.startsWith("/manpower/suppliers/employee-deployment")} inGroup>
+            Employee Deployment
           </NavItem>
-        )}
-        {hasModuleAccess("invoices") && (
-          <NavItem href="/invoices" icon={Receipt} active={location.startsWith("/invoices")} inGroup>
-            Tax Invoices
+          <NavItem href="/manpower/suppliers/timesheets" icon={Clock} active={location.startsWith("/manpower/suppliers/timesheets")} inGroup>
+            Time Sheet Management
           </NavItem>
-        )}
-        {hasModuleAccess("delivery_orders") && (
-          <NavItem href="/delivery-orders" icon={Truck} active={location.startsWith("/delivery-orders")} inGroup>
-            Delivery Orders
+          <NavItem href="/manpower/suppliers/vendor-invoices" icon={FileInput} active={location.startsWith("/manpower/suppliers/vendor-invoices")} inGroup>
+            Vendor Invoice
           </NavItem>
-        )}
-        {hasModuleAccess("credit_notes") && (
-          <NavItem href="/credit-notes" icon={FileMinus} active={location.startsWith("/credit-notes")} inGroup>
-            Credit Notes
+
+          <div className="px-3 pt-3 pb-0.5">
+            <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Customer</span>
+          </div>
+          <NavItem href="/manpower/customers/quotations" icon={FileSpreadsheet} active={location.startsWith("/manpower/customers/quotations")} inGroup>
+            Quotation
           </NavItem>
-        )}
-        {/* Hidden from sidebar — keep route/module access intact */}
-        {false && hasModuleAccess("multi_price_level") && (
-        <NavItem href="/multi-price-level" icon={DollarSign} active={location.startsWith("/multi-price-level")} inGroup>
-          Multiple Price Levels
-        </NavItem>
-        )}
+          <NavItem href="/manpower/customers/sales-orders" icon={ShoppingBag} active={location.startsWith("/manpower/customers/sales-orders")} inGroup>
+            Sales order
+          </NavItem>
+          <NavItem href="/manpower/customers/employee-deployment" icon={UserCheck} active={location.startsWith("/manpower/customers/employee-deployment")} inGroup>
+            Employee Deployment
+          </NavItem>
+          <NavItem href="/manpower/customers/timesheets" icon={Clock} active={location.startsWith("/manpower/customers/timesheets")} inGroup>
+            Time Sheet Management
+          </NavItem>
+          <NavItem href="/manpower/customers/tax-invoices" icon={Receipt} active={location.startsWith("/manpower/customers/tax-invoices")} inGroup>
+            Tax Invoice
+          </NavItem>
+        </TxnBranch>
       </NavGroup>
 
 <NavGroup
@@ -1153,7 +1215,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
         <StickyHeaderSlotContext.Provider value={stickyHeaderSlot}>
           <div className="shrink-0 z-40 relative bg-background px-4 md:px-6 xl:px-8 pt-4 md:pt-6 xl:pt-8 border-b border-border/40">
-            <GlobalSearch />
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-[240px] flex-1">
+                <GlobalSearch />
+              </div>
+              <FinancialYearSwitcher />
+            </div>
             <div ref={setStickyHeaderSlot} />
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 md:px-6 xl:px-8 py-4 md:py-6">
@@ -1163,6 +1230,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </div>
         </StickyHeaderSlotContext.Provider>
       </main>
+      <LocalBackupScheduler />
       <AgentPanel />
     </div>
   );

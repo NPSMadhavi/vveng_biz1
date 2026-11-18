@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -138,7 +140,9 @@ export default function ExpensesList() {
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  const workingYear = useWorkingYearBounds();
   const filtered = useMemo(() => expenses.filter(e => {
+    if (workingYear.active && !isoInBounds(e.expenseDate || e.createdAt, workingYear.from, workingYear.to)) return false;
     if (statusFilter !== "all" && e.status !== statusFilter) return false;
     if (ledgerFilter !== "all") {
       const id = Number(ledgerFilter);
@@ -149,7 +153,7 @@ export default function ExpensesList() {
       return e.vendorName.toLowerCase().includes(q) || e.description.toLowerCase().includes(q) || ledgerLabel(e).toLowerCase().includes(q);
     }
     return true;
-  }), [expenses, statusFilter, ledgerFilter, search, accountById, accountByCode]);
+  }), [expenses, statusFilter, ledgerFilter, search, accountById, accountByCode, workingYear.active, workingYear.from, workingYear.to]);
 
   const { page, setPage, totalPages, paginatedItems } = usePagination(filtered);
 

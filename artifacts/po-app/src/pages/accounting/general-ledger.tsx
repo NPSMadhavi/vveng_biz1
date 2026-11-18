@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuth } from "@/contexts/auth-context";
+import { useFollowWorkingYear } from "@/components/financial-year-controls";
 import { Download, Loader2, BookOpen, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { generateGeneralLedger_PDF } from "@/lib/pdf";
@@ -98,6 +99,11 @@ export default function GeneralLedgerPage() {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(boot.accountId);
   const [from, setFrom] = useState(boot.from);
   const [to, setTo] = useState(boot.to);
+  const urlLocked = useRef(new URLSearchParams(window.location.search).has("from") || new URLSearchParams(window.location.search).has("to"));
+  useFollowWorkingYear(urlLocked.current, (nextFrom, nextTo) => {
+    setFrom(nextFrom);
+    setTo(nextTo);
+  });
   const [search, setSearch] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
   const [cachedAccounts, setCachedAccounts] = useState<GLAccount[]>([]);

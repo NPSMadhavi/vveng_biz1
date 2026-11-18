@@ -413,6 +413,20 @@ function EmployeeViewDetails({ employeeId }: { employeeId: number }) {
       <EntityViewField label="Designation" value={employee.designation} />
       <EntityViewField label="Monthly Salary" value={(employee as any).salary || "-"} />
       <EntityViewField label="Annual Salary" value={(employee as any).annualSalary || "-"} />
+      <EntityViewField
+        label="Work Type"
+        value={
+          (employee as any).workType === "hourly"
+            ? "Hourly"
+            : (employee as any).workType === "monthly"
+              ? "Monthly"
+              : "-"
+        }
+      />
+      <EntityViewField
+        label="Per hour charge"
+        value={(employee as any).workType === "hourly" ? (employee as any).perHourCharge || "-" : "-"}
+      />
       <EntityViewField label="Address" value={(employee as any).address} fullWidth />
       <EntityViewField
         label="Status"

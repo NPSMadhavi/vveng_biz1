@@ -26,6 +26,7 @@ export const purchaseQuotationsTable = pgTable("purchase_quotations", {
   emailSentTo: text("email_sent_to"),
   convertedPoId: integer("converted_po_id"),
   convertedPoNumber: text("converted_po_number"),
+  manpowerDetails: jsonb("manpower_details"),
   createdBy: integer("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

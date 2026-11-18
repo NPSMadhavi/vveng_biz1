@@ -36,6 +36,8 @@ import {
   ManagementIconAction,
 } from "@/operations-8june/components/layout/ManagementPageUI";
 import { CountrySelect } from "@/operations-8june/components/forms/CountrySelect";
+import { PartyUsageField } from "@/components/party-usage-field";
+import type { PartyUsage } from "@/lib/party-usage";
 import { SingaporePhoneInput } from "@/components/singapore-phone-input";
 import { formatSingaporePhoneForApi, parseSingaporePhoneDigits } from "@/lib/singapore-phone";
 import { useGetSettings } from "@workspace/api-client-react";
@@ -57,13 +59,14 @@ interface Vendor {
   currency: string | null;
   gstRegistered: boolean;
   gstNo: string | null;
+  usageType?: PartyUsage;
   isActive: boolean;
   createdAt: string;
 }
 
 const blank = (): Partial<Vendor> => ({
   name: "", address: "", postalCode: "", country: "Singapore", contactPerson: "",
-  contactEmail: "", phone: "", currency: "SGD", gstRegistered: false, gstNo: "", isActive: true,
+  contactEmail: "", phone: "", currency: "SGD", gstRegistered: false, gstNo: "", usageType: "general", isActive: true,
 });
 
 async function fetchVendors(): Promise<Vendor[]> {
@@ -208,12 +211,12 @@ export default function VendorsPage() {
     }
   }, []);
 
-  const filtered = useMemo(() => vendors.filter(v =>
-    v.name.toLowerCase().includes(search.toLowerCase()) ||
-    (v.country || "").toLowerCase().includes(search.toLowerCase()) ||
-    (v.contactEmail || "").toLowerCase().includes(search.toLowerCase()) ||
-    (v.postalCode || "").includes(search)
-  ), [vendors, search]);
+  const filtered = useMemo(() => vendors.filter(v => {
+    return v.name.toLowerCase().includes(search.toLowerCase()) ||
+      (v.country || "").toLowerCase().includes(search.toLowerCase()) ||
+      (v.contactEmail || "").toLowerCase().includes(search.toLowerCase()) ||
+      (v.postalCode || "").includes(search);
+  }), [vendors, search]);
 
   const { page, setPage, totalPages, paginatedItems } = usePagination(filtered);
 
@@ -440,6 +443,10 @@ export default function VendorsPage() {
               </div>
             </div>
 
+            <PartyUsageField
+              value={form.usageType === "manpower" ? "manpower" : "general"}
+              onChange={(usageType) => setField("usageType", usageType)}
+            />
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Contact Person</Label>

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import {
   db,
+  pool,
   invoicesTable,
   invoicePaymentsTable,
   usersTable,
@@ -37,6 +38,15 @@ declare module "express-session" {
 }
 
 const router: IRouter = Router();
+
+async function ensureManpowerDetails(): Promise<void> {
+  try {
+    await pool.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS manpower_details jsonb`);
+  } catch (error: any) {
+    if (error?.code === "42P01") return;
+    throw error;
+  }
+}
 
 function isInventoriableItemType(type?: string | null): boolean {
   const t = String(type || "").toLowerCase();
@@ -261,6 +271,7 @@ async function createDeliveryOrderFromInvoice(invoice: any, userId: number): Pro
 
 router.get("/invoices/stats", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const companyId = req.session.companyId;
   const userId = req.session.userId!;
   const isAdmin = req.session.isAdmin ?? false;
@@ -283,6 +294,7 @@ router.get("/invoices/stats", async (req, res): Promise<void> => {
 
 router.get("/invoices", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const companyId = req.session.companyId;
   const userId = req.session.userId!;
   const isAdmin = req.session.isAdmin ?? false;
@@ -317,12 +329,13 @@ router.get("/invoices", async (req, res): Promise<void> => {
 router.post("/invoices", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
   if (!requireCompany(req, res)) return;
+  await ensureManpowerDetails();
   const companyId = req.session.companyId!;
 
   const {
     customerName, customerAddress, customerContact, customerContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, salesPerson, notes, items, tax,
-    currency, discountAmount, isPrivate, status, poRefNo, exchangeRate,
+    currency, discountAmount, isPrivate, status, poRefNo, exchangeRate, manpowerDetails,
     createDeliveryOrder,
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
   } = req.body;
@@ -366,6 +379,7 @@ router.post("/invoices", async (req, res): Promise<void> => {
         deliveryInstructions: deliveryInstructions || null,
         customerNote: customerNote || null,
         authorisedSignature: authorisedSignature || null,
+        manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null,
       }).returning();
 
       // Tax Invoice with cube-picked stock always reduces warehouse qty on confirm.
@@ -513,6 +527,7 @@ async function getInvoicePaymentSnapshot(invoiceId: number) {
 
 router.get("/invoices/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
@@ -544,13 +559,14 @@ router.get("/invoices/:id", async (req, res): Promise<void> => {
 
 router.put("/invoices/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
   const {
     customerName, customerAddress, customerContact, customerContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, salesPerson, notes, items, tax, status,
-    currency, discountAmount, isPrivate, poRefNo, exchangeRate, createDeliveryOrder,
+    currency, discountAmount, isPrivate, poRefNo, exchangeRate, createDeliveryOrder, manpowerDetails,
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
   } = req.body;
 
@@ -578,6 +594,13 @@ router.put("/invoices/:id", async (req, res): Promise<void> => {
 
   const [existing] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, id));
   if (!existing) { res.status(404).json({ error: "Invoice not found" }); return; }
+  updateData.manpowerDetails = manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null;
+  const existingDate = String(existing.issueDate || "").slice(0, 10);
+  const nextIssue = String(issueDate || existing.issueDate || "").slice(0, 10);
+  const periodCheck = await assertPeriodWritable(existing.companyId, existingDate);
+  if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
+  const nextPeriod = await assertPeriodWritable(existing.companyId, nextIssue);
+  if (!nextPeriod.ok) { res.status(nextPeriod.status).json({ error: nextPeriod.error }); return; }
 
   // Only mark modified when saving an invoice that was already confirmed (not first draft→confirmed save).
   const wasAlreadyConfirmed = !["draft"].includes(String(existing.status));
@@ -928,9 +951,11 @@ router.delete("/invoices/:id", async (req, res): Promise<void> => {
   if (!canDelete) { res.status(403).json({ error: "Only administrators or accountants can delete invoices." }); return; }
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
-  const [existing] = await db.select({ id: invoicesTable.id, status: invoicesTable.status, invNumber: invoicesTable.invNumber, companyId: invoicesTable.companyId })
+  const [existing] = await db.select({ id: invoicesTable.id, status: invoicesTable.status, invNumber: invoicesTable.invNumber, companyId: invoicesTable.companyId, issueDate: invoicesTable.issueDate })
     .from(invoicesTable).where(eq(invoicesTable.id, id));
   if (!existing) { res.status(404).json({ error: "Invoice not found" }); return; }
+  const deletePeriod = await assertPeriodWritable(existing.companyId, String(existing.issueDate || "").slice(0, 10));
+  if (!deletePeriod.ok) { res.status(deletePeriod.status).json({ error: deletePeriod.error }); return; }
   if (existing.status !== "draft") { res.status(400).json({ error: "Only draft invoices can be deleted. Confirmed invoices must be Voided." }); return; }
 
   try {

@@ -1,10 +1,10 @@
 {
     "CompanyId":  23,
     "Frequency":  "Daily",
-    "DestinationDir":  "C:\\BizOneBackups",
+    "DestinationDir":  "C:\\Users\\USER\\OneDrive\\Documents",
     "CompanySlug":  "",
-    "LastConfiguredAt":  "2026-10-30T15:16:11.1031790+05:30",
-    "Time":  "14:27",
-    "AgentKey":  "bizone-backup-sync-key",
-    "ServerUrl":  "http://localhost:8080"
+    "LastConfiguredAt":  "2026-11-12T11:38:28.5465631+05:30",
+    "Time":  "11:39",
+    "AgentKey":  "bza_23_70ff56b1c2b9a7da6ce56f68d21a7dbb1f9f",
+    "ServerUrl":  "http://localhost:5001"
 }

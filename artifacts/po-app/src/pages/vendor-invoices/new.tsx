@@ -1,3 +1,4 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
 import { useAuth } from "@/contexts/auth-context";
-import { useLocation, useSearch } from "wouter";
+import { useSearch } from "wouter";
 import { Check, BookOpen, AlertTriangle, RefreshCw, Plus, ArrowLeft, Eye } from "lucide-react";
 import { VendorCreateDialog } from "@/components/vendor-create-dialog";
 import { useVoucherAttachment } from "@/components/voucher-document-upload";
@@ -19,8 +20,10 @@ import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
+import { isGeneralParty, isManpowerParty } from "@/lib/party-usage";
 import { CURRENCIES, formatExchangeRate } from "@/lib/currencies";
 import { CurrencySelect } from "@/components/currency-select";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
 import { VendorInvoiceLineItems } from "@/components/vendor-invoice-line-items";
 import { VendorInvoiceAdditionalInfo } from "@/components/vendor-invoice-additional-info";
@@ -45,7 +48,8 @@ function dueDateFromTerms(date: string, terms: string) {
 export default function VendorInvoiceNew() {
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const search = useSearch();
   const params = new URLSearchParams(search);
   const prefillPoId = params.get("poId") ? Number(params.get("poId")) : undefined;
@@ -55,8 +59,10 @@ export default function VendorInvoiceNew() {
   const prefillCurrency = params.get("currency") || undefined;
 
   const [saving, setSaving] = useState(false);
+  const [workLocation, setWorkLocation] = useState("");
   const [savedDoc, setSavedDoc] = useState<any>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const editingFromPreview = useRef(false);
   const qc = useQueryClient();
   const [newVendorOpen, setNewVendorOpen] = useState(false);
 
@@ -136,10 +142,12 @@ export default function VendorInvoiceNew() {
   );
 
   const filteredVendors = useMemo(() => {
-    if (!vendorSearch.trim()) return vendors.slice(0, 50);
+    const partyOk = location.startsWith("/manpower/") ? isManpowerParty : isGeneralParty;
+    const matching = vendors.filter((v: any) => partyOk(v));
+    if (!vendorSearch.trim()) return matching.slice(0, 50);
     const q = vendorSearch.toLowerCase();
-    return vendors.filter((v: any) => v.name.toLowerCase().includes(q)).slice(0, 50);
-  }, [vendors, vendorSearch]);
+    return matching.filter((v: any) => v.name.toLowerCase().includes(q)).slice(0, 50);
+  }, [vendors, vendorSearch, location]);
 
   const vendorName = selectedVendor ? selectedVendor.name : vendorSearch.trim();
 
@@ -196,6 +204,7 @@ export default function VendorInvoiceNew() {
           setLineItems(mapDocItemsToViLines(po.items));
           setItemsAutoFilled(true);
         }
+        if (po?.manpowerDetails?.workLocation) setWorkLocation(po.manpowerDetails.workLocation);
       })
       .catch(() => {});
   }, [prefillPoId]);
@@ -351,6 +360,7 @@ export default function VendorInvoiceNew() {
           authorisedSignature: authorisedSignature || null,
           discountAmount,
           salesPerson: null,
+          manpowerDetails: isManpower ? { workLocation } : null,
           ...attachment.payload,
           expenseAccountId: (expenseAccountId && expenseAccountId !== "none") ? parseInt(expenseAccountId) : null,
         }),
@@ -428,7 +438,7 @@ export default function VendorInvoiceNew() {
             </div>
             <div className="space-y-1.5">
               <Label>Vendor Invoice Date</Label>
-              <Input type="date" value={piDate} onChange={e => setPiDate(e.target.value)} />
+              <SyncBridgeDatePicker value={piDate} onChange={setPiDate} />
             </div>
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
@@ -504,11 +514,11 @@ export default function VendorInvoiceNew() {
               </div>
               <div className="space-y-1.5">
                 <Label>Due Date</Label>
-                <Input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className="bg-muted/40" />
+                <SyncBridgeDatePicker value={dueDate} onChange={setDueDate} />
               </div>
               <div className="space-y-1.5">
                 <Label>Planned Payment Date</Label>
-                <Input type="date" value={plannedPaymentDate} onChange={e => setPlannedPaymentDate(e.target.value)} />
+                <SyncBridgeDatePicker value={plannedPaymentDate} onChange={setPlannedPaymentDate} />
               </div>
             </div>
             <div className="rounded-md border bg-background p-3 space-y-3">
@@ -724,7 +734,7 @@ export default function VendorInvoiceNew() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className={`grid grid-cols-1 gap-4 ${isManpower ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
             <div className="space-y-1.5">
               <Label>GST Treatment</Label>
               <Select value={gstTreatment} onValueChange={v => { setGstTreatment(v); if (v !== "standard_rated") setGstInclusive(false); }}>
@@ -745,6 +755,12 @@ export default function VendorInvoiceNew() {
                 </div>
               )}
             </div>
+            {isManpower && (
+              <div className="space-y-1.5">
+                <Label>Work Location / Site</Label>
+                <Input value={workLocation} onChange={(e) => setWorkLocation(e.target.value)} />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Notes</Label>
               <Input
@@ -826,6 +842,7 @@ export default function VendorInvoiceNew() {
       )}
 
       <VendorInvoiceLineItems
+        manpower={isManpower}
         items={lineItems}
         onChange={(items) => { setLineItems(items); setItemsAutoFilled(false); }}
         currency={currency}
@@ -884,6 +901,10 @@ export default function VendorInvoiceNew() {
           onOpenChange={(open) => {
             if (!open) {
               setShowPreview(false);
+              if (editingFromPreview.current) {
+                editingFromPreview.current = false;
+                return;
+              }
               setLocation("/vendor-invoices");
             }
           }}
@@ -902,7 +923,13 @@ export default function VendorInvoiceNew() {
             currency: savedDoc.currency || "SGD",
             totalAmount: Number(savedDoc.totalAmount) || 0,
           }}
-          onEdit={() => setLocation(`/vendor-invoices/${savedDoc.id}/edit`)}
+          onEdit={() => {
+            const editId = savedDoc.id;
+            if (editId == null) return;
+            editingFromPreview.current = true;
+            setShowPreview(false);
+            setLocation(`/vendor-invoices/${editId}/edit`);
+          }}
         />
       )}
     </div>

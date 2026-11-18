@@ -29,6 +29,7 @@ export const quotationsTable = pgTable("quotations", {
   deliveryInstructions: text("delivery_instructions"),
   customerNote: text("customer_note"),
   authorisedSignature: text("authorised_signature"),
+  manpowerDetails: jsonb("manpower_details"),
   createdBy: integer("created_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

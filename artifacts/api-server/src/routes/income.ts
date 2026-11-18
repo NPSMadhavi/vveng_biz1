@@ -223,6 +223,8 @@ router.put("/income/:id", async (req, res): Promise<void> => {
     .where(and(eq(incomeRecordsTable.id, id), eq(incomeRecordsTable.companyId, req.session.companyId!)))
     .limit(1);
   if (!existing) { res.status(404).json({ error: "Income record not found" }); return; }
+  const existingPeriod = await assertPeriodWritable(existing.companyId, String(existing.incomeDate || "").slice(0, 10));
+  if (!existingPeriod.ok) { res.status(existingPeriod.status).json({ error: existingPeriod.error }); return; }
   if (existing.status === "confirmed" && !req.session.isAdmin && req.session.userRole !== "accountant") {
     res.status(403).json({ error: "Only admins and accountants can edit confirmed income records." }); return;
   }
@@ -236,6 +238,11 @@ router.put("/income/:id", async (req, res): Promise<void> => {
     currency, exchangeRate,
     paymentMethod, accountId, reference, notes, status,
   } = req.body;
+
+  if (incomeDate) {
+    const nextPeriod = await assertPeriodWritable(existing.companyId, String(incomeDate).slice(0, 10));
+    if (!nextPeriod.ok) { res.status(nextPeriod.status).json({ error: nextPeriod.error }); return; }
+  }
 
   const updateData: any = { updatedAt: new Date() };
   if (incomeDate !== undefined)     updateData.incomeDate    = incomeDate;
@@ -276,6 +283,8 @@ router.delete("/income/:id", async (req, res): Promise<void> => {
     .where(and(eq(incomeRecordsTable.id, id), eq(incomeRecordsTable.companyId, req.session.companyId!)))
     .limit(1);
   if (!existing) { res.status(404).json({ error: "Income record not found" }); return; }
+  const deletePeriod = await assertPeriodWritable(existing.companyId, String(existing.incomeDate || "").slice(0, 10));
+  if (!deletePeriod.ok) { res.status(deletePeriod.status).json({ error: deletePeriod.error }); return; }
 
   if (!req.session.isAdmin && req.session.userRole !== "accountant") {
     res.status(403).json({ error: "Only admins and accountants can delete income records." }); return;

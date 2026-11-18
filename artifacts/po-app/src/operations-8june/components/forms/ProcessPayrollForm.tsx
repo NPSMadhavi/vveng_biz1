@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -28,10 +28,9 @@ import {
   derivePayrollMonthYear,
   getLastCompletedPayPeriod,
   normalizePayPeriodFromDate,
-  isPayPeriodEligibleForProcessing,
-  PAYROLL_CURRENT_MONTH_ERROR,
-  isPayPeriodDateDisabled,
+  payPeriodForFinancialYear,
 } from "@/operations-8june/lib/payroll-batch-utils";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import {
   payrollCancelButtonClass,
   payrollFormLabelClass,
@@ -39,6 +38,13 @@ import {
 } from "@/operations-8june/lib/payroll-ui";
 import { ModalSectionHeader } from "@/operations-8june/components/forms/FormModalShell";
 import { EmployeeCombobox } from "@/operations-8june/components/forms/EmployeeCombobox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Calculator, User, BookOpen, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -113,9 +119,16 @@ function formatCurrency(amount: number) {
 }
 
 function buildEmployeePreview(config: any, employee: any): SyncBridgePayrollPreview & { monthlySalary: number } {
-  const baseSalary = parseFloat(config.baseSalary) || 0;
   const allowances = config.allowances || {};
   const deductions = config.deductions || {};
+  const hourlyNormalPay = Number(allowances.hourlyNormalPay) || 0;
+  const perHourCharge = Number(allowances.perHourCharge) || 0;
+  const workingDays = Number(allowances.normalWorkingDays) || 0;
+  const baseSalary = hourlyNormalPay > 0
+    ? Math.round(hourlyNormalPay * 100) / 100
+    : perHourCharge > 0 && workingDays > 0
+      ? Math.round(perHourCharge * workingDays * 100) / 100
+      : parseFloat(config.baseSalary) || 0;
   const otFromConfig =
     Number(allowances.overtime) ||
     (parseFloat(config.overtimeRate || "0") || 0) * (parseFloat(config.hourlyRate || "0") || 0);
@@ -169,6 +182,12 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     queryKey: ["/api/payroll/records"],
   });
 
+  const { data: customers = [] } = useQuery<any[]>({
+    queryKey: ["/api/customers"],
+  });
+  const [customerId, setCustomerId] = useState("");
+  const customerSyncedForEmployee = useRef<number | null>(null);
+
   const { data: allAccounts = [] } = useQuery<any[]>({
     queryKey: ["accounts"],
     queryFn: async () => {
@@ -195,6 +214,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     }
   }, [expenseAccounts, expenseAccountId]);
 
+  const workingYear = useWorkingYearBounds();
   const form = useForm<ProcessPayrollFormData>({
     resolver: zodResolver(processPayrollSchema),
     defaultValues: {
@@ -202,6 +222,13 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       ...getLastCompletedPayPeriod(),
     },
   });
+
+  useEffect(() => {
+    if (!workingYear.from || !workingYear.to) return;
+    const period = payPeriodForFinancialYear(workingYear.from, workingYear.to);
+    form.setValue("payPeriodStart", period.payPeriodStart);
+    form.setValue("payPeriodEnd", period.payPeriodEnd);
+  }, [workingYear.from, workingYear.to, form]);
 
   const employeeId = form.watch("employeeId");
   const payPeriodStart = form.watch("payPeriodStart");
@@ -226,6 +253,43 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       })
       .filter(Boolean) as Array<{ config: any; employee: any }>;
   }, [activeConfigs, employees]);
+
+  const scopedPairs = useMemo(() => {
+    if (!customerId) return activeConfigEmployeePairs;
+    const customer = customers.find((item: any) => String(item.id) === customerId);
+    const ids = new Set(
+      (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
+        .map((employee: { id?: number }) => Number(employee.id))
+        .filter((id: number) => Number.isFinite(id)),
+    );
+    return activeConfigEmployeePairs.filter(({ employee }) => ids.has(Number(employee.id)));
+  }, [activeConfigEmployeePairs, customerId, customers]);
+
+  const scopedConfigs = useMemo(
+    () => scopedPairs.map(({ config }) => config),
+    [scopedPairs],
+  );
+
+  const handleCustomerChange = (id: string) => {
+    setCustomerId(id);
+    const customer = customers.find((item: any) => String(item.id) === id);
+    const ids = (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
+      .map((employee: { id?: number }) => Number(employee.id))
+      .filter((employeeId: number) => Number.isFinite(employeeId));
+    const current = Number(form.getValues("employeeId"));
+    if (current === ALL_EMPLOYEES_ID) return;
+    if (!id) return;
+    if (!current || !ids.includes(current)) {
+      const matched = activeConfigEmployeePairs.filter(({ employee }) =>
+        ids.includes(Number(employee.id)),
+      );
+      form.setValue(
+        "employeeId",
+        matched.length === 1 ? Number(matched[0].employee.id) : (undefined as unknown as number),
+        { shouldDirty: true, shouldValidate: matched.length === 1 },
+      );
+    }
+  };
 
   const openProcessedDialog = (data: ProcessPayrollFormData, mode: ProcessedDialogMode) => {
     setPendingFormData(data);
@@ -266,11 +330,33 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     }
   }, [employeeId, employees, activeConfigs]);
 
+  useEffect(() => {
+    const id = Number(employeeId);
+    if (!employeeId || id === ALL_EMPLOYEES_ID || customers.length === 0) return;
+    if (customerSyncedForEmployee.current === id) return;
+    customerSyncedForEmployee.current = id;
+    const assigned = customers.filter((customer: any) =>
+      Array.isArray(customer.assignedEmployees) &&
+      customer.assignedEmployees.some(
+        (employee: { id?: number }) => Number(employee.id) === id,
+      ),
+    );
+    if (assigned.length === 1) {
+      setCustomerId(String(assigned[0].id));
+      return;
+    }
+    if (assigned.length > 1) {
+      setCustomerId((current) =>
+        assigned.some((customer: any) => String(customer.id) === current) ? current : "",
+      );
+    }
+  }, [employeeId, customers]);
+
   const calculationPreview = useMemo((): PreviewView | null => {
     if (isAllEmployees) {
-      if (activeConfigEmployeePairs.length === 0) return null;
+      if (scopedPairs.length === 0) return null;
 
-      const previews = activeConfigEmployeePairs.map(({ config, employee }) =>
+      const previews = scopedPairs.map(({ config, employee }) =>
         buildEmployeePreview(config, employee)
       );
 
@@ -312,7 +398,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       employeeCount: 1,
       ratesMixed: false,
     };
-  }, [isAllEmployees, activeConfigEmployeePairs, payrollConfig, selectedEmployee]);
+  }, [isAllEmployees, scopedPairs, payrollConfig, selectedEmployee]);
 
   const processPayrollMutation = useMutation({
     mutationFn: async (
@@ -322,14 +408,18 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       }
     ) => {
       if (Number(data.employeeId) === ALL_EMPLOYEES_ID) {
-        if (activeConfigs.length === 0) {
-          throw new Error("No active payroll configurations found");
+        if (scopedConfigs.length === 0) {
+          throw new Error(
+            customerId
+              ? "No payroll is set up for this customer's employees."
+              : "No active payroll configurations found",
+          );
         }
         const chosenExpId = (expenseAccountId && expenseAccountId !== "none") ? Number(expenseAccountId) : null;
         const result = await batchProcessPayrollForPeriod(
           data.payPeriodStart,
           data.payPeriodEnd,
-          activeConfigs.map((c: any) => Number(c.id)),
+          scopedConfigs.map((c: any) => Number(c.id)),
           {
             forceOverwrite: data.forceOverwrite === true,
             processScope: data.processScope,
@@ -454,7 +544,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
   const onSubmit = (data: ProcessPayrollFormData) => {
     if (Number(data.employeeId) === ALL_EMPLOYEES_ID) {
       const status = resolveBatchPayrollStatus(
-        activeConfigs,
+        scopedConfigs,
         payrollRecords,
         data.payPeriodStart,
         data.payPeriodEnd
@@ -508,15 +598,6 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
   const handleProcessClick = () => {
     const values = form.getValues();
 
-    if (!isPayPeriodEligibleForProcessing(values.payPeriodStart, values.payPeriodEnd)) {
-      toast({
-        title: "Payroll not allowed",
-        description: PAYROLL_CURRENT_MONTH_ERROR,
-        variant: "destructive",
-      });
-      return;
-    }
-
     if (values.employeeId === undefined || values.employeeId === null || Number.isNaN(Number(values.employeeId))) {
       toast({
         title: "Employee required",
@@ -530,7 +611,9 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       toast({
         title: "Payroll not calculated",
         description: isAllEmployees
-          ? "No active payroll configurations found for employees."
+          ? customerId
+            ? "No payroll is set up for this customer's employees."
+            : "No active payroll configurations found for employees."
           : "Please select an employee to calculate payroll first.",
         variant: "destructive",
       });
@@ -573,10 +656,12 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     {
       id: ALL_EMPLOYEES_ID,
       name: "All Employees",
-      employeeId: `${activeConfigEmployeePairs.length} active`,
-      designation: "Process payroll for everyone",
+      employeeId: customerId ? `${scopedPairs.length} assigned` : `${scopedPairs.length} active`,
+      designation: customerId
+        ? "Process payroll for everyone on this customer"
+        : "Process payroll for everyone",
     },
-    ...activeConfigEmployeePairs.map(({ config, employee }) => ({
+    ...scopedPairs.map(({ config, employee }) => ({
       id: Number(config.employeeId),
       name: employee.name,
       employeeId: employee.employeeId,
@@ -620,6 +705,27 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                         </FormItem>
                       )}
                     />
+
+                    <div className="space-y-1.5">
+                      <FormLabel className={payrollFormLabelClass}>Customer</FormLabel>
+                      <Select
+                        value={customerId || "__all__"}
+                        onValueChange={(value) => handleCustomerChange(value === "__all__" ? "" : value)}
+                        disabled={customers.length === 0}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={customers.length === 0 ? "No customers" : "Select customer"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__all__">All customers</SelectItem>
+                          {customers.map((customer: any) => (
+                            <SelectItem key={customer.id} value={String(customer.id)}>
+                              {customer.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
 
                     <div className="space-y-1.5">
                       <FormLabel className={cn(payrollFormLabelClass, "flex items-center gap-1.5")}>
@@ -718,7 +824,6 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                             <StringDatePicker
                               value={field.value ?? ""}
                               onChange={(v) => applyPayPeriodMonth(v ?? "", form.setValue)}
-                              disabledDate={isPayPeriodDateDisabled}
                             />
                           </FormControl>
                           <FormMessage />
@@ -735,7 +840,6 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                             <StringDatePicker
                               value={field.value ?? ""}
                               onChange={(v) => applyPayPeriodMonth(v ?? "", form.setValue)}
-                              disabledDate={isPayPeriodDateDisabled}
                             />
                           </FormControl>
                           <FormMessage />

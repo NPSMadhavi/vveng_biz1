@@ -324,10 +324,9 @@ function calculateSingaporeCpf(params: {
   employerRate?: number;
 }) {
   const gross = Number(params.grossSalary) || 0;
-  const basic = Number(params.basicSalary ?? params.grossSalary) || 0;
   const age = params.age ?? 30;
   const cpfCeiling = 8000;
-  const ordinaryWages = Math.min(basic, cpfCeiling);
+  const ordinaryWages = Math.min(gross, cpfCeiling);
 
   let employeeRate = params.employeeRate;
   let employerRate = params.employerRate;
@@ -530,7 +529,7 @@ const ASSET_COLUMNS = [
 
 const EMPLOYEE_COLUMNS = [
   "employee_id", "user_id", "name", "email", "phone", "gender", "address", "department",
-  "designation", "join_date", "status", "salary", "annual_salary", "nationality",
+  "designation", "join_date", "status", "salary", "annual_salary", "work_type", "per_hour_charge", "nationality",
   "pr_status", "date_of_birth", "passport_number", "passport_expiry", "visa_number",
   "visa_expiry", "visa_type", "visa_remarks", "nric_number", "nric_expiry",
   "passport_scan", "visa_scan", "nric_scan", "bank_account", "bank_name",
@@ -1492,6 +1491,18 @@ router.get("/payroll/configs", async (req, res): Promise<void> => {
   }
 });
 
+async function syncMonthlySalaryFromPayroll(
+  companyId: number,
+  row: { employee_id: number; base_salary: string | number },
+) {
+  const employeeType = await pool.query<{ work_type: string | null }>(
+    `SELECT work_type FROM employees WHERE id = $1 AND company_id = $2`,
+    [row.employee_id, companyId],
+  );
+  if (employeeType.rows[0]?.work_type === "hourly") return;
+  await syncEmployeeSalaryFromPayrollConfig(pool, companyId, row);
+}
+
 async function savePayrollConfig(companyId: number, body: Record<string, unknown>) {
   if (body.isActive == null) body.isActive = true;
   const employeeId = Number(body.employeeId);
@@ -1527,7 +1538,7 @@ async function savePayrollConfig(companyId: number, body: Record<string, unknown
 
   if (body.baseSalary != null) {
     try {
-      await syncEmployeeSalaryFromPayrollConfig(pool, companyId, row as { employee_id: number; base_salary: string | number });
+      await syncMonthlySalaryFromPayroll(companyId, row as { employee_id: number; base_salary: string | number });
     } catch (syncErr) {
       console.error("Failed to sync employee salary from payroll config:", syncErr);
     }
@@ -1573,7 +1584,7 @@ router.put("/employee-payroll/:id", async (req, res): Promise<void> => {
     if (!result.rows[0]) { res.status(404).json({ error: "Payroll config not found" }); return; }
     if (body.baseSalary != null) {
       try {
-        await syncEmployeeSalaryFromPayrollConfig(pool, companyId, result.rows[0]);
+        await syncMonthlySalaryFromPayroll(companyId, result.rows[0]);
       } catch (syncErr) {
         console.error("Failed to sync employee salary from payroll config:", syncErr);
       }
@@ -1599,7 +1610,7 @@ router.put("/payroll/configs/:id", async (req, res): Promise<void> => {
     if (!result.rows[0]) { res.status(404).json({ error: "Payroll config not found" }); return; }
     if (body.baseSalary != null) {
       try {
-        await syncEmployeeSalaryFromPayrollConfig(pool, companyId, result.rows[0]);
+        await syncMonthlySalaryFromPayroll(companyId, result.rows[0]);
       } catch (syncErr) {
         console.error("Failed to sync employee salary from payroll config:", syncErr);
       }
@@ -1739,8 +1750,21 @@ async function createPayrollRecordFromBody(companyId: number, body: Record<strin
   const config = configResult.rows[0];
   const baseSalary = config ? Number(config.base_salary) : 0;
   const allowances = config?.allowances && typeof config.allowances === "object" ? config.allowances : {};
-  const allowanceSum = Object.values(allowances as Record<string, unknown>).reduce<number>(
-    (sum, value) => sum + (Number(value) || 0),
+  const allowanceMetaKeys = new Set([
+    "hourlyNormalRate",
+    "hourlyNormalHours",
+    "hourlyActualHours",
+    "hourlyNormalPay",
+    "perHourCharge",
+    "normalWorkingDays",
+    "actualWorkingDays",
+    "hourlyOtDays",
+    "hourlyOtRate",
+    "assignedCustomerId",
+    "assignedCustomerName",
+  ]);
+  const allowanceSum = Object.entries(allowances as Record<string, unknown>).reduce<number>(
+    (sum, [key, value]) => (allowanceMetaKeys.has(key) ? sum : sum + (Number(value) || 0)),
     0,
   );
   const calc = calculateSingaporeCpf({

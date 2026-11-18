@@ -15,6 +15,7 @@ import {
   withStartupBootstrapLock,
 } from "./lib/startup-backfill.js";
 import { startBackupScheduler } from "./lib/accounting-backup.js";
+import { logGatewayStatus } from "./lib/veda-gateway.js";
 import { ensureUploadDirectories } from "./lib/ensure-uploads.js";
 import { pool } from "@workspace/db";
 
@@ -262,6 +263,7 @@ if (isMigrateOnly()) {
           "Server listening",
         );
         startBackupScheduler();
+        void logGatewayStatus(logger);
       });
     })
     .catch((err) => {

@@ -8,6 +8,7 @@ import {
   buildClosingChecklist,
   previewOpeningBalances,
   generateOpeningBalancesIdempotent,
+  ensureOpeningBalances,
   nextFyBounds,
   assertPeriodWritable,
   findFyForDate,
@@ -77,6 +78,20 @@ router.get("/financial-years/for-date", async (req, res): Promise<void> => {
     readOnly: fy?.status === "closed",
     access: fy?.status === "closed" ? "VIEW_ONLY" : "FULL",
   });
+});
+
+// GET /financial-years/:id/opening-summary
+router.get("/financial-years/:id/opening-summary", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+  const id = Number(req.params.id);
+  const summary = await ensureOpeningBalances(req.session.companyId!, id, req.session.userId!);
+  if (!summary) {
+    res.status(404).json({ error: "Financial year not found" });
+    return;
+  }
+  res.json(summary);
 });
 
 // GET /financial-years/:id/checklist

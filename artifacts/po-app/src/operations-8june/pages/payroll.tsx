@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { employeeActiveInWorkingYear, isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -61,9 +63,7 @@ import {
   formatPayrollMonthLabel,
   listEmployeePayrollMonths,
   recordPayrollMonthYear,
-  isPayPeriodEligibleForProcessing,
-  PAYROLL_CURRENT_MONTH_ERROR,
-  isPayPeriodDateDisabled,
+  payPeriodForFinancialYear,
   getPayPeriodForMonth,
   findPayrollRecordForPeriod,
   downloadPayslipForConfig,
@@ -453,8 +453,6 @@ export default function PayrollPage() {
   const [showForceDeleteDialog, setShowForceDeleteDialog] = useState(false);
   const [paymentRecordOpen, setPaymentRecordOpen] = useState(false);
 
-  const { payPeriodStart, payPeriodEnd } = getLastCompletedPayPeriod();
-
   const closePayslipViewer = () => {
     setPayslipViewerOpen(false);
     setPayslipViewerData(null);
@@ -536,10 +534,6 @@ export default function PayrollPage() {
     },
   });
 
-  const { data: summary, isLoading: summaryLoading } = useQuery<PayrollSummary>({
-    queryKey: ["/api/payroll/summary"],
-  });
-
   const { data: payrollConfigs = [], isLoading: configsLoading } = useQuery<PayrollConfig[]>({
     queryKey: ["/api/payroll/configs"],
   });
@@ -554,17 +548,43 @@ export default function PayrollPage() {
     refetchInterval: 30000,
   });
 
-  const activeConfigs = useMemo(() => configs.filter((c) => c.isActive), [configs]);
-
-  const uniquePayrollRecords = useMemo(
-    () => getUniquePayrollRecords(payrollRecords),
-    [payrollRecords]
+  const workingYear = useWorkingYearBounds();
+  const fyPeriod = useMemo(
+    () => payPeriodForFinancialYear(workingYear.from, workingYear.to),
+    [workingYear.from, workingYear.to],
   );
+  const payPeriodStart = fyPeriod.payPeriodStart;
+  const payPeriodEnd = fyPeriod.payPeriodEnd;
+  useEffect(() => {
+    setBatchPayPeriodStart(payPeriodStart);
+    setBatchPayPeriodEnd(payPeriodEnd);
+  }, [payPeriodStart, payPeriodEnd]);
+  const yearEmployees = useMemo(
+    () => employees.filter((employee) => employeeActiveInWorkingYear(employee.joinDate || employee.createdAt, workingYear)),
+    [employees, workingYear],
+  );
+  const yearEmployeeIds = useMemo(() => new Set(yearEmployees.map((employee) => Number(employee.id))), [yearEmployees]);
+  const yearConfigs = useMemo(
+    () => configs.filter((config) => yearEmployeeIds.has(Number(config.employeeId))),
+    [configs, yearEmployeeIds],
+  );
+  const activeConfigs = useMemo(() => yearConfigs.filter((c) => c.isActive), [yearConfigs]);
+  const uniquePayrollRecords = useMemo(() => {
+    const rows = getUniquePayrollRecords(payrollRecords);
+    if (!workingYear.active) return rows;
+    return rows.filter((row) => {
+      const period = (row as { payPeriodStart?: string; pay_period_start?: string }).payPeriodStart
+        || (row as { pay_period_start?: string }).pay_period_start;
+      return isoInBounds(period, workingYear.from, workingYear.to);
+    });
+  }, [payrollRecords, workingYear.active, workingYear.from, workingYear.to]);
 
-  const { page: configPage, setPage: setConfigPage, totalPages: configTotalPages, paginatedItems: paginatedConfigs } = usePagination(configs);
+  const { page: configPage, setPage: setConfigPage, totalPages: configTotalPages, paginatedItems: paginatedConfigs } = usePagination(yearConfigs);
   const { page: recordPage, setPage: setRecordPage, totalPages: recordTotalPages, paginatedItems: paginatedRecords } = usePagination(uniquePayrollRecords);
 
   const recordCount = uniquePayrollRecords.length;
+  const yearGross = uniquePayrollRecords.reduce((sum, row) => sum + (parseFloat(String(row.grossPay ?? 0)) || 0), 0);
+  const yearNet = uniquePayrollRecords.reduce((sum, row) => sum + (parseFloat(String(row.netPay ?? 0)) || 0), 0);
 
   const processedRowClass = "bg-[#E3F2FD] border-l-4 border-[#90CAF9]";
 
@@ -629,9 +649,9 @@ export default function PayrollPage() {
   };
 
   const handleBatchProcessOpen = () => {
-    const { payPeriodStart, payPeriodEnd } = getLastCompletedPayPeriod();
-    setBatchPayPeriodStart(payPeriodStart);
-    setBatchPayPeriodEnd(payPeriodEnd);
+    const period = payPeriodForFinancialYear(workingYear.from, workingYear.to);
+    setBatchPayPeriodStart(period.payPeriodStart);
+    setBatchPayPeriodEnd(period.payPeriodEnd);
     setBatchModalOpen(true);
   };
 
@@ -654,15 +674,6 @@ export default function PayrollPage() {
       toast({
         title: "Invalid pay period",
         description: "Pay period end must be on or after pay period start.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!isPayPeriodEligibleForProcessing(batchPayPeriodStart, batchPayPeriodEnd)) {
-      toast({
-        title: "Payroll not allowed",
-        description: PAYROLL_CURRENT_MONTH_ERROR,
         variant: "destructive",
       });
       return;
@@ -700,15 +711,6 @@ export default function PayrollPage() {
     processScope?: "pending" | "changed";
     forceOverwrite?: boolean;
   }) => {
-    if (!isPayPeriodEligibleForProcessing(batchPayPeriodStart, batchPayPeriodEnd)) {
-      toast({
-        title: "Payroll not allowed",
-        description: PAYROLL_CURRENT_MONTH_ERROR,
-        variant: "destructive",
-      });
-      return;
-    }
-
     const { monthLabel } = derivePayrollMonthYear(batchPayPeriodStart);
     setIsBatchProcessing(true);
 
@@ -1316,7 +1318,7 @@ export default function PayrollPage() {
             <Users className="h-4 w-4 text-[#0D9488]" />
           </div>
           <div className="text-2xl font-bold text-[#111827]">
-            {summaryLoading ? "—" : summary?.totalEmployees ?? 0}
+            {configsLoading ? "—" : activeConfigs.length}
           </div>
           <p className="mt-1 text-xs text-[#6B7280]">Employees on active payroll</p>
         </button>
@@ -1330,7 +1332,7 @@ export default function PayrollPage() {
             <DollarSign className="h-4 w-4 text-[#0D9488]" />
           </div>
           <div className="text-2xl font-bold text-[#111827]">
-            {summaryLoading ? "—" : formatCurrency(summary?.totalGrossPay ?? 0)}
+            {recordsLoading ? "—" : formatCurrency(yearGross)}
           </div>
           <p className="mt-1 text-xs text-[#6B7280]">
             {recordCount} records · Before deductions
@@ -1346,7 +1348,7 @@ export default function PayrollPage() {
             <DollarSign className="h-4 w-4 text-[#0D9488]" />
           </div>
           <div className="text-2xl font-bold text-[#111827]">
-            {summaryLoading ? "—" : formatCurrency(summary?.totalNetPay ?? 0)}
+            {recordsLoading ? "—" : formatCurrency(yearNet)}
           </div>
           <p className="mt-1 text-xs text-[#6B7280]">
             {recordCount} records · After deductions
@@ -1640,7 +1642,6 @@ export default function PayrollPage() {
                 <StringDatePicker
                   value={batchPayPeriodStart}
                   onChange={handleBatchPayPeriodChange}
-                  disabledDate={isPayPeriodDateDisabled}
                 />
               </div>
               <div className="grid gap-2">
@@ -1648,7 +1649,6 @@ export default function PayrollPage() {
                 <StringDatePicker
                   value={batchPayPeriodEnd}
                   onChange={handleBatchPayPeriodChange}
-                  disabledDate={isPayPeriodDateDisabled}
                 />
               </div>
             </div>
@@ -1755,9 +1755,9 @@ export default function PayrollPage() {
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-6 pb-6 pt-4">
             {openDetail === "employees" &&
-              (employees.length ? (
+              (yearEmployees.length ? (
                 <ul className="divide-y">
-                  {employees.map((emp: any) => (
+                  {yearEmployees.map((emp: any) => (
                     <li key={emp.id} className="py-3">
                       <div className="font-medium text-[#111827]">{emp.name}</div>
                       <div className="text-xs text-[#6B7280]">

@@ -3,12 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isGeneralParty } from "@/lib/party-usage";
 
 type VendorRow = {
   id: number;
   name: string;
   isActive?: boolean;
   currency?: string | null;
+  usageType?: string | null;
 };
 
 export function VendorPayeeField({
@@ -38,7 +40,7 @@ export function VendorPayeeField({
   });
 
   const active = useMemo(
-    () => vendors.filter((vendor) => vendor.isActive !== false && vendor.name?.trim()),
+    () => vendors.filter((vendor) => vendor.isActive !== false && vendor.name?.trim() && isGeneralParty(vendor)),
     [vendors],
   );
 

@@ -32,6 +32,7 @@ export const salesOrdersTable = pgTable("sales_orders", {
   deliveryInstructions: text("delivery_instructions"),
   customerNote: text("customer_note"),
   authorisedSignature: text("authorised_signature"),
+  manpowerDetails: jsonb("manpower_details"),
   createdBy: integer("created_by").notNull(),
   attachmentPath: text("attachment_path"),
   attachmentName: text("attachment_name"),

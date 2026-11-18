@@ -18,6 +18,8 @@ export const customersTable = pgTable("customers", {
   creditLimit: decimal("credit_limit", { precision: 15, scale: 2 }),
   shipToAddress: text("ship_to_address"),
   quotationTerms: text("quotation_terms"),
+  perHourAmount: decimal("per_hour_amount", { precision: 15, scale: 2 }),
+  usageType: text("usage_type").notNull().default("general"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

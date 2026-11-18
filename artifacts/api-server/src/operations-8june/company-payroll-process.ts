@@ -11,11 +11,10 @@ import {
   derivePayrollMonthYear,
   getBatchZipNameFromPeriod,
   getPayPeriodForMonth,
-  isPayPeriodEligibleForProcessing,
   normalizePayPeriodDate,
   parseForceOverwriteFlag,
-  PAYROLL_CURRENT_MONTH_ERROR,
 } from "./payroll-date-utils";
+import { assertPeriodWritable } from "../lib/financial-year.js";
 import {
   buildPayslipHtml,
   generatePayslipPdf,
@@ -129,6 +128,14 @@ function calculatePayrollAmounts(params: {
   nationality?: string | null;
   prStatus?: string | null;
 }) {
+  const hourlyNormalPay = Number(params.allowances.hourlyNormalPay) || 0;
+  const perHourCharge = Number(params.allowances.perHourCharge) || 0;
+  const workingDays = Number(params.allowances.normalWorkingDays) || 0;
+  const periodSalary = hourlyNormalPay > 0
+    ? round2(hourlyNormalPay)
+    : perHourCharge > 0 && workingDays > 0
+      ? round2(perHourCharge * workingDays)
+      : params.baseSalary;
   const earnings = resolvePayrollEarnings({
     allowances: params.allowances,
     overtimeHours: params.overtimeHours,
@@ -141,7 +148,7 @@ function calculatePayrollAmounts(params: {
   });
 
   const calc = calculateProcessPayroll({
-    monthlySalary: params.baseSalary,
+    monthlySalary: periodSalary,
     age: params.age,
     residencyType,
     prYear,
@@ -534,8 +541,9 @@ export async function processIndividualPayrollCompany(
       return;
     }
 
-    if (!isPayPeriodEligibleForProcessing(normalizedPayPeriodStart, normalizedPayPeriodEnd)) {
-      res.status(400).json({ message: PAYROLL_CURRENT_MONTH_ERROR });
+    const writable = await assertPeriodWritable(companyId, normalizedPayPeriodStart);
+    if (!writable.ok) {
+      res.status(writable.status).json({ message: writable.error });
       return;
     }
 
@@ -644,8 +652,9 @@ export async function batchProcessPayrollCompany(
       return;
     }
 
-    if (!isPayPeriodEligibleForProcessing(resolvedPayPeriodStart, resolvedPayPeriodEnd)) {
-      res.status(400).json({ message: PAYROLL_CURRENT_MONTH_ERROR });
+    const writable = await assertPeriodWritable(companyId, resolvedPayPeriodStart);
+    if (!writable.ok) {
+      res.status(writable.status).json({ message: writable.error });
       return;
     }
 

@@ -1,4 +1,6 @@
-import { useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { recordVisibleInWorkingYear } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +17,7 @@ type Ir8aEmployer = {
   designation: string;
   declarationDate?: string | null;
   signature?: string | null;
+  createdAt?: string | null;
 };
 
 type EmployerForm = {
@@ -125,6 +128,11 @@ export default function Ir8aEmployersPage() {
   const { data: employers = [], isLoading } = useQuery<Ir8aEmployer[]>({
     queryKey: ["/api/ir8a/employers"],
   });
+  const workingYear = useWorkingYearBounds();
+  const visibleEmployers = useMemo(
+    () => employers.filter((employer) => recordVisibleInWorkingYear(employer.createdAt, workingYear)),
+    [employers, workingYear],
+  );
 
   const createMutation = useMutation({
     mutationFn: async (payload: EmployerForm) => {
@@ -332,12 +340,12 @@ export default function Ir8aEmployersPage() {
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-[#6B7280]">Loading employers...</td>
                   </tr>
-                ) : employers.length === 0 ? (
+                ) : visibleEmployers.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-4 py-12 text-center text-[#6B7280]">No employers yet. Use Create Employee to create one.</td>
                   </tr>
                 ) : (
-                  employers.map((employer) => (
+                  visibleEmployers.map((employer) => (
                     <tr key={employer.id} className="border-b border-[#F3F4F6] last:border-b-0">
                       <td className="px-4 py-3 font-medium text-[#111827]">{employer.employerName}</td>
                       <td className="px-3 py-3 text-[#374151]">{employer.uen}</td>

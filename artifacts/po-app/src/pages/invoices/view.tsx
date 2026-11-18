@@ -1,5 +1,6 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useGetInvoice, getGetInvoiceQueryKey, getListInvoicesQueryKey, useVoidInvoice, useKnockOffInvoice, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -101,10 +102,23 @@ function buildInvoiceCopyPrefill(doc: any) {
 export default function InvoiceView() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany, canManage } = useAuth();
   const qc = useQueryClient();
+
+  const { data: journalEntries = [] } = useQuery({
+    queryKey: ["document-journal", "invoice", id],
+    enabled: Number.isFinite(id) && id > 0,
+    queryFn: async () => {
+      const res = await fetch(`/api/journal-entries?refType=invoice&refId=${id}`, { credentials: "include" });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data as { id: number }[] : [];
+    },
+  });
+  const journalEntryId = journalEntries[0]?.id;
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("active");
@@ -351,9 +365,10 @@ export default function InvoiceView() {
     customerCreditLimit != null && Number.isFinite(customerCreditLimit) && total > customerCreditLimit;
   const regularItems = items.filter((item: any) => item.type !== "section");
   const hasItemDiscount = regularItems.some((item: any) => Number(item.discount) > 0);
-  const hasPartNo = regularItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
-  const hasInvUom = regularItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
-  const totalViewCols = 3 + (hasPartNo ? 1 : 0) + (hasItemDiscount ? 1 : 0) + (hasInvUom ? 1 : 0) + 2;
+  const hasPartNo = !isManpower && regularItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
+  const hasInvUom = isManpower || regularItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
+  const showItemDiscount = isManpower || hasItemDiscount;
+  const totalViewCols = 3 + (hasPartNo ? 1 : 0) + (showItemDiscount ? 1 : 0) + (hasInvUom ? 1 : 0) + 2;
 
   const payments: any[] = (doc as any).payments || [];
   const paidAmount: number = (doc as any).paidAmount ?? 0;
@@ -418,6 +433,11 @@ export default function InvoiceView() {
           <Button variant="outline" className="gap-2" onClick={() => setPreviewOpen(true)}>
             <Eye className="h-4 w-4" />Preview
           </Button>
+          {journalEntryId && (
+            <Button variant="outline" className="gap-2" onClick={() => setLocation(`/accounting/journal-entries/${journalEntryId}`)}>
+              Journal Entry
+            </Button>
+          )}
           {!isVoided && !isPaid && !isPartial && (
             <Button variant="outline" className="gap-2" onClick={() => setLocation(withReturnTo(`/invoices/${id}/edit`))}>
               <Pencil className="h-4 w-4" />Edit
@@ -524,6 +544,7 @@ export default function InvoiceView() {
           <CardContent className="space-y-3 text-sm">
             {doc.paymentTerms && <div className="flex justify-between"><span className="text-muted-foreground">Payment Terms</span><span>{doc.paymentTerms}</span></div>}
             {(doc as any).poRefNo && <div className="flex justify-between"><span className="text-muted-foreground">PO Reference</span><span className="font-mono">{(doc as any).poRefNo}</span></div>}
+            {isManpower && (doc as any).manpowerDetails?.workLocation && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Work Location / Site</span><span className="text-right">{(doc as any).manpowerDetails.workLocation}</span></div>}
             <div className="flex justify-between">
               <span className="text-muted-foreground">Sales Order</span>
               {(doc as any).soNumber ? (
@@ -577,11 +598,11 @@ export default function InvoiceView() {
               <tr>
                 <th className="px-6 py-3 text-left w-8">#</th>
                 {hasPartNo && <th className="px-6 py-3 text-left whitespace-nowrap min-w-[140px]">Item / Part Number</th>}
-                <th className="px-6 py-3 text-left">Description</th>
-                <th className="px-6 py-3 text-right whitespace-nowrap">Qty</th>
-                {hasInvUom && <th className="px-6 py-3 text-center whitespace-nowrap">UOM</th>}
-                <th className="px-6 py-3 text-right whitespace-nowrap">Unit Price</th>
-                {hasItemDiscount && <th className="px-6 py-3 text-right whitespace-nowrap">Disc %</th>}
+                <th className="px-6 py-3 text-left">{isManpower ? "Designation" : "Description"}</th>
+                <th className="px-6 py-3 text-right whitespace-nowrap">{isManpower ? "Workers" : "Qty"}</th>
+                {hasInvUom && <th className="px-6 py-3 text-center whitespace-nowrap">{isManpower ? "Billing" : "UOM"}</th>}
+                <th className="px-6 py-3 text-right whitespace-nowrap">{isManpower ? "Customer Rate" : "Unit Price"}</th>
+                {showItemDiscount && <th className="px-6 py-3 text-right whitespace-nowrap">Disc %</th>}
                 <th className="px-6 py-3 text-right whitespace-nowrap">Amount</th>
               </tr>
             </thead>
@@ -617,7 +638,7 @@ export default function InvoiceView() {
                       <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{item.qty}</td>
                       {hasInvUom && <td className="px-6 py-3 text-center text-muted-foreground align-top">{item.uom || "—"}</td>}
                       <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{fmt(Number(item.unitPrice) || 0)}</td>
-                      {hasItemDiscount && <td className="px-6 py-3 text-right text-muted-foreground align-top">{Number(item.discount) > 0 ? `${item.discount}%` : "—"}</td>}
+                      {showItemDiscount && <td className="px-6 py-3 text-right text-muted-foreground align-top">{Number(item.discount) > 0 ? `${item.discount}%` : "—"}</td>}
                       <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{fmt(displayAmount)}</td>
                     </tr>
                   );

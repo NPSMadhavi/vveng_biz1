@@ -17,6 +17,7 @@ import {
   emptyViLineItem,
   emptyViSection,
   getUomOptions,
+  stripHtml,
   type VendorInvoiceLineItem,
 } from "@/lib/vendor-invoice-items";
 
@@ -40,6 +41,7 @@ interface Props {
   discountAmount: number;
   onDiscountAmountChange: (v: number) => void;
   totals: TotalsProps;
+  manpower?: boolean;
 }
 
 function fmt(n: number) {
@@ -134,6 +136,7 @@ export function VendorInvoiceLineItems({
   discountAmount,
   onDiscountAmountChange,
   totals,
+  manpower = false,
 }: Props) {
   const [importExcelOpen, setImportExcelOpen] = useState(false);
   const [importPoOpen, setImportPoOpen] = useState(false);
@@ -268,12 +271,14 @@ export function VendorInvoiceLineItems({
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap">
               <CardTitle className="text-lg">Line Items</CardTitle>
-              <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append(emptyViLineItem())}>
-                <Plus className="h-3 w-3" /> Add Item
+              <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ ...emptyViLineItem(), uom: manpower ? "Hourly" : "" })}>
+                <Plus className="h-3 w-3" /> {manpower ? "Add Row" : "Add Item"}
               </Button>
+              {!manpower && (
               <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append(emptyViSection())}>
                 <Layers className="h-3 w-3" /> Add Section
               </Button>
+              )}
               <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportPoOpen(true)}>
                 <FileInput className="h-3 w-3" /> Import from PO
               </Button>
@@ -299,11 +304,11 @@ export function VendorInvoiceLineItems({
               <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
                 <tr>
                   <th className="px-4 py-3 text-left w-8">#</th>
-                  <th className="px-4 py-3 text-left w-36">Item / Part Number</th>
-                  <th className="px-4 py-3 text-left">Description</th>
-                  <th className="px-4 py-3 text-right w-20">Qty</th>
-                  <th className="px-4 py-3 text-center w-28">UOM</th>
-                  <th className="px-4 py-3 text-right w-28">Unit Price</th>
+                  {!manpower && <th className="px-4 py-3 text-left w-36">Item / Part Number</th>}
+                  <th className="px-4 py-3 text-left">{manpower ? "Designation" : "Description"}</th>
+                  <th className="px-4 py-3 text-right w-20">{manpower ? "Workers" : "Qty"}</th>
+                  <th className="px-4 py-3 text-center w-28">{manpower ? "Billing" : "UOM"}</th>
+                  <th className="px-4 py-3 text-right w-28">{manpower ? "Customer Rate" : "Unit Price"}</th>
                   <th className="px-4 py-3 text-right w-24">Disc %</th>
                   <th className="px-4 py-3 text-right w-28">Amount</th>
                   <th className="px-4 py-3 text-center w-12">FOC</th>
@@ -384,6 +389,7 @@ export function VendorInvoiceLineItems({
                         {insertBar}
                         <tr className="border-b last:border-0 hover:bg-muted/20">
                           <td className="px-4 py-2 text-muted-foreground text-xs">{itemNo}</td>
+                          {!manpower && (
                           <td className="px-4 py-2">
                             <div className="flex items-center gap-1">
                               <Input
@@ -407,8 +413,13 @@ export function VendorInvoiceLineItems({
                               </Button>
                             </div>
                           </td>
+                          )}
                           <td className="px-4 py-2 align-top min-w-[200px]">
-                            <RichTextEditor value={item.description} onChange={(v) => updateItem(idx, { description: v })} placeholder="Item description" />
+                            {manpower ? (
+                              <Input className="h-8 text-sm" placeholder="Designation" value={stripHtml(item.description)} onChange={(e) => updateItem(idx, { description: e.target.value })} />
+                            ) : (
+                              <RichTextEditor value={item.description} onChange={(v) => updateItem(idx, { description: v })} placeholder="Item description" />
+                            )}
                           </td>
                           <td className="px-4 py-2">
                             <NumericCellInput
@@ -425,7 +436,7 @@ export function VendorInvoiceLineItems({
                               onChange={(e) => updateItem(idx, { uom: e.target.value })}
                             >
                               <option value="">—</option>
-                              {getUomOptions().map((u) => (
+                              {(manpower ? ["Hourly", "Daily", "Monthly"] : getUomOptions()).map((u) => (
                                 <option key={u} value={u}>{u}</option>
                               ))}
                             </select>

@@ -192,6 +192,8 @@ export default function Settings() {
   const [rnSA, setRnSA] = useState<RunningNumberConfig>({ prefix: "SA", counter: "0", suffix: "" });
   const [rnSI, setRnSI] = useState<RunningNumberConfig>({ prefix: "STK", counter: "0", suffix: "" });
   const [rnFA, setRnFA] = useState<RunningNumberConfig>({ prefix: "FA", counter: "0", suffix: "" });
+  const [rnED, setRnED] = useState<RunningNumberConfig>({ prefix: "DEP", counter: "0", suffix: "" });
+  const [rnTS, setRnTS] = useState<RunningNumberConfig>({ prefix: "TS", counter: "0", suffix: "" });
   const [rnBC, setRnBC] = useState<RunningNumberConfig>({ prefix: "BC", counter: "0", suffix: "" });
   const [rnEditing, setRnEditing] = useState(false);
   const [bcEditing, setBcEditing] = useState(false);
@@ -278,6 +280,8 @@ export default function Settings() {
       setRnSA({ prefix: (settings as any).saPrefix ?? "SA", counter: String((settings as any).saCounter ?? 0), suffix: (settings as any).saSuffix ?? "" });
       setRnSI({ prefix: (settings as any).siPrefix ?? "STK", counter: String((settings as any).siCounter ?? 0), suffix: (settings as any).siSuffix ?? "" });
       setRnFA({ prefix: (settings as any).faPrefix ?? "FA", counter: String((settings as any).faCounter ?? 0), suffix: (settings as any).faSuffix ?? "" });
+      setRnED({ prefix: (settings as any).depPrefix ?? "DEP", counter: String((settings as any).depCounter ?? 0), suffix: (settings as any).depSuffix ?? "" });
+      setRnTS({ prefix: (settings as any).tsPrefix ?? "TS", counter: String((settings as any).tsCounter ?? 0), suffix: (settings as any).tsSuffix ?? "" });
     }
     if (settings && !bcEditing) {
       setRnBC({ prefix: (settings as any).bcPrefix ?? "BC", counter: String((settings as any).bcCounter ?? 0), suffix: (settings as any).bcSuffix ?? "" });
@@ -383,6 +387,8 @@ export default function Settings() {
           saPrefix: rnSA.prefix, saCounter: parseInt(rnSA.counter) || 0, saSuffix: rnSA.suffix,
           siPrefix: rnSI.prefix, siCounter: parseInt(rnSI.counter) || 0, siSuffix: rnSI.suffix,
           faPrefix: rnFA.prefix, faCounter: parseInt(rnFA.counter) || 0, faSuffix: rnFA.suffix,
+          depPrefix: rnED.prefix, depCounter: parseInt(rnED.counter) || 0, depSuffix: rnED.suffix,
+          tsPrefix: rnTS.prefix, tsCounter: parseInt(rnTS.counter) || 0, tsSuffix: rnTS.suffix,
         } as any,
       },
       {
@@ -644,6 +650,8 @@ export default function Settings() {
                     { label: "Stock Adjustment", state: rnSA, setter: setRnSA },
                     { label: "Stock Item Code", state: rnSI, setter: setRnSI },
                     { label: "Fixed Asset Tag", state: rnFA, setter: setRnFA },
+                    { label: "Employee Deployment", state: rnED, setter: setRnED },
+                    { label: "Timesheet", state: rnTS, setter: setRnTS },
                   ] as { label: string; state: RunningNumberConfig; setter: (v: RunningNumberConfig) => void }[]).map(({ label, state, setter }) => (
                     <div key={label} className="rounded-lg border p-4 space-y-3">
                       <div className="flex items-center justify-between">

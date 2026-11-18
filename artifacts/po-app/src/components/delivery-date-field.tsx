@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { addDays, addWeeks, format } from "date-fns";
 
 const QUICK_OPTIONS = [
@@ -13,12 +14,15 @@ interface DeliveryDateFieldProps {
   onChange: (val: string) => void;
   /** When false, hides the "or" custom text input (date picker + quick chips only). */
   allowCustomText?: boolean;
+  /** Keep the quick options and calendar on one line. */
+  nowrap?: boolean;
 }
 
 export function DeliveryDateField({
   value = "",
   onChange,
   allowCustomText = true,
+  nowrap = false,
 }: DeliveryDateFieldProps) {
   const isDateString = /^\d{4}-\d{2}-\d{2}$/.test(value || "");
 
@@ -38,8 +42,8 @@ export function DeliveryDateField({
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex flex-wrap gap-1.5 shrink-0">
+    <div className={nowrap ? "flex flex-nowrap items-center gap-2" : "flex flex-wrap items-center gap-2"}>
+      <div className={nowrap ? "flex flex-nowrap gap-1.5 shrink-0" : "flex flex-wrap gap-1.5 shrink-0"}>
         {QUICK_OPTIONS.map(opt => {
           const optVal = opt.getValue();
           const isActive = nativeToDisplay(value) === optVal || value === optVal;
@@ -60,12 +64,13 @@ export function DeliveryDateField({
         })}
       </div>
       <div className={allowCustomText ? "flex min-w-[12rem] flex-1 gap-2 items-center" : "w-[11rem] shrink-0"}>
-        <Input
-          type="date"
-          value={isDateString ? value : ""}
-          onChange={e => onChange(e.target.value)}
-          className={allowCustomText ? "flex-1" : "w-full"}
-        />
+        <div className={allowCustomText ? "min-w-0 flex-1" : "w-full"}>
+          <SyncBridgeDatePicker
+            value={isDateString ? value : ""}
+            onChange={onChange}
+            placeholder="DD/MM/YYYY"
+          />
+        </div>
         {allowCustomText && (
           <>
             <span className="text-muted-foreground text-xs shrink-0">or</span>

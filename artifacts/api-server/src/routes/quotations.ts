@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, quotationsTable, invoicesTable, proformaInvoicesTable, vendorInvoicesTable, usersTable, customersTable } from "@workspace/db";
+import { db, pool, quotationsTable, invoicesTable, proformaInvoicesTable, vendorInvoicesTable, usersTable, customersTable } from "@workspace/db";
 import { eq, desc, inArray, ilike, and, lt, isNotNull, notInArray } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
@@ -14,6 +14,15 @@ declare module "express-session" {
 }
 
 const router: IRouter = Router();
+
+async function ensureManpowerDetails(): Promise<void> {
+  try {
+    await pool.query(`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS manpower_details jsonb`);
+  } catch (error: any) {
+    if (error?.code === "42P01") return;
+    throw error;
+  }
+}
 
 function requireAuth(req: any, res: any): boolean {
   if (!req.session.userId) { res.status(401).json({ error: "Not authenticated" }); return false; }
@@ -89,6 +98,7 @@ router.get("/quotations/stats", async (req, res): Promise<void> => {
   const isAdmin = req.session.isAdmin ?? false;
   const isExternal = req.session.userRole === "external";
 
+  await ensureManpowerDetails();
   await expireOverdueQuotations(companyId);
 
   const all = companyId
@@ -111,6 +121,7 @@ router.get("/quotations", async (req, res): Promise<void> => {
   const isAdmin = req.session.isAdmin ?? false;
   const isExternal = req.session.userRole === "external";
 
+  await ensureManpowerDetails();
   await expireOverdueQuotations(companyId);
 
   const docs = companyId
@@ -130,9 +141,11 @@ router.post("/quotations", async (req, res): Promise<void> => {
     deliveryAddress, issueDate, validUntil, deliveryDate, paymentTerms, salesPerson, notes, items, tax,
     currency, discountAmount, isPrivate, status,
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
+    manpowerDetails,
   } = req.body;
 
   if (!customerName || !items) { res.status(400).json({ error: "customerName and items are required" }); return; }
+  await ensureManpowerDetails();
 
   const subtotal = (items as any[]).reduce((s: number, item: any) => (item.type === "section" || item.isFoc) ? s : s + parseFloat(item.amount || "0"), 0);
   const docDiscount = Number(discountAmount) || 0;
@@ -160,6 +173,7 @@ router.post("/quotations", async (req, res): Promise<void> => {
       subtotal: subtotal.toFixed(2), discountAmount: docDiscount.toFixed(2), tax: taxAmt.toFixed(2),
       totalAmount: totalAmount.toFixed(2), status: createdStatus, createdBy: req.session.userId!,
       termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
+      manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null,
     }).returning();
     await upsertCustomerByName(companyId, customerName, customerAddress, customerContact, customerContactEmail);
     logAudit({ req, action: "create", entityType: "quotation", entityId: doc.id, entityLabel: doc.qtNumber });
@@ -175,6 +189,7 @@ router.get("/quotations/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
+  await ensureManpowerDetails();
   const [existing] = await db.select().from(quotationsTable).where(eq(quotationsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Quotation not found" }); return; }
 
@@ -211,6 +226,7 @@ router.put("/quotations/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
+  await ensureManpowerDetails();
   const [existing] = await db.select().from(quotationsTable).where(eq(quotationsTable.id, id));
   if (!existing) { res.status(404).json({ error: "Quotation not found" }); return; }
 
@@ -219,6 +235,7 @@ router.put("/quotations/:id", async (req, res): Promise<void> => {
     deliveryAddress, issueDate, validUntil, deliveryDate, paymentTerms, salesPerson, notes, items, tax, status,
     currency, discountAmount, isPrivate,
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
+    manpowerDetails,
   } = req.body;
 
   const subtotal = (items as any[]).reduce((s: number, item: any) => (item.type === "section" || item.isFoc) ? s : s + parseFloat(item.amount || "0"), 0);
@@ -234,6 +251,7 @@ router.put("/quotations/:id", async (req, res): Promise<void> => {
     subtotal: subtotal.toFixed(2), discountAmount: docDiscount.toFixed(2),
     tax: taxAmt.toFixed(2), totalAmount: totalAmount.toFixed(2),
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
+    manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null,
   };
   if (currency !== undefined) updateData.currency = currency;
   if (isPrivate !== undefined) updateData.isPrivate = isPrivate === true;
@@ -365,6 +383,9 @@ router.post("/quotations/:id/convert-to-vendor-invoice", async (req, res): Promi
       gstAmount: tax.toFixed(2),
       gstInclusive: false,
       exchangeRate: "1.000000",
+      manpowerDetails: (qt as any).manpowerDetails && typeof (qt as any).manpowerDetails === "object"
+        ? { workLocation: (qt as any).manpowerDetails.workLocation || "" }
+        : null,
       createdBy: userId,
     }).returning();
 
@@ -472,6 +493,7 @@ router.post("/quotations/:id/convert", async (req, res): Promise<void> => {
       poRefNo: qt.qtNumber,
       status: "draft",
       isPrivate: qt.isPrivate ?? false,
+      manpowerDetails: (qt as any).manpowerDetails && typeof (qt as any).manpowerDetails === "object" ? (qt as any).manpowerDetails : null,
       createdBy: userId,
     }).returning();
     logAudit({ req, action: "convert-to-invoice", entityType: "quotation", entityId: id, entityLabel: qt.qtNumber });

@@ -6,7 +6,7 @@ import { DEFAULT_ACCOUNTS, ensureAccountsSeeded } from "../lib/accounts-seed.js"
 import { getExchangeRateToSGD, getExchangeRateInfo } from "../lib/exchange-rate.js";
 import { backfillExpenseJEs } from "../lib/expense-auto-post.js";
 import { backfillAssetDepreciationJEs } from "../lib/asset-depreciation-auto-post.js";
-import { backfillVendorInvoiceJEs } from "../lib/vendor-invoice-auto-post.js";
+import { backfillVendorInvoiceJEs, repointManpowerVendorCostOfServices } from "../lib/vendor-invoice-auto-post.js";
 import { backfillPayrollJEs, toIsoDate } from "../lib/payroll-auto-post.js";
 import { isSingaporeCountry } from "../lib/singapore.js";
 import { assertPeriodWritable } from "../lib/financial-year.js";
@@ -171,7 +171,19 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
+  const refTypeQuery = typeof req.query.refType === "string" ? req.query.refType : "";
+  const refIdQuery = Number(req.query.refId);
+  if (refTypeQuery && Number.isFinite(refIdQuery) && refIdQuery > 0) {
+    const matched = await db.select().from(journalEntriesTable).where(and(
+      eq(journalEntriesTable.companyId, companyId),
+      eq(journalEntriesTable.refType, refTypeQuery),
+      eq(journalEntriesTable.refId, refIdQuery),
+    ));
+    res.json(await attachJournalSourcePaths(matched));
+    return;
+  }
   try {
+    await repointManpowerVendorCostOfServices(companyId);
     await backfillVendorInvoiceJEs(companyId, req.session.userId!);
     await backfillExpenseJEs(companyId, req.session.userId!);
     await backfillPayrollJEs(companyId, req.session.userId!);
@@ -230,7 +242,7 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
     return (b.id ?? 0) - (a.id ?? 0);
   });
 
-  res.json(entries);
+  res.json(await attachJournalSourcePaths(entries));
 });
 
 router.get("/journal-entries/:id", async (req, res): Promise<void> => {
@@ -244,6 +256,10 @@ router.get("/journal-entries/:id", async (req, res): Promise<void> => {
   const [entry] = await db.select().from(journalEntriesTable).where(eq(journalEntriesTable.id, id));
   if (!entry) { res.status(404).json({ error: "Journal entry not found" }); return; }
 
+  if (entry.companyId) {
+    await repointManpowerVendorCostOfServices(entry.companyId).catch(() => undefined);
+  }
+
   const lines = await db.select({
     line:    journalLinesTable,
     account: accountsTable,
@@ -252,8 +268,9 @@ router.get("/journal-entries/:id", async (req, res): Promise<void> => {
     .innerJoin(accountsTable, eq(journalLinesTable.accountId, accountsTable.id))
     .where(eq(journalLinesTable.journalEntryId, id));
 
+  const [withPath] = await attachJournalSourcePaths([entry]);
   res.json({
-    ...entry,
+    ...withPath,
     lines: lines.map(r => ({
       ...r.line,
       debit:  parseFloat(r.line.debit ?? "0"),
@@ -382,6 +399,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
     ));
@@ -465,6 +483,7 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
   const fromDate  = (req.query.from as string) || null;
   const toDate    = (req.query.to   as string) || null;
 
+  await repointManpowerVendorCostOfServices(companyId);
   await ensureAccountsSeeded(companyId);
 
   // All revenue + expense accounts for this company
@@ -954,6 +973,7 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       sql`${journalEntriesTable.status} IN ('posted', 'reversed')`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`${journalEntriesTable.entryDate} <= ${asOf}`,
     ));
 
@@ -1303,22 +1323,48 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
   });
 });
 
+async function attachJournalSourcePaths<T extends { id: number; refType: string | null; refId: number | null }>(entries: T[]) {
+  const invoiceIds = [...new Set(entries.filter((entry) => entry.refType === "invoice" && entry.refId).map((entry) => entry.refId as number))];
+  const vendorIds = [...new Set(entries.filter((entry) => entry.refType === "vendor_invoice" && entry.refId).map((entry) => entry.refId as number))];
+  const [invoiceRows, vendorRows] = await Promise.all([
+    invoiceIds.length
+      ? db.select({ id: invoicesTable.id, manpowerDetails: invoicesTable.manpowerDetails }).from(invoicesTable).where(inArray(invoicesTable.id, invoiceIds))
+      : Promise.resolve([] as { id: number; manpowerDetails: unknown }[]),
+    vendorIds.length
+      ? db.select({ id: vendorInvoicesTable.id, manpowerDetails: vendorInvoicesTable.manpowerDetails }).from(vendorInvoicesTable).where(inArray(vendorInvoicesTable.id, vendorIds))
+      : Promise.resolve([] as { id: number; manpowerDetails: unknown }[]),
+  ]);
+  const manpowerInvoices = new Set(invoiceRows.filter((row) => row.manpowerDetails).map((row) => row.id));
+  const manpowerVendors = new Set(vendorRows.filter((row) => row.manpowerDetails).map((row) => row.id));
+  return entries.map((entry) => ({
+    ...entry,
+    sourcePath: entry.refType === "invoice" && entry.refId
+      ? `${manpowerInvoices.has(entry.refId) ? "/manpower/customers/tax-invoices" : "/invoices"}/${entry.refId}`
+      : entry.refType === "vendor_invoice" && entry.refId
+        ? `${manpowerVendors.has(entry.refId) ? "/manpower/suppliers/vendor-invoices" : "/vendor-invoices"}/${entry.refId}`
+        : null,
+  }));
+}
+
 function ledgerSourcePath(
   refType: string | null | undefined,
   refId: number | null | undefined,
   journalEntryId: number,
   linkedDocId: number | null,
+  manpower = false,
 ): string {
   const docId = linkedDocId || refId || null;
+  const invoicePath = manpower ? "/manpower/customers/tax-invoices" : "/invoices";
+  const vendorPath = manpower ? "/manpower/suppliers/vendor-invoices" : "/vendor-invoices";
   switch (refType) {
     case "invoice":
-      return docId ? `/invoices/${docId}` : `/accounting/journal-entries/${journalEntryId}`;
+      return docId ? `${invoicePath}/${docId}` : `/accounting/journal-entries/${journalEntryId}`;
     case "invoice_payment":
-      return linkedDocId ? `/invoices/${linkedDocId}` : `/accounting/journal-entries/${journalEntryId}`;
+      return linkedDocId ? `${invoicePath}/${linkedDocId}` : `/accounting/journal-entries/${journalEntryId}`;
     case "vendor_invoice":
-      return docId ? `/vendor-invoices/${docId}` : `/accounting/journal-entries/${journalEntryId}`;
+      return docId ? `${vendorPath}/${docId}` : `/accounting/journal-entries/${journalEntryId}`;
     case "vendor_payment":
-      return linkedDocId ? `/vendor-invoices/${linkedDocId}` : `/accounting/journal-entries/${journalEntryId}`;
+      return linkedDocId ? `${vendorPath}/${linkedDocId}` : `/accounting/journal-entries/${journalEntryId}`;
     case "expense":
       return docId ? `/accounting/expenses/${docId}` : `/accounting/journal-entries/${journalEntryId}`;
     case "income_record":
@@ -1344,6 +1390,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
 
   const companyId = req.session.companyId!;
   try {
+    await repointManpowerVendorCostOfServices(companyId);
     await backfillAssetDepreciationJEs(companyId, req.session.userId!);
   } catch (err) {
     req.log?.warn?.({ err }, "general ledger depreciation backfill failed");
@@ -1401,6 +1448,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
     ))
@@ -1432,6 +1480,32 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   ]);
   const invoiceIdByPayment = new Map(invoicePayments.map(p => [p.id, p.invoiceId]));
   const vendorInvoiceIdByPayment = new Map(vendorPayments.map(p => [p.id, p.vendorInvoiceId]));
+  const glInvoiceIds = [...new Set(entries.flatMap((entry) => {
+    if (entry.refType === "invoice" && entry.refId) return [entry.refId];
+    if (entry.refType === "invoice_payment" && entry.refId) {
+      const invoiceId = invoiceIdByPayment.get(entry.refId);
+      return invoiceId ? [invoiceId] : [];
+    }
+    return [];
+  }))];
+  const glVendorIds = [...new Set(entries.flatMap((entry) => {
+    if (entry.refType === "vendor_invoice" && entry.refId) return [entry.refId];
+    if (entry.refType === "vendor_payment" && entry.refId) {
+      const vendorInvoiceId = vendorInvoiceIdByPayment.get(entry.refId);
+      return vendorInvoiceId ? [vendorInvoiceId] : [];
+    }
+    return [];
+  }))];
+  const [glInvoices, glVendorInvoices] = await Promise.all([
+    glInvoiceIds.length
+      ? db.select({ id: invoicesTable.id, manpowerDetails: invoicesTable.manpowerDetails }).from(invoicesTable).where(inArray(invoicesTable.id, glInvoiceIds))
+      : Promise.resolve([] as { id: number; manpowerDetails: unknown }[]),
+    glVendorIds.length
+      ? db.select({ id: vendorInvoicesTable.id, manpowerDetails: vendorInvoicesTable.manpowerDetails }).from(vendorInvoicesTable).where(inArray(vendorInvoicesTable.id, glVendorIds))
+      : Promise.resolve([] as { id: number; manpowerDetails: unknown }[]),
+  ]);
+  const manpowerInvoiceIds = new Set(glInvoices.filter((row) => row.manpowerDetails).map((row) => row.id));
+  const manpowerVendorIds = new Set(glVendorInvoices.filter((row) => row.manpowerDetails).map((row) => row.id));
 
   let running = openingBalance;
   const transactions = entries
@@ -1446,6 +1520,12 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
         : e.refType === "vendor_payment"
           ? vendorInvoiceIdByPayment.get(e.refId as number) ?? null
           : null;
+      const sourceDocId = linkedDocId || ((e.refType === "invoice" || e.refType === "vendor_invoice") ? e.refId : null);
+      const manpower = sourceDocId != null && (
+        (e.refType === "invoice" || e.refType === "invoice_payment")
+          ? manpowerInvoiceIds.has(sourceDocId)
+          : manpowerVendorIds.has(sourceDocId)
+      );
       return {
         journalEntryId: e.entryId,
         date: e.entryDate,
@@ -1456,7 +1536,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
         balance: +running.toFixed(2),
         refType: e.refType,
         refId: e.refId,
-        sourcePath: ledgerSourcePath(e.refType, e.refId, e.entryId, linkedDocId),
+        sourcePath: ledgerSourcePath(e.refType, e.refId, e.entryId, linkedDocId, manpower),
       };
     });
 
@@ -1500,6 +1580,7 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
       sql`${journalEntriesTable.entryDate} <= ${toDate}`,
     ));
@@ -1795,6 +1876,7 @@ router.get("/iaf", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
       sql`${journalEntriesTable.entryDate} <= ${toDate}`,
     ))

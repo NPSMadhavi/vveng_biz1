@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,7 @@ import { ChevronDown, Download, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { generateTrialBalance_PDF } from "@/lib/pdf";
 import { AccountActivityPanel } from "@/pages/accounting/account-activity";
+import { useFollowWorkingYear } from "@/components/financial-year-controls";
 
 interface TBRow {
   id: number; code: string; name: string; type: string; subType: string | null;
@@ -72,6 +73,11 @@ export default function TrialBalancePage() {
   const [boot] = useState(initialTbFilters);
   const [from, setFrom] = useState(boot.from);
   const [to, setTo]     = useState(boot.to);
+  const urlLocked = useRef(new URLSearchParams(window.location.search).has("from") || new URLSearchParams(window.location.search).has("to"));
+  useFollowWorkingYear(urlLocked.current, (nextFrom, nextTo) => {
+    setFrom(nextFrom);
+    setTo(nextTo);
+  });
   const [pdfLoading, setPdfLoading] = useState(false);
   const [expanded, setExpanded] = useState<Record<number, boolean>>(
     boot.expand ? { [boot.expand]: true } : {},

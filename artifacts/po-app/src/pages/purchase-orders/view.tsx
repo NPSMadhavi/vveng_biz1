@@ -1,5 +1,6 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useGetPurchaseOrder, getGetPurchaseOrderQueryKey, getListPurchaseOrdersQueryKey, useDeletePurchaseOrder } from "@workspace/api-client-react";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,7 +73,7 @@ function buildPurchaseOrderCopyPrefill(doc: any) {
 export default function PurchaseOrderView() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { setLocation } = useDocNav();
   const { toast } = useToast();
   const { selectedCompany, canManage } = useAuth();
   const [previewOpen, setPreviewOpen] = useState(false);

@@ -53,6 +53,7 @@ function isHostOwnedKey(key: string): boolean {
 const PREFER_FILE_KEYS = new Set([
   "VEDA_GATEWAY_URL",
   "VEDA_API_KEY",
+  "VEDA_MODEL",
   "AI_INTEGRATIONS_OPENAI_API_KEY",
   "AI_INTEGRATIONS_OPENAI_BASE_URL",
   "OPENAI_API_KEY",
@@ -113,12 +114,14 @@ export function loadLocalEnv(): void {
     }
 
     if (PREFER_FILE_KEYS.has(key)) {
+      const fileWins = key === "VEDA_GATEWAY_URL" || key === "VEDA_API_KEY" || key === "VEDA_MODEL";
       if (
+        fileWins ||
         current === undefined ||
         current === "" ||
         looksLikeSecretPlaceholder(current)
       ) {
-        process.env[key] = value;
+        if (value !== "") process.env[key] = value;
       }
       continue;
     }
@@ -128,6 +131,15 @@ export function loadLocalEnv(): void {
     if (current === undefined || current === "") {
       process.env[key] = value;
     }
+  }
+
+  // The .env at the app root is the file that is edited. It wins over
+  // artifacts/api-server/.env for the Qwen gateway.
+  const repoRootEnv = path.resolve(here, "..", "..", "..", ".env");
+  const rootParsed = parseEnvFile(repoRootEnv);
+  for (const key of ["VEDA_GATEWAY_URL", "VEDA_API_KEY", "VEDA_MODEL"] as const) {
+    const value = rootParsed[key];
+    if (value) process.env[key] = value;
   }
 }
 

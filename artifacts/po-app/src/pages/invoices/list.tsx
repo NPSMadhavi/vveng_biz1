@@ -1,11 +1,12 @@
-import { useState, useMemo } from "react";
+import { useDocNav } from "@/lib/doc-nav";
+import { useEffect, useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useListInvoices, getListInvoicesQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link, useLocation, useSearch } from "wouter";
+import { Link, useSearch } from "wouter";
 import { Search, Plus, ArrowRight, MailCheck, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,6 +21,8 @@ import { generateInvoice_PDF } from "@/lib/pdf";
 import { generateInvoicePdfSmart } from "@/lib/report-designer/api";
 import { deliveryOrderAttachmentNames, deliveryOrderPdfAttachments, deliveryOrdersForInvoice, markDeliveryOrdersSent } from "@/lib/invoice-delivery-order-email";
 import { formatCurrency as formatCurrencySafe } from "@/lib/currencies";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 
 function SentToCell({ emailSentTo }: { emailSentTo?: string | null }) {
   if (!emailSentTo) return <span className="text-muted-foreground">—</span>;
@@ -61,11 +64,15 @@ type FilterMode = "all" | "q1" | "q2" | "q3" | "q4" | "custom";
 const ACTIVE_STATUSES = new Set(["confirmed", "sent", "draft", "partial"]);
 
 export default function InvoiceList() {
-  const [, setLocation] = useLocation();
+  const { setLocation, href } = useDocNav();
   const searchString = useSearch();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const workingYear = useWorkingYearBounds();
   const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  useEffect(() => {
+    if (workingYear.active) setFilterYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const { selectedCompany } = useAuth();
@@ -82,11 +89,15 @@ export default function InvoiceList() {
     query: { queryKey: getListInvoicesQueryKey() },
   });
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
 
   // Apply date filter using issueDate (falls back to createdAt)
   const filteredByDate = useMemo(() => {
-    if (filterMode === "all") return docs;
+    if (filterMode === "all") {
+      return workingYear.active
+        ? docs.filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to))
+        : docs;
+    }
     if (filterMode === "custom") {
       if (!customFrom && !customTo) return docs;
       return docs.filter(d => {
@@ -105,7 +116,7 @@ export default function InvoiceList() {
       const date = new Date(dateStr);
       return date.getFullYear() === filterYear && months.includes(date.getMonth());
     });
-  }, [docs, filterMode, filterYear, customFrom, customTo]);
+  }, [docs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   // Search on top of date filter
   const getPartyName = (d: (typeof docs)[number]) => d.customerName || "";
@@ -182,7 +193,7 @@ export default function InvoiceList() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Invoices</h1>
         </div>
-        <Link href="/invoices/new">
+        <Link href={href("/invoices/new")}>
           <Button className="gap-2"><Plus className="h-4 w-4" />Create Invoice</Button>
         </Link>
       </div>
@@ -194,7 +205,7 @@ export default function InvoiceList() {
             onClick={() => setFilterMode("all")}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${filterMode === "all" ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
-            All Time
+            {workingYear.active ? workingYear.label : "All Time"}
           </button>
           {QUARTERS.map((q) => {
             const key = q.label.toLowerCase() as FilterMode;

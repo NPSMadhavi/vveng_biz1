@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, purchaseOrdersTable, usersTable, vendorsTable, vendorInvoicesTable, customersTable } from "@workspace/db";
+import { db, pool, purchaseOrdersTable, usersTable, vendorsTable, vendorInvoicesTable, customersTable } from "@workspace/db";
 import { eq, desc, and, inArray, ilike } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { autoCreateGrn, autoDeleteGrnIfEmpty, mergePurchaseOrderStockMeta, postPurchaseOrderWarehouseStock } from "./grn.js";
@@ -17,6 +17,15 @@ declare module "express-session" {
 }
 
 const router: IRouter = Router();
+
+async function ensureManpowerDetails(): Promise<void> {
+  try {
+    await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manpower_details jsonb`);
+  } catch (error: any) {
+    if (error?.code === "42P01") return;
+    throw error;
+  }
+}
 
 function requireAuth(req: any, res: any): boolean {
   if (!req.session.userId) { res.status(401).json({ error: "Not authenticated" }); return false; }
@@ -105,6 +114,7 @@ router.get("/purchase-orders/stats", async (req, res): Promise<void> => {
 });
 
 router.get("/purchase-orders", async (req, res): Promise<void> => {
+  await ensureManpowerDetails();
   if (!requireAuth(req, res)) return;
   const companyId = req.session.companyId;
   const userId = req.session.userId!;
@@ -150,20 +160,21 @@ router.get("/purchase-orders", async (req, res): Promise<void> => {
 
 router.post("/purchase-orders", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   if (!requireCompany(req, res)) return;
   const companyId = req.session.companyId!;
 
   const {
     vendorName, vendorAddress, vendorContact, vendorContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, quoteRefNo, notes,
-    items, tax = 0, currency, isPrivate, status, customerId, customerPoRef,
+    items, tax = 0, currency, isPrivate, status, customerId, customerPoRef, manpowerDetails,
   } = req.body;
 
   if (!vendorName || !items) { res.status(400).json({ error: "vendorName and items are required" }); return; }
 
   const itemsWithAmounts = (items as any[]).map((item: any) => ({
     ...item,
-    amount: (item.qty || 0) * (item.unitPrice || 0),
+    amount: item.type === "section" || item.isFoc ? 0 : (Number(item.qty) || 0) * (Number(item.unitPrice) || 0) * (1 - (Number(item.discount) || 0) / 100),
   }));
 
   const subtotal = itemsWithAmounts.reduce((sum: number, item: any) => sum + (item.amount || 0), 0);
@@ -183,6 +194,7 @@ router.post("/purchase-orders", async (req, res): Promise<void> => {
     isPrivate: isPrivate === true,
     customerId: customerId ? Number(customerId) : null,
     customerPoRef: customerPoRef || null,
+    manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null,
     subtotal: subtotal.toFixed(2),
     tax: taxAmount.toFixed(2),
     totalAmount: totalAmount.toFixed(2),
@@ -251,6 +263,7 @@ router.get("/purchase-orders/:id", async (req, res): Promise<void> => {
 
 router.put("/purchase-orders/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res)) return;
+  await ensureManpowerDetails();
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
@@ -260,12 +273,12 @@ router.put("/purchase-orders/:id", async (req, res): Promise<void> => {
   const {
     vendorName, vendorAddress, vendorContact, vendorContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, quoteRefNo, notes,
-    items, tax = 0, currency, isPrivate, status, customerId, customerPoRef,
+    items, tax = 0, currency, isPrivate, status, customerId, customerPoRef, manpowerDetails,
   } = req.body;
 
   const itemsWithAmounts = (items as any[]).map((item: any) => ({
     ...item,
-    amount: (item.qty || 0) * (item.unitPrice || 0),
+    amount: item.type === "section" || item.isFoc ? 0 : (Number(item.qty) || 0) * (Number(item.unitPrice) || 0) * (1 - (Number(item.discount) || 0) / 100),
   }));
 
   // Keep cube-picked stockItemId/warehouseId if the edit payload omitted them.
@@ -284,6 +297,7 @@ router.put("/purchase-orders/:id", async (req, res): Promise<void> => {
     totalAmount: totalAmount.toFixed(2),
     customerId: customerId ? Number(customerId) : null,
     customerPoRef: customerPoRef || null,
+    manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing[0].manpowerDetails ?? null,
   };
   if (currency !== undefined) updateData.currency = currency;
   if (isPrivate !== undefined) updateData.isPrivate = isPrivate === true;

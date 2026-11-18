@@ -44,9 +44,11 @@ type DateRangeContextValue = {
   applyThisYear: () => void;
   /** Align to an active FY from the API (caller supplies the year). */
   applyFinancialYear: (fy: FinancialYearSummary) => void;
+  /** Switch the working year. A closed year stays selected across reloads. */
+  selectFinancialYear: (fy: FinancialYearSummary) => void;
   /**
-   * If the persisted/custom range exactly matches an inactive FY and an active FY exists,
-   * switch to the active FY once. Closed-year ranges are preserved.
+   * If the restored range sits in a closed or inactive year and the user did not
+   * explicitly choose that closed year, move to the active financial year.
    */
   reconcileAgainstFinancialYears: (
     years: FinancialYearSummary[],
@@ -59,6 +61,33 @@ const DateRangeContext = createContext<DateRangeContextValue | null>(null);
 /** v3: company-scoped; legacy v2 blobs without companyId are ignored. */
 const STORAGE_KEY = "bizone.dashboard.dateRange.v3";
 const LEGACY_STORAGE_KEY = "bizone.dashboard.dateRange.v2";
+const PIN_KEY = "bizone.dashboard.fyPin.v1";
+
+function loadPinnedFyId(companyId: number | null): number | null {
+  if (companyId == null) return null;
+  try {
+    const raw = localStorage.getItem(PIN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { companyId?: number; fyId?: number };
+    if (parsed.companyId !== companyId || typeof parsed.fyId !== "number") return null;
+    return parsed.fyId;
+  } catch {
+    return null;
+  }
+}
+
+function savePinnedFyId(companyId: number | null, fyId: number | null) {
+  if (companyId == null) return;
+  try {
+    if (fyId == null) {
+      localStorage.removeItem(PIN_KEY);
+      return;
+    }
+    localStorage.setItem(PIN_KEY, JSON.stringify({ companyId, fyId }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 function loadStoredForCompany(companyId: number | null): StoredDateRange | null {
   if (companyId == null) return null;
@@ -112,22 +141,24 @@ function rangeExactlyMatchesFy(
 }
 
 /**
- * Decide whether a restored custom/this-year range should be replaced by the active FY.
- * Never auto-activates years — only reads status from the API payload.
+ * After a year is closed, the working range must be the open year.
+ * A closed year stays only when the user selected it from the year menu.
  */
 export function shouldReplaceInactiveRange(
   rangeFrom: Date,
   rangeTo: Date,
   years: FinancialYearSummary[],
   active: FinancialYearSummary | null,
+  pinnedFyId: number | null = null,
 ): FinancialYearSummary | null {
   if (!active || active.status !== "active") return null;
-  const exact = years.find((y) => rangeExactlyMatchesFy(rangeFrom, rangeTo, y));
-  if (!exact) return null;
-  if (exact.status === "closed") return null; // intentional closed-year review
-  if (exact.status === "active") return null;
-  if (exact.status === "inactive") return active;
-  return null;
+  const mid = toInputDate(new Date((rangeFrom.getTime() + rangeTo.getTime()) / 2));
+  const covering = years.find((y) => y.startDate <= mid && y.endDate >= mid)
+    || years.find((y) => rangeExactlyMatchesFy(rangeFrom, rangeTo, y));
+  if (!covering || covering.status === "active") return null;
+  if (covering.status === "closed" && covering.id != null && pinnedFyId === covering.id) return null;
+  if (rangeExactlyMatchesFy(rangeFrom, rangeTo, active)) return null;
+  return active;
 }
 
 export function DateRangeProvider({ children }: { children: ReactNode }) {
@@ -190,13 +221,22 @@ export function DateRangeProvider({ children }: { children: ReactNode }) {
     [applyDateRange],
   );
 
+  const selectFinancialYear = useCallback(
+    (fy: FinancialYearSummary) => {
+      savePinnedFyId(companyIdRef.current, fy.id ?? null);
+      applyFinancialYear(fy);
+    },
+    [applyFinancialYear],
+  );
+
   const reconcileAgainstFinancialYears = useCallback(
     (years: FinancialYearSummary[], active: FinancialYearSummary | null) => {
       if (!allowInactiveReconcileRef.current) return;
-      const key = `${companyIdRef.current}:${toInputDate(rangeFrom)}:${toInputDate(rangeTo)}:${active?.startDate ?? ""}`;
+      const pinnedFyId = loadPinnedFyId(companyIdRef.current);
+      const key = `${companyIdRef.current}:${toInputDate(rangeFrom)}:${toInputDate(rangeTo)}:${active?.startDate ?? ""}:${pinnedFyId ?? ""}`;
       if (reconciledKeyRef.current === key) return;
       reconciledKeyRef.current = key;
-      const replacement = shouldReplaceInactiveRange(rangeFrom, rangeTo, years, active);
+      const replacement = shouldReplaceInactiveRange(rangeFrom, rangeTo, years, active, pinnedFyId);
       if (!replacement) return;
       const from = fromInputDate(replacement.startDate);
       const to = fromInputDate(replacement.endDate);
@@ -221,6 +261,7 @@ export function DateRangeProvider({ children }: { children: ReactNode }) {
       applyDateRange,
       applyThisYear,
       applyFinancialYear,
+      selectFinancialYear,
       reconcileAgainstFinancialYears,
     }),
     [
@@ -230,6 +271,7 @@ export function DateRangeProvider({ children }: { children: ReactNode }) {
       applyDateRange,
       applyThisYear,
       applyFinancialYear,
+      selectFinancialYear,
       reconcileAgainstFinancialYears,
     ],
   );
@@ -266,6 +308,11 @@ export function useDateRangeOptional(): DateRangeContextValue {
     applyDateRange,
     applyThisYear: () => applyDateRange("this-year", startOfYear(), endOfYear()),
     applyFinancialYear: (fy) => {
+      const from = fromInputDate(fy.startDate);
+      const to = fromInputDate(fy.endDate);
+      if (from && to) applyDateRange("custom", from, to);
+    },
+    selectFinancialYear: (fy) => {
       const from = fromInputDate(fy.startDate);
       const to = fromInputDate(fy.endDate);
       if (from && to) applyDateRange("custom", from, to);

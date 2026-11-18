@@ -1,13 +1,22 @@
 import { Router } from "express";
-import { db, vendorsTable } from "@workspace/db";
+import { db, pool, vendorsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 
 const router = Router();
+
+async function ensureUsageType(): Promise<void> {
+  await pool.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS usage_type text NOT NULL DEFAULT 'general'`);
+}
+
+function parseUsageType(value: unknown): "general" | "manpower" {
+  return value === "manpower" ? "manpower" : "general";
+}
 
 router.get("/vendors", async (req, res) => {
   const companyId = (req.session as any).companyId;
   if (!companyId) return res.status(400).json({ error: "No company selected" });
   try {
+    await ensureUsageType();
     const vendors = await db.select().from(vendorsTable)
       .where(eq(vendorsTable.companyId, companyId))
       .orderBy(desc(vendorsTable.createdAt), desc(vendorsTable.id));
@@ -26,6 +35,7 @@ router.post("/vendors", async (req, res) => {
   if (!name) return res.status(400).json({ error: "Name is required" });
 
   try {
+    await ensureUsageType();
     const [vendor] = await db.insert(vendorsTable).values({
       companyId,
       name,
@@ -38,6 +48,7 @@ router.post("/vendors", async (req, res) => {
       currency: currency || null,
       gstRegistered: Boolean(gstRegistered),
       gstNo: gstRegistered && gstNo ? gstNo : null,
+      usageType: parseUsageType(req.body.usageType),
     }).returning();
     return res.status(201).json(vendor);
   } catch {
@@ -54,6 +65,7 @@ router.put("/vendors/:id", async (req, res) => {
   const { name, address, postalCode, country, contactPerson, contactEmail, phone, gstRegistered, gstNo, isActive, currency } = req.body;
 
   try {
+    await ensureUsageType();
     const [vendor] = await db.update(vendorsTable).set({
       name,
       address: address || null,
@@ -65,6 +77,7 @@ router.put("/vendors/:id", async (req, res) => {
       currency: currency || null,
       gstRegistered: Boolean(gstRegistered),
       gstNo: gstRegistered && gstNo ? gstNo : null,
+      usageType: req.body.usageType === undefined ? undefined : parseUsageType(req.body.usageType),
       isActive: isActive !== undefined ? Boolean(isActive) : undefined,
     }).where(and(eq(vendorsTable.id, id), eq(vendorsTable.companyId, companyId))).returning();
 

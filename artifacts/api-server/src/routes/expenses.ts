@@ -208,6 +208,8 @@ router.put("/expenses/:id", async (req, res): Promise<void> => {
       .where(and(eq(expensesTable.id, id), eq(expensesTable.companyId, req.session.companyId!)))
       .limit(1);
     if (!existing) { res.status(404).json({ error: "Expense not found" }); return; }
+    const existingPeriod = await assertPeriodWritable(existing.companyId, String(existing.expenseDate || "").slice(0, 10));
+    if (!existingPeriod.ok) { res.status(existingPeriod.status).json({ error: existingPeriod.error }); return; }
     if (existing.status === "confirmed" && !req.session.isAdmin && req.session.userRole !== "accountant") {
       res.status(403).json({ error: "Only admins and accountants can edit confirmed expenses." }); return;
     }
@@ -218,6 +220,11 @@ router.put("/expenses/:id", async (req, res): Promise<void> => {
       currency, paymentMethod, receiptData, receiptMimeType,
       vendorId, projectId, voucherId, notes, status,
     } = req.body;
+
+    if (expenseDate) {
+      const nextPeriod = await assertPeriodWritable(existing.companyId, String(expenseDate).slice(0, 10));
+      if (!nextPeriod.ok) { res.status(nextPeriod.status).json({ error: nextPeriod.error }); return; }
+    }
 
     const updateData: any = { updatedAt: new Date() };
     if (expenseDate !== undefined) updateData.expenseDate = expenseDate;
@@ -269,6 +276,8 @@ router.delete("/expenses/:id", async (req, res): Promise<void> => {
       .where(and(eq(expensesTable.id, id), eq(expensesTable.companyId, req.session.companyId!)))
       .limit(1);
     if (!existing) { res.status(404).json({ error: "Expense not found" }); return; }
+    const deletePeriod = await assertPeriodWritable(existing.companyId, String(existing.expenseDate || "").slice(0, 10));
+    if (!deletePeriod.ok) { res.status(deletePeriod.status).json({ error: deletePeriod.error }); return; }
 
     if (!req.session.isAdmin && req.session.userRole !== "accountant") {
       res.status(403).json({ error: "Only admins and accountants can delete expenses." }); return;

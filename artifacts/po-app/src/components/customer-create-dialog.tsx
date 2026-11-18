@@ -18,6 +18,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useGetSettings } from "@workspace/api-client-react";
 import { CURRENCIES } from "@/lib/currencies";
 import { isInternationalParty } from "@/lib/countries";
+import { PartyUsageField } from "@/components/party-usage-field";
 
 interface Customer {
   id: number;
@@ -35,6 +36,7 @@ interface Customer {
   creditLimit: string | null;
   shipToAddress: string | null;
   quotationTerms: string | null;
+  perHourAmount?: string | null;
   isActive: boolean;
 }
 
@@ -42,7 +44,7 @@ const blank = () => ({
   name: "", address: "", postalCode: "", country: "Singapore", contactPerson: "",
   contactEmail: "", phone: "", currency: "SGD", gstRegistered: false, gstNo: "",
   creditLimitEnabled: false, creditLimit: "",
-  shipToAddress: "", quotationTerms: "", isActive: true,
+  shipToAddress: "", quotationTerms: "", perHourAmount: "", usageType: "general" as const, isActive: true, employeeIds: [] as number[],
 });
 
 interface Props {
@@ -50,6 +52,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   onSuccess: (customer: Customer) => void;
   initialName?: string;
+  usageType?: "general" | "manpower";
 }
 
 async function createCustomer(data: Partial<Customer>): Promise<Customer> {
@@ -63,7 +66,7 @@ async function createCustomer(data: Partial<Customer>): Promise<Customer> {
   return res.json();
 }
 
-export function CustomerCreateDialog({ open, onOpenChange, onSuccess, initialName = "" }: Props) {
+export function CustomerCreateDialog({ open, onOpenChange, onSuccess, initialName = "", usageType = "general" }: Props) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { selectedCompany } = useAuth();
@@ -76,7 +79,7 @@ export function CustomerCreateDialog({ open, onOpenChange, onSuccess, initialNam
   const [currencyOpen, setCurrencyOpen] = useState(false);
 
   const handleOpenChange = (v: boolean) => {
-    if (v) setForm({ ...blank(), name: initialName });
+    if (v) setForm({ ...blank(), name: initialName, usageType });
     onOpenChange(v);
   };
 
@@ -97,7 +100,18 @@ export function CustomerCreateDialog({ open, onOpenChange, onSuccess, initialNam
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent
+          className="max-w-lg max-h-[90vh] overflow-y-auto"
+          onPointerDownOutside={(event) => {
+            if (document.body.hasAttribute("data-employee-picker-open")) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (document.body.hasAttribute("data-employee-picker-open")) event.preventDefault();
+          }}
+          onFocusOutside={(event) => {
+            if (document.body.hasAttribute("data-employee-picker-open")) event.preventDefault();
+          }}
+        >
         <DialogHeader>
           <DialogTitle>New Customer</DialogTitle>
         </DialogHeader>
@@ -225,6 +239,10 @@ export function CustomerCreateDialog({ open, onOpenChange, onSuccess, initialNam
             })()}
           </div>
 
+          <PartyUsageField
+            value={form.usageType === "manpower" ? "manpower" : "general"}
+            onChange={(usageType) => setField("usageType", usageType)}
+          />
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Contact Person</Label>
@@ -234,6 +252,19 @@ export function CustomerCreateDialog({ open, onOpenChange, onSuccess, initialNam
               <Label>Contact Email</Label>
               <Input type="email" value={form.contactEmail} onChange={e => setField("contactEmail", e.target.value)} />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Per hour amount</Label>
+            <Input
+              type="text"
+              inputMode="decimal"
+              value={form.perHourAmount || ""}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === "" || /^\d*\.?\d*$/.test(value)) setField("perHourAmount", value);
+              }}
+            />
           </div>
 
           {isInternational ? (

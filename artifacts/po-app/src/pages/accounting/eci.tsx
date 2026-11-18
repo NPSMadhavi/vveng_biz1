@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -73,7 +74,12 @@ function ExpRow({ label, value, onChange }: { label: string; value: string; onCh
 export default function EciPage() {
   const { selectedCompany } = useAuth();
   const qc = useQueryClient();
+  const workingYear = useWorkingYearBounds();
+  const yearChoices = Array.from(new Set([workingYear.year, ...YEARS])).sort((a, b) => b - a);
   const [year, setYear] = useState(CUR_YEAR);
+  useEffect(() => {
+    if (workingYear.active) setYear(workingYear.year);
+  }, [workingYear.active, workingYear.year]);
 
   // Form state
   const [revenue,       setRevenue]       = useState("");
@@ -177,7 +183,7 @@ export default function EciPage() {
         </div>
         {/* FY selector */}
         <div className="flex gap-1.5 flex-wrap justify-end">
-          {YEARS.map(y => (
+          {yearChoices.map(y => (
             <button key={y} onClick={() => setYear(y)}
               className={cn("px-3 py-1.5 rounded-full text-sm font-medium border transition-colors",
                 year === y ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted")}>

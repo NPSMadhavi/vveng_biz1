@@ -1,5 +1,6 @@
+import { useDocNav } from "@/lib/doc-nav";
 import { useState } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +19,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Plus, Trash2, Building, Calendar, CreditCard, FileText, Pencil } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Building, Calendar, CreditCard, FileText, Pencil, Eye } from "lucide-react";
+import { PdfPreviewModal } from "@/components/pdf-preview-modal";
+import { generateVendorInvoice_PDF } from "@/lib/pdf";
 import { fmtDate } from "@/lib/utils";
 import { readReturnTo, withReturnTo } from "@/lib/return-to";
 import { useToast } from "@/hooks/use-toast";
@@ -53,16 +56,35 @@ const PAYMENT_METHODS_LIST = [
 export default function VendorInvoiceView() {
   const { id: paramsId } = useParams<{ id: string }>();
   const id = Number(paramsId);
-  const [, setLocation] = useLocation();
+  const { setLocation } = useDocNav();
   const { toast } = useToast();
-  const { isAdmin, canManage } = useAuth();
+  const { isAdmin, canManage, selectedCompany } = useAuth();
   const queryClient = useQueryClient();
 
-  useVedaFormActions({
-    onSave: () => {
-      if (!id) return;
-      setLocation(withReturnTo(`/vendor-invoices/${id}/edit`));
+  const { data: journalEntries = [] } = useQuery({
+    queryKey: ["document-journal", "vendor_invoice", id],
+    enabled: Number.isFinite(id) && id > 0,
+    queryFn: async () => {
+      const res = await fetch(`/api/journal-entries?refType=vendor_invoice&refId=${id}`, { credentials: "include" });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data as { id: number }[] : [];
     },
+  });
+  const journalEntryId = journalEntries[0]?.id;
+
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  const openEdit = () => {
+    if (!id) return;
+    setPreviewOpen(false);
+    setLocation(withReturnTo(`/vendor-invoices/${id}/edit`));
+  };
+
+  useVedaFormActions({
+    onSave: openEdit,
+    onPreview: () => setPreviewOpen(true),
+    onDownload: () => setPreviewOpen(true),
   });
 
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -232,7 +254,16 @@ export default function VendorInvoiceView() {
           <p className="text-muted-foreground mt-1">Recorded on {fmtDate(pi.createdAt)}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button variant="outline" onClick={() => setLocation(withReturnTo(`/vendor-invoices/${id}/edit`))} className="gap-2">
+          <Button type="button" variant="outline" className="gap-2" onClick={() => setPreviewOpen(true)}>
+            <Eye className="h-4 w-4" />
+            Preview
+          </Button>
+          {journalEntryId && (
+            <Button type="button" variant="outline" onClick={() => setLocation(`/accounting/journal-entries/${journalEntryId}`)}>
+              Journal Entry
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={openEdit} className="gap-2">
             <Pencil className="h-4 w-4" />
             Edit
           </Button>
@@ -654,6 +685,27 @@ export default function VendorInvoiceView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PdfPreviewModal
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        title={`Vendor Invoice ${pi.piNumber}`}
+        generatePdf={(opts) => generateVendorInvoice_PDF(pi, selectedCompany, opts)}
+        pdfFilename={`${pi.piNumber}.pdf`}
+        defaultEmailTo={pi.vendorEmail || pi.vendorContactEmail || ""}
+        defaultEmailSubject={`Vendor Invoice ${pi.piNumber}`}
+        defaultEmailBody={`Dear ${pi.vendorContact || "Sir/Madam"},\n\nPlease find attached Vendor Invoice ${pi.piNumber}.\n\nThank you.`}
+        docInfo={{
+          docType: "Vendor Invoice",
+          docNumber: pi.piNumber,
+          customerName: pi.vendorName || "",
+          companyName: (selectedCompany as any)?.name || "RSV Infotech",
+          items: (Array.isArray(pi.items) ? pi.items : []).filter((i: any) => i.type !== "section"),
+          currency: pi.currency || "SGD",
+          totalAmount: Number(pi.totalAmount) || 0,
+        }}
+        onEdit={openEdit}
+      />
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
 import { useGetSettings } from "@workspace/api-client-react";
 import { CURRENCIES } from "@/lib/currencies";
+import { PartyUsageField } from "@/components/party-usage-field";
 import { isInternationalParty } from "@/lib/countries";
 
 interface Vendor {
@@ -35,7 +36,7 @@ interface Vendor {
 
 const blank = () => ({
   name: "", address: "", postalCode: "", country: "Singapore", contactPerson: "",
-  contactEmail: "", phone: "", currency: "SGD", gstRegistered: false, gstNo: "", isActive: true,
+  contactEmail: "", phone: "", currency: "SGD", gstRegistered: false, gstNo: "", usageType: "general" as const, isActive: true,
 });
 
 interface Props {
@@ -43,6 +44,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   onSuccess: (vendor: Vendor) => void;
   initialName?: string;
+  usageType?: "general" | "manpower";
 }
 
 async function createVendor(data: Partial<Vendor>): Promise<Vendor> {
@@ -56,7 +58,7 @@ async function createVendor(data: Partial<Vendor>): Promise<Vendor> {
   return res.json();
 }
 
-export function VendorCreateDialog({ open, onOpenChange, onSuccess, initialName = "" }: Props) {
+export function VendorCreateDialog({ open, onOpenChange, onSuccess, initialName = "", usageType = "general" }: Props) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { selectedCompany } = useAuth();
@@ -70,7 +72,7 @@ export function VendorCreateDialog({ open, onOpenChange, onSuccess, initialName 
 
   // Reset form when dialog opens
   const handleOpenChange = (v: boolean) => {
-    if (v) setForm({ ...blank(), name: initialName });
+    if (v) setForm({ ...blank(), name: initialName, usageType });
     onOpenChange(v);
   };
 
@@ -176,6 +178,10 @@ export function VendorCreateDialog({ open, onOpenChange, onSuccess, initialName 
             </div>
           </div>
 
+          <PartyUsageField
+            value={form.usageType === "manpower" ? "manpower" : "general"}
+            onChange={(usageType) => setField("usageType", usageType)}
+          />
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Contact Person</Label>

@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useParams, useLocation } from "wouter";
+import { useParams } from "wouter";
+import { useDocNav } from "@/lib/doc-nav";
 import { ContactAutocomplete } from "@/components/contact-autocomplete";
 import { useGetQuotation, useUpdateQuotation, getGetQuotationQueryKey, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -31,8 +32,10 @@ import type { FieldErrors } from "react-hook-form";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
 import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField } from "@/components/issue-date-field";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
 import { DirectoryPickerButton } from "@/components/directory-picker-button";
+import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard } from "@/components/manpower-quotation-fields";
 import { CurrencyMismatchDialog } from "@/components/currency-mismatch-dialog";
 import { generateQuotation_PDF } from "@/lib/pdf";
 import { useAuth } from "@/contexts/auth-context";
@@ -75,12 +78,14 @@ const schema = z.object({
   discountAmount: z.coerce.number().min(0).default(0),
   isPrivate: z.boolean().default(false),
   items: z.array(itemSchema).min(1),
+  manpowerDetails: manpowerDetailsSchema.optional(),
 });
 
 export default function QuotationEdit() {
   const params = useParams();
   const id = Number(params.id);
-  const [, setLocation] = useLocation();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany } = useAuth();
   const queryClient = useQueryClient();
@@ -114,6 +119,7 @@ export default function QuotationEdit() {
       currency: "SGD", status: "draft", tax: 9,
       discountAmount: 0,
       isPrivate: false,
+      manpowerDetails: { ...emptyManpowerDetails },
       items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
     },
   });
@@ -152,6 +158,7 @@ export default function QuotationEdit() {
         tax: derivedTaxPct,
         discountAmount: Number((doc as any).discountAmount) || 0,
         isPrivate: (doc as any).isPrivate ?? false,
+        manpowerDetails: { ...emptyManpowerDetails, ...((doc as any).manpowerDetails || {}) },
         items: items.length > 0 ? items.map((i: any) => (
           i.type === "section"
             ? { type: "section" as const, sectionLabel: i.sectionLabel || "", sectionAlign: i.sectionAlign || "left", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }
@@ -249,7 +256,7 @@ export default function QuotationEdit() {
     setIsSubmitting(true);
     const filledItems = values.items.filter(i => {
       if ((i as any).type === "section") return plainText((i as any).sectionLabel) !== "";
-      return plainText(i.partNumber) !== "" || plainText(i.description) !== "";
+      return plainText(i.partNumber) !== "" || plainText(i.description) !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
     if (realItems.length === 0) {
@@ -274,7 +281,9 @@ export default function QuotationEdit() {
         : openPreview
           ? "confirmed"
           : values.status;
-    updateMutation.mutate({ id, data: { ...values, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount } as any }, {
+    const payload: any = { ...values, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount };
+    if (!isManpower) delete payload.manpowerDetails;
+    updateMutation.mutate({ id, data: payload }, {
       onSuccess: async (saved: any) => {
         if (saved?.status) form.setValue("status", saved.status as any);
         await queryClient.refetchQueries({ queryKey: getGetQuotationQueryKey(id) });
@@ -427,6 +436,7 @@ export default function QuotationEdit() {
                             form.setValue("customerAddress", c.fullAddress);
                             form.setValue("customerContact", c.contactPerson);
                             form.setValue("customerContactEmail", c.contactEmail);
+                            if (c.phone) form.setValue("manpowerDetails.phone", c.phone);
                             if (c.effectiveGstRate !== undefined) { form.setValue("tax", c.effectiveGstRate); setIsOverseas(!!c.isOverseas); }
                             if (c.currency) {
                               form.setValue("currency", c.currency);
@@ -474,6 +484,7 @@ export default function QuotationEdit() {
                     </FormItem>
                   )} />
                 </div>
+                {isManpower ? <ManpowerCustomerExtraFields control={form.control} /> : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <FormField control={form.control} name="customerAddress" render={({ field }) => (
                     <FormItem>
@@ -483,6 +494,7 @@ export default function QuotationEdit() {
                     </FormItem>
                   )} />
                 </div>
+                )}
               </CardContent>
             </Card>
 
@@ -491,7 +503,7 @@ export default function QuotationEdit() {
                 <CardTitle className="text-lg">Quotation Details</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${isManpower ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
@@ -504,11 +516,10 @@ export default function QuotationEdit() {
                     <FormItem>
                       <FormLabel>Quotation Valid Upto <span className="text-destructive">*</span></FormLabel>
                       <FormControl>
-                        <Input
-                          type="date"
+                        <SyncBridgeDatePicker
                           value={field.value || ""}
-                          min={form.watch("issueDate") || undefined}
                           onChange={field.onChange}
+                          placeholder="DD/MM/YYYY"
                         />
                       </FormControl>
                       <p className="text-[11px] text-muted-foreground">
@@ -517,6 +528,29 @@ export default function QuotationEdit() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {isManpower && (
+                    <>
+                      <FormField control={form.control} name="manpowerDetails.serviceStartDate" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Service Start Date</FormLabel>
+                          <FormControl>
+                            <SyncBridgeDatePicker value={field.value || ""} onChange={field.onChange} placeholder="DD/MM/YYYY" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                      <FormField control={form.control} name="manpowerDetails.serviceEndDate" render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Service End Date</FormLabel>
+                          <FormControl>
+                            <SyncBridgeDatePicker value={field.value || ""} onChange={field.onChange} placeholder="DD/MM/YYYY" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )} />
+                    </>
+                  )}
+                  {!isManpower && (
                   <FormField control={form.control} name="paymentTerms" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Payment Terms</FormLabel>
@@ -524,6 +558,8 @@ export default function QuotationEdit() {
                       <FormMessage />
                     </FormItem>
                   )} />
+                  )}
+                  {!isManpower && (
                   <FormField control={form.control} name="status" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Status</FormLabel>
@@ -538,8 +574,18 @@ export default function QuotationEdit() {
                       </select>
                     </FormItem>
                   )} />
+                  )}
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className={`grid grid-cols-1 gap-4 ${isManpower ? "md:grid-cols-[minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,1.8fr)]" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
+                  {isManpower && (
+                  <FormField control={form.control} name="paymentTerms" render={({ field }) => (
+                    <FormItem className="min-w-0">
+                      <FormLabel>Payment Terms</FormLabel>
+                      <FormControl><PaymentTermsSelect value={field.value} onChange={field.onChange} /></FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  )}
                   <FormField control={form.control} name="isPrivate" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Private Document</FormLabel>
@@ -551,15 +597,33 @@ export default function QuotationEdit() {
                     </FormItem>
                   )} />
                   <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                    <FormItem className="sm:col-span-2">
+                    <FormItem className={isManpower ? "min-w-0" : "sm:col-span-2"}>
                       <FormLabel>Delivery Date</FormLabel>
-                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} /></FormControl>
+                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap={isManpower} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
+                  {isManpower && (
+                  <FormField control={form.control} name="status" render={({ field }) => (
+                    <FormItem className="md:col-span-3">
+                      <FormLabel>Status</FormLabel>
+                      <select
+                        value={field.value}
+                        onChange={e => field.onChange(e.target.value)}
+                        className="flex h-10 w-full max-w-xs rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-1 text-sm shadow-none focus:outline-none focus:ring-1 focus:ring-ring"
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="confirmed">Confirmed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </FormItem>
+                  )} />
+                  )}
                 </div>
               </CardContent>
             </Card>
+
+            {isManpower && <ManpowerRequirementsCard control={form.control} />}
           </div>
 
           <Card className="overflow-hidden">
@@ -567,12 +631,14 @@ export default function QuotationEdit() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
-                    <Plus className="h-3 w-3" /> Add Item
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                    <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
+                  {!isManpower && (
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
+                  )}
                   <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7 text-primary border-primary/40 hover:bg-primary/5" onClick={() => setImportQtOpen(true)}>
                     <Copy className="h-3 w-3" /> Import from Quotation
                   </Button>
@@ -599,6 +665,7 @@ export default function QuotationEdit() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
+              {isManpower ? <ManpowerLineItemsTable control={form.control} fields={fields} remove={remove} currency={currency} formatAmount={fmt} /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/30 text-xs text-muted-foreground uppercase border-b">
@@ -749,6 +816,7 @@ export default function QuotationEdit() {
                   </tbody>
                 </table>
               </div>
+              )}
               <div className="border-t bg-muted/20 p-4 flex justify-end">
                 <div className="w-72 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>

@@ -44,3 +44,41 @@ export const openai = new Proxy({} as OpenAI, {
     return typeof value === "function" ? value.bind(client) : value;
   },
 });
+
+let _assistant: OpenAI | null = null;
+let _assistantKey = "";
+let _assistantBase = "";
+
+export type AssistantChat = {
+  client: OpenAI;
+  model: string;
+  /** True when chat is sent to the Ubuntu Qwen gateway instead of OpenAI. */
+  gateway: boolean;
+};
+
+/**
+ * BizOne assistant chat. When VEDA_GATEWAY_URL is set, calls the Qwen
+ * gateway with VEDA_API_KEY (OpenAI-compatible /v1). Voice stays on OpenAI.
+ */
+export function getAssistantChat(): AssistantChat {
+  const gateway = (process.env.VEDA_GATEWAY_URL || "").trim().replace(/\/$/, "");
+  if (gateway) {
+    const apiKey = (process.env.VEDA_API_KEY || "").trim();
+    if (!apiKey) {
+      throw new Error("VEDA_API_KEY is not set");
+    }
+    const baseURL = /\/v1$/i.test(gateway) ? gateway : `${gateway}/v1`;
+    if (!_assistant || _assistantKey !== apiKey || _assistantBase !== baseURL) {
+      _assistant = new OpenAI({
+        apiKey,
+        baseURL,
+        defaultHeaders: { "X-API-Key": apiKey },
+      });
+      _assistantKey = apiKey;
+      _assistantBase = baseURL;
+    }
+    const model = (process.env.VEDA_MODEL || "").trim() || "qwen";
+    return { client: _assistant, model, gateway: true };
+  }
+  return { client: getClient(), model: "gpt-4o", gateway: false };
+}

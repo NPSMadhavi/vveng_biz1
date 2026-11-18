@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { isoInBounds } from "@/lib/date-range";
+import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -103,7 +105,9 @@ export default function IncomeList() {
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  const workingYear = useWorkingYearBounds();
   const filtered = useMemo(() => records.filter(r => {
+    if (workingYear.active && !isoInBounds(r.incomeDate || r.createdAt, workingYear.from, workingYear.to)) return false;
     if (statusFilter !== "all" && r.status !== statusFilter) return false;
     if (categoryFilter !== "all" && r.category !== categoryFilter) return false;
     if (search) {
@@ -111,7 +115,7 @@ export default function IncomeList() {
       return r.payerName.toLowerCase().includes(q) || r.description.toLowerCase().includes(q);
     }
     return true;
-  }), [records, statusFilter, categoryFilter, search]);
+  }), [records, statusFilter, categoryFilter, search, workingYear.active, workingYear.from, workingYear.to]);
 
   const ledgerOptions = useMemo(() => {
     const seen = new Set<string>();

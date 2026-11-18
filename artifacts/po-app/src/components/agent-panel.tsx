@@ -1301,6 +1301,14 @@ async function guidedAskNext(
   return { answer: cleaned };
 }
 
+function safeAssistantMessage(error: unknown): string {
+  const msg = error instanceof Error ? error.message.trim() : "";
+  if (!msg || msg.length > 240 || /node_modules|at\s+\S+\s+\(/.test(msg)) {
+    return "Something went wrong — please try again.";
+  }
+  return msg;
+}
+
 // ── SSE stream ────────────────────────────────────────────────────────────────
 async function streamChat(
   messages: { role: string; content: string }[],
@@ -2471,7 +2479,7 @@ export function AgentPanel() {
           if (e.name === "AbortError" || ctrl.signal.aborted) break;
           const msg = /company/i.test(String(e?.message || ""))
             ? "Please select a company first, then try again."
-            : "I ran into an issue. Please try again.";
+            : safeAssistantMessage(e);
           setConvText(msg);
           await speak(msg);
           break;
@@ -2777,7 +2785,7 @@ export function AgentPanel() {
           setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true } : m));
           if (fromVoice && full) await speak(full.slice(0, isGuidedCreatePath(quickPath) ? 120 : 600));
         } catch (e: any) {
-          if (e.name !== "AbortError") setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true, content: "Something went wrong — please try again." } : m));
+          if (e.name !== "AbortError") setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true, content: safeAssistantMessage(e) } : m));
         } finally {
           setThinking(false);
           abortRef.current = null;
@@ -2886,7 +2894,7 @@ export function AgentPanel() {
       else { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true } : m)); }
       if (fromVoice && full) await speak(full.slice(0, isGuidedCreatePath(agentPath) ? 120 : 600));
     } catch (e: any) {
-      if (e.name !== "AbortError") setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, content: "Something went wrong — please try again." } : m));
+      if (e.name !== "AbortError") setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, content: safeAssistantMessage(e) } : m));
     } finally { setThinking(false); abortRef.current = null; }
   }, [thinking, history, memory, handleNavigate, resolveAgentPath, dispatchFill, messages, selectedCompany?.id, handleDocumentUpdated, handleVedaEmail, navigate]);
 
