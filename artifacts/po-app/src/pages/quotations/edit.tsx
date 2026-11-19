@@ -35,7 +35,7 @@ import { IssueDateField } from "@/components/issue-date-field";
 import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
 import { DirectoryPickerButton } from "@/components/directory-picker-button";
-import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard } from "@/components/manpower-quotation-fields";
+import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard, quotationLineAmount } from "@/components/manpower-quotation-fields";
 import { CurrencyMismatchDialog } from "@/components/currency-mismatch-dialog";
 import { generateQuotation_PDF } from "@/lib/pdf";
 import { useAuth } from "@/contexts/auth-context";
@@ -50,6 +50,7 @@ const itemSchema = z.object({
   description: z.coerce.string(),
   qty: z.coerce.number().min(0).default(1),
   uom: z.string().default(""),
+  hours: z.string().optional().default(""),
   unitPrice: z.coerce.number().min(0),
   discount: z.coerce.number().min(0).max(100).default(0),
   isFoc: z.boolean().default(false),
@@ -162,7 +163,7 @@ export default function QuotationEdit() {
         items: items.length > 0 ? items.map((i: any) => (
           i.type === "section"
             ? { type: "section" as const, sectionLabel: i.sectionLabel || "", sectionAlign: i.sectionAlign || "left", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }
-            : { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: String(i.partNumber ?? ""), description: String(i.description ?? ""), qty: Number(i.qty) || 1, uom: i.uom || "", unitPrice: Number(i.unitPrice) || 0, discount: Number(i.discount) || 0, isFoc: !!(i as any).isFoc, itemImage: (i as any).itemImage || "" }
+            : { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: String(i.partNumber ?? ""), description: String(i.description ?? ""), qty: Number(i.qty) || 1, hours: String(i.hours ?? ""), uom: i.uom || "", unitPrice: Number(i.unitPrice) || 0, discount: Number(i.discount) || 0, isFoc: !!(i as any).isFoc, itemImage: (i as any).itemImage || "" }
         )) : [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
       });
       // Derive discount percentage from saved flat amount so the % input is
@@ -171,14 +172,14 @@ export default function QuotationEdit() {
       if (docDiscAmt > 0) {
         const subtot = items
           .filter((i: any) => i.type !== "section")
-          .reduce((s: number, i: any) => s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0) * (1 - (Number(i.discount) || 0) / 100), 0);
+          .reduce((s: number, i: any) => s + quotationLineAmount(i), 0);
         if (subtot > 0) setDiscountPct(parseFloat((docDiscAmt / subtot * 100).toFixed(2)));
       }
       initialized.current = true;
     }
   }, [doc]);
 
-  const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
+  const { fields, append, remove, insert, update } = useFieldArray({ control: form.control, name: "items" });
   const updateMutation = useUpdateQuotation();
   const items = form.watch("items");
   const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
@@ -217,7 +218,7 @@ export default function QuotationEdit() {
   const rawCurrency = form.watch("currency") || "SGD";
   const currency = normalizeCurrency(rawCurrency);
 
-  const subtotal = items.reduce((s, i) => ((i as any).type === "section" || (i as any).isFoc) ? s : s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0) * (1 - (Number(i.discount) || 0) / 100), 0);
+  const subtotal = items.reduce((s, i) => ((i as any).type === "section" || (i as any).isFoc) ? s : s + quotationLineAmount(i), 0);
   const discountAmt = form.watch("discountAmount") || 0;
   const taxableAmount = subtotal - discountAmt;
   const [discountPct, setDiscountPct] = useState(0);
@@ -272,7 +273,7 @@ export default function QuotationEdit() {
       if ((i as any).type === "section") return { type: "section", sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left" };
       const disc = Number(i.discount) || 0;
       const partNumber = plainText(i.partNumber);
-      return { ...i, partNumber, discount: disc, isFoc: !!(i as any).isFoc, amount: (i.qty * i.unitPrice * (1 - disc / 100)).toFixed(2) };
+      return { ...i, partNumber, discount: disc, isFoc: !!(i as any).isFoc, amount: quotationLineAmount({ ...i, discount: disc }).toFixed(2) };
     });
     const isCancelled = values.status === "cancelled";
     const today = new Date().toISOString().split("T")[0];
@@ -627,7 +628,20 @@ export default function QuotationEdit() {
               </CardContent>
             </Card>
 
-            {isManpower && <ManpowerRequirementsCard control={form.control} />}
+            {isManpower && (
+              <ManpowerRequirementsCard
+                control={form.control}
+                onAddLine={(line) => {
+                  const current = form.getValues("items") || [];
+                  const onlyBlank = current.length === 1
+                    && (current[0] as any)?.type !== "section"
+                    && !String(current[0]?.description || "").trim()
+                    && !String(current[0]?.partNumber || "").trim();
+                  if (onlyBlank) update(0, { ...current[0], ...line });
+                  else append(line);
+                }}
+              />
+            )}
           </div>
 
           <Card className="overflow-hidden">
