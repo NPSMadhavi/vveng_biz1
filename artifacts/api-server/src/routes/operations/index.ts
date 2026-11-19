@@ -25,6 +25,7 @@ import {
   postAssetDisposalJE,
   reverseAssetDisposalJE,
 } from "../../lib/asset-disposal-auto-post.js";
+import { removeJournalEntriesForRef } from "../../lib/journal-entry-remove.js";
 import { backfillAssetDepreciationJEs } from "../../lib/asset-depreciation-auto-post.js";
 
 declare module "express-session" {
@@ -895,9 +896,17 @@ router.delete("/assets/:id", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id == null) { res.status(400).json({ error: "Invalid id" }); return; }
   try {
+    const companyId = req.session.companyId!;
+    await removeJournalEntriesForRef({ companyId, refType: "asset_depreciation", refId: id });
+    await removeJournalEntriesForRef({
+      companyId,
+      refType: "asset_disposal",
+      refId: id,
+      alsoRefTypes: ["asset_disposal_reversal"],
+    });
     const result = await pool.query(
       `DELETE FROM assets WHERE id = $1 AND company_id = $2 RETURNING id`,
-      [id, req.session.companyId],
+      [id, companyId],
     );
     if (!result.rows[0]) { res.status(404).json({ error: "Asset not found" }); return; }
     res.json({ success: true });
@@ -1780,6 +1789,9 @@ async function deletePayrollConfigForCompany(
     await client.query("BEGIN");
 
     if (force && relatedRecords.rows.length > 0) {
+      for (const row of relatedRecords.rows) {
+        await removeJournalEntriesForRef({ companyId, refType: "payroll", refId: row.id });
+      }
       await client.query(
         `DELETE FROM payroll_records
          WHERE company_id = $1

@@ -159,6 +159,7 @@ export async function backfillInvoiceJEs(
              i.total_amount, i.subtotal, i.discount_amount, i.tax
       FROM invoices i
       WHERE i.company_id = ${companyId}
+        AND COALESCE(i.is_deleted, 0) = 0
         AND i.status NOT IN ('draft','void')
         AND NOT EXISTS (
           SELECT 1 FROM journal_entries je

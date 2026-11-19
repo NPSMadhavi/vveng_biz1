@@ -15,6 +15,7 @@ import { ensureExpensesSchema } from "./expenses.js";
 import { sanitizeErrorMessage, logServerError } from "../lib/safe-error.js";
 import { logger } from "../lib/logger.js";
 import { softDeleteById } from "../lib/soft-delete.js";
+import { hideJournalsForDeletedSources } from "../lib/journal-entry-remove.js";
 
 const router: IRouter = Router();
 
@@ -185,6 +186,7 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
     return;
   }
   try {
+    await hideJournalsForDeletedSources(companyId);
     await repointManpowerVendorCostOfServices(companyId);
     await backfillVendorInvoiceJEs(companyId, req.session.userId!);
     await backfillExpenseJEs(companyId, req.session.userId!);
@@ -410,6 +412,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
 
   await ensureAccountsSeeded(companyId);
   try {
+    await hideJournalsForDeletedSources(companyId);
     await backfillAssetDepreciationJEs(companyId, req.session.userId!);
   } catch (err) {
     req.log?.warn?.({ err }, "trial balance depreciation backfill failed");
@@ -512,6 +515,7 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
   const fromDate  = (req.query.from as string) || null;
   const toDate    = (req.query.to   as string) || null;
 
+  await hideJournalsForDeletedSources(companyId).catch(() => undefined);
   await repointManpowerVendorCostOfServices(companyId);
   await ensureAccountsSeeded(companyId);
 
@@ -631,6 +635,7 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
     .from(invoicesTable)
     .where(and(
       eq(invoicesTable.companyId, companyId),
+      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
       sql`${invoicesTable.status} NOT IN ('draft', 'void')`,
       sql`CAST(${invoicesTable.tax} AS numeric) > 0`,
       ...(fromDate ? [sql`${invoicesTable.issueDate} >= ${fromDate}`] : []),
@@ -662,6 +667,7 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
     .from(incomeRecordsTable)
     .where(and(
       eq(incomeRecordsTable.companyId, companyId),
+      sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`,
       eq(incomeRecordsTable.status, "confirmed"),
       ...(fromDate ? [sql`${incomeRecordsTable.incomeDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${incomeRecordsTable.incomeDate} <= ${toDate}`]   : []),
@@ -711,6 +717,7 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
     .from(vendorInvoicesTable)
     .where(and(
       eq(vendorInvoicesTable.companyId, companyId),
+      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
       ...(fromDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`] : []),
       ...(toDate   ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`]   : []),
     ));
@@ -749,6 +756,7 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
     .from(expensesTable)
     .where(and(
       eq(expensesTable.companyId,    companyId),
+      sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
       eq(expensesTable.status,       "confirmed"),
       eq(expensesTable.gstClaimable, true),
       ...(fromDate ? [sql`${expensesTable.expenseDate} >= ${fromDate}`] : []),
@@ -875,6 +883,7 @@ router.get("/ar-aging", async (req, res): Promise<void> => {
   .from(invoicesTable)
   .where(and(
     eq(invoicesTable.companyId, companyId),
+    sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
     sql`${invoicesTable.status} NOT IN ('draft', 'void', 'paid')`,
     sql`COALESCE(${invoicesTable.issueDate}, to_char(${invoicesTable.createdAt}::date, 'YYYY-MM-DD')) <= ${asOf}`,
   ));
@@ -938,6 +947,7 @@ router.get("/ap-aging", async (req, res): Promise<void> => {
   .from(vendorInvoicesTable)
   .where(and(
     eq(vendorInvoicesTable.companyId, companyId),
+    sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
     sql`${vendorInvoicesTable.status} != 'paid'`,
     sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}::date, 'YYYY-MM-DD')) <= ${asOf}`,
   ));
@@ -984,6 +994,7 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   const asOf = (req.query.asOf as string) || new Date().toISOString().split("T")[0];
 
   try {
+    await hideJournalsForDeletedSources(companyId);
     await backfillVendorInvoiceJEs(companyId, req.session.userId!);
     await backfillExpenseJEs(companyId, req.session.userId!);
     await backfillPayrollJEs(companyId, req.session.userId!);
@@ -1163,7 +1174,7 @@ router.get("/customer-statement", async (req, res): Promise<void> => {
     status:       invoicesTable.status,
   })
     .from(invoicesTable)
-    .where(and(eq(invoicesTable.companyId, companyId), ...dateFilter))
+    .where(and(eq(invoicesTable.companyId, companyId), sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`, ...dateFilter))
     .orderBy(asc(invoicesTable.customerName));
 
   const allIds = allRows.map(r => r.id);
@@ -1197,6 +1208,7 @@ router.get("/customer-statement", async (req, res): Promise<void> => {
   .from(invoicesTable)
   .where(and(
     eq(invoicesTable.companyId, companyId),
+    sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
     sql`LOWER(${invoicesTable.customerName}) = LOWER(${customer})`,
     ...dateFilter,
   ))
@@ -1255,6 +1267,7 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
     .from(invoicesTable)
     .where(and(
       eq(invoicesTable.companyId, companyId),
+      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
       sql`${invoicesTable.status} NOT IN ('draft','void')`,
       sql`CAST(${invoicesTable.tax} AS numeric) > 0`,
       ...(fDate ? [sql`${invoicesTable.issueDate} >= ${fDate}`] : []),
@@ -1279,6 +1292,7 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
       .from(vendorInvoicesTable)
       .where(and(
         eq(vendorInvoicesTable.companyId, companyId),
+        sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
         ...(fDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) >= ${fDate}`] : []),
         ...(tDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${tDate}`] : []),
       ));
@@ -1367,7 +1381,7 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
     status:      vendorInvoicesTable.status,
   })
     .from(vendorInvoicesTable)
-    .where(and(eq(vendorInvoicesTable.companyId, companyId), ...dateFilter))
+    .where(and(eq(vendorInvoicesTable.companyId, companyId), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`, ...dateFilter))
     .orderBy(asc(vendorInvoicesTable.vendorName));
 
   // Build summary grouped by vendor
@@ -1396,6 +1410,7 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
     .from(vendorInvoicesTable)
     .where(and(
       eq(vendorInvoicesTable.companyId, companyId),
+      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
       sql`LOWER(${vendorInvoicesTable.vendorName}) = LOWER(${vendor})`,
       ...dateFilter,
     ))
@@ -1487,6 +1502,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
 
   const companyId = req.session.companyId!;
   try {
+    await hideJournalsForDeletedSources(companyId);
     await repointManpowerVendorCostOfServices(companyId);
     await backfillAssetDepreciationJEs(companyId, req.session.userId!);
   } catch (err) {
@@ -1813,6 +1829,7 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
   }
 
   await ensureAccountsSeeded(companyId);
+  await hideJournalsForDeletedSources(companyId).catch(() => undefined);
 
   const accounts = await db.select()
     .from(accountsTable)
@@ -1992,6 +2009,7 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
       status:         invoicesTable.status,
     }).from(invoicesTable).where(and(
       eq(invoicesTable.companyId, companyId),
+      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
       sql`${invoicesTable.status} NOT IN ('draft','void')`,
       sql`COALESCE(${invoicesTable.issueDate}, to_char(${invoicesTable.createdAt},'YYYY-MM-DD')) >= ${fromDate}`,
       sql`COALESCE(${invoicesTable.issueDate}, to_char(${invoicesTable.createdAt},'YYYY-MM-DD')) <= ${toDate}`,
@@ -2020,6 +2038,7 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
       currency:    vendorInvoicesTable.currency,
     }).from(vendorInvoicesTable).where(and(
       eq(vendorInvoicesTable.companyId, companyId),
+      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) >= ${fromDate}`,
       sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${toDate}`,
     )).orderBy(asc(vendorInvoicesTable.piDate), asc(vendorInvoicesTable.id));
@@ -2099,6 +2118,7 @@ router.get("/iaf", async (req, res): Promise<void> => {
   const invoices = await db.select().from(invoicesTable)
     .where(and(
       eq(invoicesTable.companyId, companyId),
+      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
       sql`${invoicesTable.status} NOT IN ('draft','void')`,
       sql`COALESCE(${invoicesTable.issueDate}, TO_CHAR(${invoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`,
       sql`COALESCE(${invoicesTable.issueDate}, TO_CHAR(${invoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`,
@@ -2109,6 +2129,7 @@ router.get("/iaf", async (req, res): Promise<void> => {
   const vendorInvs = await db.select().from(vendorInvoicesTable)
     .where(and(
       eq(vendorInvoicesTable.companyId, companyId),
+      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${vendorInvoicesTable.piDate}, TO_CHAR(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`,
       sql`COALESCE(${vendorInvoicesTable.piDate}, TO_CHAR(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`,
     ))

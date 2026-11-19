@@ -114,7 +114,7 @@ const OPS_ALL: AppModuleKey[] = ["assets", "licenses", "employees", "payroll"];
 export const BUSINESS_TYPE_MODULES: Record<BusinessTypeId, readonly AppModuleKey[]> = {
   trading: [
     "dashboard",
-    ...OPS_ASSETS_LICENSES,
+    ...OPS_ALL,
     ...TRANSACTIONS,
     ...INVENTORY,
     ...DIRECTORY,

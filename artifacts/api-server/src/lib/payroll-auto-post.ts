@@ -93,12 +93,12 @@ export async function postPayrollCreatedJE(
       eq(journalEntriesTable.companyId, payroll.companyId),
       eq(journalEntriesTable.refType, "payroll"),
       eq(journalEntriesTable.refId, payroll.id),
-      eq(journalEntriesTable.status, "posted"),
     ))
     .limit(1);
 
   if (existing) {
-    // Already posted for this payroll record
+    // A journal already exists for this payroll, including one removed by delete.
+    // Do not post a second copy — that is what made deleted payroll reappear.
     return;
   }
 
@@ -245,7 +245,6 @@ export async function backfillPayrollJEs(
          WHERE je.company_id = pr.company_id
            AND je.ref_type = 'payroll'
            AND je.ref_id = pr.id
-           AND je.status = 'posted'
        )`,
     [companyId],
   ).catch(() => ({ rows: [] }));

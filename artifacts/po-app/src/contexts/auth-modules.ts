@@ -77,7 +77,7 @@ const OPS_ALL: AppModule[] = ["assets", "licenses", "employees", "payroll"];
 export const BUSINESS_TYPE_MODULES: Record<BusinessTypeId, readonly AppModule[]> = {
   trading: [
     "dashboard",
-    ...OPS_ASSETS_LICENSES,
+    ...OPS_ALL,
     ...TRANSACTIONS,
     ...INVENTORY,
     ...DIRECTORY,
