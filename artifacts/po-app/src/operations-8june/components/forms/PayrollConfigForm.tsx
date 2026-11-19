@@ -750,6 +750,16 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
         period.month === month
       );
     });
+    if (!editData?.id && saved) {
+      setMonthError("Already month completed");
+      toast({
+        title: "Already month completed",
+        description: "This month's payroll is already created. Use Edit to change it.",
+        variant: "destructive",
+      });
+    } else {
+      setMonthError("");
+    }
     if (hourly) {
       const savedAllowances = (saved?.allowances || record?.allowances || {}) as Record<string, unknown>;
       if (savedAllowances.hourlyNormalHours != null && savedAllowances.hourlyNormalHours !== "") {
@@ -1123,8 +1133,19 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
         if (targets.length === 0) {
           throw new Error("No active employees with a valid date of birth.");
         }
+        const pendingTargets = targets.filter((employee) => {
+          const months = listEmployeePayrollMonths(payrollRecords, Number(employee.id));
+          return !months.some(
+            (row) => row.year === selectedPayrollYear && row.month === selectedPayrollMonth,
+          );
+        });
+        if (pendingTargets.length === 0) {
+          throw new Error(
+            "Already month completed. This month's payroll is already created for all selected employees. Use Edit to change it.",
+          );
+        }
         const created = [];
-        for (const employee of targets) {
+        for (const employee of pendingTargets) {
           const dob = new Date(employee.dateOfBirth);
           const age = calculateAge(dob);
           const citizenship = mapNationalityToCitizenship(employee.nationality);
@@ -1225,6 +1246,19 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   const onSubmit = (data: PayrollConfigFormData) => {
     if (selectedPayrollMonth == null) {
       setMonthError("Month is required");
+      return;
+    }
+    const monthAlreadyCreated = savedMonths.some(
+      (row) => row.year === selectedPayrollYear && row.month === selectedPayrollMonth,
+    );
+    // Create Payroll: once a month is saved, only Edit is allowed.
+    if (!editData?.id && monthAlreadyCreated) {
+      setMonthError("Already month completed");
+      toast({
+        title: "Already month completed",
+        description: "This month's payroll is already created. Use Edit to change it.",
+        variant: "destructive",
+      });
       return;
     }
     setMonthError("");
@@ -1543,46 +1577,125 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       CPF Preview
                     </h3>
                     <div className="space-y-1.5 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Basic Salary</span>
-                        <span className="font-medium text-[#111827]">
-                          {formatCurrency(isHourlyEmployee ? normalPay : baseSalary)}
-                        </span>
-                      </div>
-                      {overtimePay > 0 ? (
-                        <div className="flex justify-between">
-                          <span className="text-[#6B7280]">Overtime</span>
-                          <span className="font-medium text-[#111827]">{formatCurrency(overtimePay)}</span>
-                        </div>
-                      ) : null}
-                      <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
-                        <span className="font-semibold text-[#111827]">Gross Salary</span>
-                        <span className="font-semibold text-[#111827]">{formatCurrency(grossSalary)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">CPF Rate (Employee)</span>
-                        <span className="text-[#111827]">{formatRatePercent(employeeCpfRate)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">CPF Amount (Employee)</span>
-                        <span className="font-medium text-[#DC2626]">-{formatCurrency(employeeCpf)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">CPF Rate (Employer)</span>
-                        <span className="text-[#111827]">{formatRatePercent(employerCpfRate)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">CPF Amount (Employer)</span>
-                        <span className="text-[#111827]">{formatCurrency(employerCpf)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#6B7280]">Total CPF</span>
-                        <span className="text-[#111827]">{formatCurrency(totalCpf)}</span>
-                      </div>
-                      <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
-                        <span className="text-base font-semibold text-[#111827]">Net Salary</span>
-                        <span className="text-lg font-bold text-[#16A34A]">{formatCurrency(netSalary)}</span>
-                      </div>
+                      {isHourlyEmployee ? (
+                        <>
+                          {/* Hourly: compact preview (Basic → Gross → CPF → Net) */}
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Basic Salary</span>
+                            <span className="font-medium text-[#111827]">
+                              {formatCurrency(normalPay)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
+                            <span className="font-semibold text-[#111827]">Gross Salary</span>
+                            <span className="font-semibold text-[#111827]">{formatCurrency(grossSalary)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Rate (Employee)</span>
+                            <span className="text-[#111827]">{formatRatePercent(employeeCpfRate)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Amount (Employee)</span>
+                            <span className="font-medium text-[#DC2626]">-{formatCurrency(employeeCpf)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Rate (Employer)</span>
+                            <span className="text-[#111827]">{formatRatePercent(employerCpfRate)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Amount (Employer)</span>
+                            <span className="text-[#111827]">{formatCurrency(employerCpf)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Total CPF</span>
+                            <span className="text-[#111827]">{formatCurrency(totalCpf)}</span>
+                          </div>
+                          <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
+                            <span className="text-base font-semibold text-[#111827]">Net Salary</span>
+                            <span className="text-lg font-bold text-[#16A34A]">{formatCurrency(netSalary)}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* Monthly: full salary breakdown */}
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Basic Salary</span>
+                            <span className="font-medium text-[#111827]">
+                              {formatCurrency(baseSalary)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Basic salary for CPF</span>
+                            <span className="font-medium text-[#111827]">
+                              {formatCurrency(basicSalaryForCpf)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Allowances</span>
+                            <span className="font-medium text-[#111827]">
+                              {formatCurrency(allowancesTotal)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Bonus</span>
+                            <span className="font-medium text-[#111827]">
+                              {formatCurrency(bonusTotal)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Other Income / Benefits</span>
+                            <span className="font-medium text-[#111827]">
+                              {formatCurrency(otherIncomeTotal)}
+                            </span>
+                          </div>
+                          {overtimePay > 0 ? (
+                            <div className="flex justify-between">
+                              <span className="text-[#6B7280]">Overtime</span>
+                              <span className="font-medium text-[#111827]">{formatCurrency(overtimePay)}</span>
+                            </div>
+                          ) : null}
+                          <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
+                            <span className="font-semibold text-[#111827]">Gross Salary</span>
+                            <span className="font-semibold text-[#111827]">{formatCurrency(grossSalary)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Deductions</span>
+                            <span className="font-medium text-[#DC2626]">
+                              -{formatCurrency(deductionsTotal)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Rate (Employee)</span>
+                            <span className="text-[#111827]">{formatRatePercent(employeeCpfRate)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Amount (Employee)</span>
+                            <span className="font-medium text-[#DC2626]">-{formatCurrency(employeeCpf)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Rate (Employer)</span>
+                            <span className="text-[#111827]">{formatRatePercent(employerCpfRate)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">CPF Amount (Employer)</span>
+                            <span className="text-[#111827]">{formatCurrency(employerCpf)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Total CPF</span>
+                            <span className="text-[#111827]">{formatCurrency(totalCpf)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#6B7280]">Total Deductions</span>
+                            <span className="font-medium text-[#DC2626]">
+                              -{formatCurrency(deductionsTotal + employeeCpf)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between border-t border-[#E5E7EB] pt-1.5">
+                            <span className="text-base font-semibold text-[#111827]">Net Salary</span>
+                            <span className="text-lg font-bold text-[#16A34A]">{formatCurrency(netSalary)}</span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

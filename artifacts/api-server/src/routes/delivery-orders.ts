@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
-import { db, deliveryOrdersTable, usersTable, customersTable, stockSerialsTable, stockItemsTable, salesOrdersTable } from "@workspace/db";
-import { eq, desc, inArray, ilike, and } from "drizzle-orm";
+import { db, pool, deliveryOrdersTable, usersTable, customersTable, stockSerialsTable, stockItemsTable, salesOrdersTable } from "@workspace/db";
+import { eq, desc, inArray, ilike, and, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -71,8 +72,8 @@ router.get("/delivery-orders/stats", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
 
   const all = companyId
-    ? await db.select().from(deliveryOrdersTable).where(eq(deliveryOrdersTable.companyId, companyId))
-    : await db.select().from(deliveryOrdersTable);
+    ? await db.select().from(deliveryOrdersTable).where(and(eq(deliveryOrdersTable.companyId, companyId), sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`))
+    : await db.select().from(deliveryOrdersTable).where(sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`);
   const visible = visibilityFilter(all, userId, isAdmin, isExternal);
   res.json({
     total: visible.length,
@@ -91,8 +92,8 @@ router.get("/delivery-orders", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
 
   const docs = companyId
-    ? await db.select().from(deliveryOrdersTable).where(eq(deliveryOrdersTable.companyId, companyId)).orderBy(desc(deliveryOrdersTable.createdAt))
-    : await db.select().from(deliveryOrdersTable).orderBy(desc(deliveryOrdersTable.createdAt));
+    ? await db.select().from(deliveryOrdersTable).where(and(eq(deliveryOrdersTable.companyId, companyId), sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`)).orderBy(desc(deliveryOrdersTable.createdAt))
+    : await db.select().from(deliveryOrdersTable).where(sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`).orderBy(desc(deliveryOrdersTable.createdAt));
   const visible = visibilityFilter(docs, userId, isAdmin, isExternal).map(parseDoc);
   res.json(await withUsernames(visible));
 });
@@ -123,7 +124,7 @@ router.get("/delivery-orders/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [doc] = await db.select().from(deliveryOrdersTable).where(eq(deliveryOrdersTable.id, id));
+  const [doc] = await db.select().from(deliveryOrdersTable).where(and(eq(deliveryOrdersTable.id, id), sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Delivery order not found" }); return; }
 
   const userId = req.session.userId!;
@@ -220,7 +221,15 @@ router.delete("/delivery-orders/:id", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
   if (!isAdmin) { res.status(403).json({ error: "Only administrators can delete delivery orders" }); return; }
   const id = parseInt(req.params.id);
-  const [deleted] = await db.delete(deliveryOrdersTable).where(eq(deliveryOrdersTable.id, id)).returning();
+  const companyId = req.session.companyId;
+  const [existing] = await db.select().from(deliveryOrdersTable).where(and(
+    eq(deliveryOrdersTable.id, id),
+    sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`,
+    ...(companyId ? [eq(deliveryOrdersTable.companyId, companyId)] : []),
+  ));
+  if (!existing) { res.status(404).json({ error: "Delivery order not found" }); return; }
+  const ok = await softDeleteById(pool, "delivery_orders", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Delivery order not found" }); return; }
   try {
     await db.update(salesOrdersTable).set({
       doId: null,
@@ -229,7 +238,7 @@ router.delete("/delivery-orders/:id", async (req, res): Promise<void> => {
   } catch (linkErr: any) {
     req.log?.warn?.({ err: linkErr }, "Failed to clear sales_order do link after DO delete");
   }
-  logAudit({ req, action: "delete", entityType: "delivery_order", entityId: id, entityLabel: deleted?.doNumber });
+  logAudit({ req, action: "delete", entityType: "delivery_order", entityId: id, entityLabel: existing.doNumber });
   res.json({ success: true });
 });
 

@@ -244,7 +244,8 @@ export default function ProfitLoss() {
 
   function openDoc(path: string, expandCode: string) {
     const returnTo = encodeURIComponent(plReturnPath(applied.from, applied.to, expandCode));
-    setLocation(`${path}?returnTo=${returnTo}`);
+    const join = path.includes("?") ? "&" : "?";
+    setLocation(`${path}${join}returnTo=${returnTo}`);
   }
 
   const loading = isLoading || isFetching;
@@ -571,7 +572,11 @@ export default function ProfitLoss() {
                                     const totalCost = gross + emprCpf;
                                     const payStatus = payrollPaymentStatus(r, expenses, payrollKind);
                                     return (
-                                      <tr key={r.id} className="hover:bg-slate-50 transition-colors">
+                                      <tr
+                                        key={r.id}
+                                        className="hover:bg-blue-50 transition-colors cursor-pointer"
+                                        onClick={() => openDoc("/payroll", a.code)}
+                                      >
                                         <td className="py-2 px-3 whitespace-nowrap">
                                           <div className="font-medium text-gray-900">{payrollEmployeeName(r, employees)}</div>
                                           <div className="text-[10px] text-gray-500 font-mono">{payrollEmployeeSubtitle(r, employees)}</div>
@@ -647,7 +652,11 @@ export default function ProfitLoss() {
                                   </tr>
                                 ) : (
                                   displayExpenses.map((e: any) => (
-                                    <tr key={e.id} className="hover:bg-slate-50 transition-colors">
+                                    <tr
+                                      key={e.id}
+                                      className="hover:bg-slate-50 transition-colors cursor-pointer"
+                                      onClick={() => openDoc(`/accounting/expenses/${e.id}`, a.code)}
+                                    >
                                       <td className="py-2 px-3 text-gray-600 whitespace-nowrap">{e.expenseDate ? fmtDate(e.expenseDate) : "—"}</td>
                                       <td className="py-2 px-3 capitalize text-gray-700 whitespace-nowrap">{String(e.category || "").replace(/_/g, " ")}</td>
                                       <td className="py-2 px-3 font-medium text-gray-900 whitespace-nowrap">{e.vendorName || "—"}</td>

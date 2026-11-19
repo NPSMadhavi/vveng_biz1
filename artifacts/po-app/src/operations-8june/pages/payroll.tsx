@@ -1401,16 +1401,27 @@ export default function PayrollPage() {
           </DropdownMenu>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="border-[#E5E7EB]" disabled={configs.length === 0}>
-                <Download className="mr-2 h-4 w-4" /> Export
-                <ChevronDown className="ml-2 h-4 w-4 opacity-60" />
+              <Button
+                variant="outline"
+                className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
+                disabled={configs.length === 0}
+              >
+                <Download className="h-4 w-4" />
+                Export
+                <ChevronDown className="h-4 w-4 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => handleExport("excel")}>
+            <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+              <DropdownMenuItem
+                onClick={() => handleExport("excel")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
                 Excel
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport("pdf")}>
+              <DropdownMenuItem
+                onClick={() => handleExport("pdf")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
                 PDF
               </DropdownMenuItem>
             </DropdownMenuContent>

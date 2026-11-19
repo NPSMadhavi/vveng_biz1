@@ -19,7 +19,13 @@ function isAdminSession(req: Request): boolean {
  */
 export async function enforceAssignedModules(req: Request, res: Response, next: NextFunction): Promise<void> {
   const path = normalizeApiPath(req.originalUrl || req.url || req.path);
-  if (path.startsWith("/auth") || path.startsWith("/health") || path.startsWith("/superadmin")) {
+  if (
+    path.startsWith("/auth") ||
+    path.startsWith("/health") ||
+    path.startsWith("/superadmin") ||
+    path.startsWith("/billing") ||
+    path.startsWith("/maintenance")
+  ) {
     next();
     return;
   }

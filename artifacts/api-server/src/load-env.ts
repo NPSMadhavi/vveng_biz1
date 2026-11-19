@@ -53,6 +53,7 @@ function isHostOwnedKey(key: string): boolean {
 const PREFER_FILE_KEYS = new Set([
   "VEDA_GATEWAY_URL",
   "VEDA_API_KEY",
+  "VEDA_LLM_MODEL",
   "VEDA_MODEL",
   "AI_INTEGRATIONS_OPENAI_API_KEY",
   "AI_INTEGRATIONS_OPENAI_BASE_URL",
@@ -114,7 +115,11 @@ export function loadLocalEnv(): void {
     }
 
     if (PREFER_FILE_KEYS.has(key)) {
-      const fileWins = key === "VEDA_GATEWAY_URL" || key === "VEDA_API_KEY" || key === "VEDA_MODEL";
+      const fileWins =
+        key === "VEDA_GATEWAY_URL" ||
+        key === "VEDA_API_KEY" ||
+        key === "VEDA_LLM_MODEL" ||
+        key === "VEDA_MODEL";
       if (
         fileWins ||
         current === undefined ||
@@ -133,13 +138,33 @@ export function loadLocalEnv(): void {
     }
   }
 
-  // The .env at the app root is the file that is edited. It wins over
-  // artifacts/api-server/.env for the Qwen gateway.
+  // artifacts/api-server/.env is the file colleagues edit (gateway, key, model).
+  // It wins over the repo-root .env. Root fills any key the server file omits.
+  // Also accept colleague aliases (BIZONE_*, QWEN_MODEL) and common typos.
+  const apiServerEnv = path.resolve(here, "..", ".env");
   const repoRootEnv = path.resolve(here, "..", "..", "..", ".env");
+  const apiParsed = parseEnvFile(apiServerEnv);
   const rootParsed = parseEnvFile(repoRootEnv);
-  for (const key of ["VEDA_GATEWAY_URL", "VEDA_API_KEY", "VEDA_MODEL"] as const) {
-    const value = rootParsed[key];
-    if (value) process.env[key] = value;
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = apiParsed[key] || rootParsed[key] || process.env[key];
+      if (value && String(value).trim()) return String(value).trim();
+    }
+    return "";
+  };
+  const gateway = pick(
+    "VEDA_GATEWAY_URL",
+    "BIZONE_GATEWAY_URL",
+    "BIZONE_GATEWAY_URL_GATEWAY_URL",
+    "GATEWAY_URL",
+  );
+  const apiKey = pick("VEDA_API_KEY", "BIZONE_API_KEY", "GATEWAY_API_KEY");
+  const model = pick("VEDA_LLM_MODEL", "VEDA_MODEL", "QWEN_MODEL", "VEDA_LLM_MODE", "LLM_MODEL");
+  if (gateway) process.env.VEDA_GATEWAY_URL = gateway.replace(/\/$/, "");
+  if (apiKey) process.env.VEDA_API_KEY = apiKey;
+  if (model) {
+    process.env.VEDA_LLM_MODEL = model;
+    process.env.VEDA_MODEL = model;
   }
 }
 

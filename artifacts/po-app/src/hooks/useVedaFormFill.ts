@@ -357,6 +357,9 @@ export function queueVedaFormFill(fields: Record<string, unknown>) {
   window.dispatchEvent(new CustomEvent("veda:fill-form", { detail: fields }));
 }
 
+/** Alias used by guided document flows. */
+export const dispatchVedaFormFill = queueVedaFormFill;
+
 export function clearVedaFormFillQueue() {
   (window as any)[PENDING_KEY] = null;
 }

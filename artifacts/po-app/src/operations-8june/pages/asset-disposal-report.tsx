@@ -9,27 +9,22 @@ import type { Asset } from "@shared/schema";
 import { useAuth } from "@/contexts/auth-context";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Popover, PopoverContent, PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import {
   calcAssetBookValues,
-  formatAssetDateShort,
   formatAssetRegisterId,
-  formatSgd,
 } from "@/operations-8june/lib/asset-depreciation";
 import { resolveAssetImageSrc } from "@/operations-8june/lib/asset-attachments";
 import { cn } from "@/lib/utils";
 import {
-  Search, RotateCcw, Printer, FileText, Eye, Calendar,
+  Search, RotateCcw, Printer, FileText, Eye,
   Clock, Info, Trash2, Coins, TrendingDown, TrendingUp,
 } from "lucide-react";
 
@@ -50,90 +45,12 @@ export type DisposalRowItem = {
   imageUrl?: string;
 };
 
-const SAMPLE_DISPOSED_DATA: DisposalRowItem[] = [
-  {
-    id: 1,
-    assetName: "Laptop – LAP001",
-    category: "Computer Equipment",
-    purchaseDate: "2026-11-10",
-    disposalDate: "2028-11-10",
-    cost: 5000.0,
-    accDep: 1800.0,
-    nbv: 3200.0,
-    saleAmount: 3000.0,
-    gainLoss: -200.0,
-    disposalType: "Sale",
-    disposalTypeKey: "sale",
-    imageUrl: "/sample_laptop.png",
-  },
-  {
-    id: 2,
-    assetName: "AC – AC001",
-    category: "Air Conditioner",
-    purchaseDate: "2027-03-01",
-    disposalDate: "2028-08-15",
-    cost: 2000.0,
-    accDep: 800.0,
-    nbv: 1200.0,
-    saleAmount: 1500.0,
-    gainLoss: 300.0,
-    disposalType: "Sale",
-    disposalTypeKey: "sale",
-    imageUrl: "",
-  },
-  {
-    id: 3,
-    assetName: "Printer – PR001",
-    category: "Printer",
-    purchaseDate: "2027-06-12",
-    disposalDate: "2028-09-01",
-    cost: 800.0,
-    accDep: 400.0,
-    nbv: 400.0,
-    saleAmount: 300.0,
-    gainLoss: -100.0,
-    disposalType: "Scrapped",
-    disposalTypeKey: "scrap",
-    imageUrl: "",
-  },
-  {
-    id: 4,
-    assetName: "Monitor – MON001",
-    category: "Monitor",
-    purchaseDate: "2027-01-05",
-    disposalDate: "2028-07-20",
-    cost: 1200.0,
-    accDep: 600.0,
-    nbv: 600.0,
-    saleAmount: 800.0,
-    gainLoss: 200.0,
-    disposalType: "Sale",
-    disposalTypeKey: "sale",
-    imageUrl: "",
-  },
-  {
-    id: 5,
-    assetName: "Chair – CH001",
-    category: "Furniture",
-    purchaseDate: "2027-02-10",
-    disposalDate: "2028-10-18",
-    cost: 600.0,
-    accDep: 300.0,
-    nbv: 300.0,
-    saleAmount: 200.0,
-    gainLoss: -100.0,
-    disposalType: "Damaged",
-    disposalTypeKey: "write_off",
-    imageUrl: "",
-  },
-];
-
 const DISPOSAL_TYPE_OPTIONS = [
   { value: "all", label: "All Types" },
   { value: "sale", label: "Sale" },
   { value: "scrap", label: "Scrapped" },
   { value: "write_off", label: "Damaged" },
-  { value: "donation", label: "Donation" },
+  { value: "donation", label: "Donation / Gift" },
 ] as const;
 
 function round2(n: number) {
@@ -198,7 +115,7 @@ function disposalTypeLabel(key: string) {
     case "sale": return "Sale";
     case "scrap": return "Scrapped";
     case "write_off": return "Damaged";
-    case "donation": return "Donation";
+    case "donation": return "Donation / Gift";
     default: return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   }
 }
@@ -267,8 +184,26 @@ function buildDisposalRowFromAsset(asset: Asset): DisposalRowItem {
     gainLoss,
     disposalType: disposalTypeLabel(typeKey),
     disposalTypeKey: typeKey,
-    imageUrl: img || "/sample_laptop.png",
+    imageUrl: img || undefined,
   };
+}
+
+function shiftYearIso(iso: string, deltaYears: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return `${y + deltaYears}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function trendLabel(current: number, previous: number, mode: "count" | "pct"): string | null {
+  if (previous === 0 && current === 0) return null;
+  if (previous === 0) return mode === "count" ? `↑ ${current}` : "↑ New";
+  const diff = current - previous;
+  if (Math.abs(diff) < 0.005) return "→ 0%";
+  if (mode === "count") {
+    return diff >= 0 ? `↑ ${diff} vs last year` : `↓ ${Math.abs(diff)} vs last year`;
+  }
+  const pct = Math.round((diff / Math.abs(previous)) * 100);
+  return pct >= 0 ? `↑ ${pct}%` : `↓ ${Math.abs(pct)}%`;
 }
 
 export default function AssetDisposalReportPage() {
@@ -289,7 +224,7 @@ export default function AssetDisposalReportPage() {
     disposalType: "all",
     statusFilter: "all",
   });
-  const [selectedId, setSelectedId] = useState<number>(1);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const { data: assets = [], isLoading } = useQuery<Asset[]>({
     queryKey: ["/api/assets"],
@@ -298,17 +233,12 @@ export default function AssetDisposalReportPage() {
 
   const allDisposed = useMemo(() => {
     const list = Array.isArray(assets) ? assets : [];
-    const dbDisposed = list
+    return list
       .filter((a) => {
         const s = String(a.status || "").toLowerCase();
         return s === "disposed" || s === "retired";
       })
       .map(buildDisposalRowFromAsset);
-
-    if (dbDisposed.length === 0) {
-      return SAMPLE_DISPOSED_DATA;
-    }
-    return dbDisposed;
   }, [assets]);
 
   const categories = useMemo(() => {
@@ -338,71 +268,100 @@ export default function AssetDisposalReportPage() {
   }, [allDisposed, applied]);
 
   const selected = useMemo(() => {
-    return rows.find((r) => r.id === selectedId) || rows[0] || null;
+    if (selectedId != null) {
+      const match = rows.find((r) => r.id === selectedId);
+      if (match) return match;
+    }
+    return rows[0] || null;
   }, [rows, selectedId]);
 
   const kpis = useMemo(() => {
-    const isDefaultData = allDisposed === SAMPLE_DISPOSED_DATA && rows.length === 5;
-    if (isDefaultData) {
-      return {
-        totalDisposed: 5,
-        totalSaleFormatted: "S$ 17,500",
-        totalLossFormatted: "S$ 600",
-        totalProfitFormatted: "S$ 1,200",
-        disposedHint: "↑ 1 vs last year",
-        saleHint: "↑ 12%",
-        lossHint: "↑ 20%",
-        profitHint: "↑ 25%",
-        saleRaw: 17500,
-        profitRaw: 1200,
-        lossRaw: 600,
-        scrappedRaw: 300,
-        othersRaw: 400,
-      };
-    }
+    const summarize = (list: DisposalRowItem[]) => {
+      const totalDisposed = list.length;
+      const totalSale = round2(list.reduce((s, r) => s + r.saleAmount, 0));
+      const totalLoss = round2(
+        list.reduce((s, r) => s + (r.gainLoss < 0 ? Math.abs(r.gainLoss) : 0), 0),
+      );
+      const totalProfit = round2(
+        list.reduce((s, r) => s + (r.gainLoss > 0 ? r.gainLoss : 0), 0),
+      );
+      const scrapped = round2(
+        list.filter((r) => r.disposalTypeKey === "scrap").reduce((s, r) => s + r.saleAmount, 0),
+      );
+      const others = round2(
+        list
+          .filter((r) => r.disposalTypeKey !== "scrap" && r.gainLoss === 0)
+          .reduce((s, r) => s + r.saleAmount, 0),
+      );
+      return { totalDisposed, totalSale, totalLoss, totalProfit, scrapped, others };
+    };
 
-    const totalDisposed = rows.length;
-    const totalSale = round2(rows.reduce((s, r) => s + r.saleAmount, 0));
-    const totalLoss = round2(
-      rows.reduce((s, r) => s + (r.gainLoss < 0 ? Math.abs(r.gainLoss) : 0), 0),
-    );
-    const totalProfit = round2(
-      rows.reduce((s, r) => s + (r.gainLoss > 0 ? r.gainLoss : 0), 0),
-    );
-    const scrapped = round2(
-      rows.filter((r) => r.disposalTypeKey === "scrap").reduce((s, r) => s + r.saleAmount, 0),
-    );
-    const others = round2(
-      rows.filter((r) => r.disposalTypeKey !== "scrap" && r.gainLoss === 0).reduce((s, r) => s + r.saleAmount, 0),
-    );
+    const current = summarize(rows);
+
+    const prevFrom = shiftYearIso(applied.dateFrom, -1);
+    const prevTo = shiftYearIso(applied.dateTo, -1);
+    const priorRows = allDisposed.filter((row) => {
+      if (prevFrom && row.disposalDate && row.disposalDate < prevFrom) return false;
+      if (prevTo && row.disposalDate && row.disposalDate > prevTo) return false;
+      if (applied.category !== "all" && row.category !== applied.category) return false;
+      if (applied.disposalType !== "all" && row.disposalTypeKey !== applied.disposalType) return false;
+      if (applied.statusFilter === "disposed" && row.asset) {
+        if (String(row.asset.status || "").toLowerCase() !== "disposed") return false;
+      }
+      if (applied.statusFilter === "retired" && row.asset) {
+        if (String(row.asset.status || "").toLowerCase() !== "retired") return false;
+      }
+      return true;
+    });
+    const prior = summarize(priorRows);
 
     return {
-      totalDisposed,
-      totalSaleFormatted: formatIntCurrency(totalSale),
-      totalLossFormatted: formatIntCurrency(totalLoss),
-      totalProfitFormatted: formatIntCurrency(totalProfit),
-      disposedHint: "↑ 1 vs last year",
-      saleHint: "↑ 12%",
-      lossHint: "↑ 20%",
-      profitHint: "↑ 25%",
-      saleRaw: totalSale,
-      profitRaw: totalProfit,
-      lossRaw: totalLoss,
-      scrappedRaw: scrapped,
-      othersRaw: others,
+      totalDisposed: current.totalDisposed,
+      totalSaleFormatted: formatIntCurrency(current.totalSale),
+      totalLossFormatted: formatIntCurrency(current.totalLoss),
+      totalProfitFormatted: formatIntCurrency(current.totalProfit),
+      disposedHint: trendLabel(current.totalDisposed, prior.totalDisposed, "count"),
+      saleHint: trendLabel(current.totalSale, prior.totalSale, "pct"),
+      lossHint: trendLabel(current.totalLoss, prior.totalLoss, "pct"),
+      profitHint: trendLabel(current.totalProfit, prior.totalProfit, "pct"),
+      saleRaw: current.totalSale,
+      profitRaw: current.totalProfit,
+      lossRaw: current.totalLoss,
+      scrappedRaw: current.scrapped,
+      othersRaw: current.others,
     };
-  }, [rows, allDisposed]);
+  }, [rows, allDisposed, applied]);
 
   function generateReport() {
-    setApplied({
+    const nextApplied = {
       dateFrom,
       dateTo,
       category,
       disposalType,
       statusFilter,
+    };
+    setApplied(nextApplied);
+    const nextRows = allDisposed.filter((row) => {
+      if (nextApplied.dateFrom && row.disposalDate && row.disposalDate < nextApplied.dateFrom) return false;
+      if (nextApplied.dateTo && row.disposalDate && row.disposalDate > nextApplied.dateTo) return false;
+      if (nextApplied.category !== "all" && row.category !== nextApplied.category) return false;
+      if (nextApplied.disposalType !== "all" && row.disposalTypeKey !== nextApplied.disposalType) return false;
+      if (nextApplied.statusFilter === "disposed" && row.asset) {
+        if (String(row.asset.status || "").toLowerCase() !== "disposed") return false;
+      }
+      if (nextApplied.statusFilter === "retired" && row.asset) {
+        if (String(row.asset.status || "").toLowerCase() !== "retired") return false;
+      }
+      return true;
     });
-    setSelectedId(rows[0]?.id ?? 1);
-    toast({ title: "Report generated", description: "Filters applied to disposal report." });
+    setSelectedId(nextRows[0]?.id ?? null);
+    toast({
+      title: "Report generated",
+      description:
+        nextRows.length > 0
+          ? `${nextRows.length} disposed asset${nextRows.length === 1 ? "" : "s"} matched.`
+          : "No disposed assets match these filters.",
+    });
   }
 
   function resetFilters() {
@@ -418,7 +377,7 @@ export default function AssetDisposalReportPage() {
       disposalType: "all",
       statusFilter: "all",
     });
-    setSelectedId(1);
+    setSelectedId(null);
   }
 
   function handleExportExcel() {
@@ -498,39 +457,24 @@ export default function AssetDisposalReportPage() {
       <div className="rounded-xl border border-[#DBEAFE] bg-white p-4 shadow-sm">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-[1.5fr_1.1fr_1.1fr_1fr_auto_auto] items-end">
           {/* Date Range */}
-          <div className="space-y-1">
+          <div className="space-y-1 sm:col-span-2 md:col-span-2 lg:col-span-1">
             <Label className="text-xs font-semibold text-[#334155]">Date Range</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <div className="flex h-9 w-full cursor-pointer items-center justify-between rounded-md border border-[#CBD5E1] bg-white px-3 text-xs text-[#0F172A] hover:border-[#94A3B8] transition-colors">
-                  <Calendar className="h-4 w-4 text-[#64748B] shrink-0" />
-                  <span className="mx-2 text-xs font-medium text-[#1E293B]">
-                    {formatDmy(dateFrom)} – {formatDmy(dateTo)}
-                  </span>
-                  <Calendar className="h-4 w-4 text-[#64748B] shrink-0" />
-                </div>
-              </PopoverTrigger>
-              <PopoverContent className="w-72 p-3 space-y-3" align="start">
-                <div className="space-y-1">
-                  <span className="text-xs font-medium text-[#475569]">From Date</span>
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="h-8 text-xs"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <span className="text-xs font-medium text-[#475569]">To Date</span>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="h-8 text-xs"
-                  />
-                </div>
-              </PopoverContent>
-            </Popover>
+            <div className="grid grid-cols-2 gap-2">
+              <SyncBridgeDatePicker
+                value={dateFrom}
+                onChange={(v) => setDateFrom(v || dateFrom)}
+                mode="date"
+                placeholder="From date"
+                className="h-9 border-[#CBD5E1] bg-white text-xs"
+              />
+              <SyncBridgeDatePicker
+                value={dateTo}
+                onChange={(v) => setDateTo(v || dateTo)}
+                mode="date"
+                placeholder="To date"
+                className="h-9 border-[#CBD5E1] bg-white text-xs"
+              />
+            </div>
           </div>
 
           {/* Asset Category */}
@@ -614,9 +558,14 @@ export default function AssetDisposalReportPage() {
             <p className="text-[24px] font-bold text-[#0F172A] leading-tight mt-0.5 tabular-nums">
               {kpis.totalDisposed}
             </p>
-            <p className="text-xs font-medium text-[#16A34A] mt-1 flex items-center gap-1">
-              <span>↑</span> 1 vs last year
-            </p>
+            {kpis.disposedHint ? (
+              <p className={cn(
+                "text-xs font-medium mt-1",
+                kpis.disposedHint.startsWith("↓") ? "text-[#DC2626]" : "text-[#16A34A]",
+              )}>
+                {kpis.disposedHint}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -630,9 +579,14 @@ export default function AssetDisposalReportPage() {
             <p className="text-[24px] font-bold text-[#0F172A] leading-tight mt-0.5 tabular-nums">
               {kpis.totalSaleFormatted}
             </p>
-            <p className="text-xs font-medium text-[#16A34A] mt-1 flex items-center gap-1">
-              <span>↑</span> 12%
-            </p>
+            {kpis.saleHint ? (
+              <p className={cn(
+                "text-xs font-medium mt-1",
+                kpis.saleHint.startsWith("↓") ? "text-[#DC2626]" : "text-[#16A34A]",
+              )}>
+                {kpis.saleHint}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -646,9 +600,14 @@ export default function AssetDisposalReportPage() {
             <p className="text-[24px] font-bold text-[#0F172A] leading-tight mt-0.5 tabular-nums">
               {kpis.totalLossFormatted}
             </p>
-            <p className="text-xs font-medium text-[#16A34A] mt-1 flex items-center gap-1">
-              <span>↑</span> 20%
-            </p>
+            {kpis.lossHint ? (
+              <p className={cn(
+                "text-xs font-medium mt-1",
+                kpis.lossHint.startsWith("↓") ? "text-[#DC2626]" : "text-[#16A34A]",
+              )}>
+                {kpis.lossHint}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -662,9 +621,14 @@ export default function AssetDisposalReportPage() {
             <p className="text-[24px] font-bold text-[#0F172A] leading-tight mt-0.5 tabular-nums">
               {kpis.totalProfitFormatted}
             </p>
-            <p className="text-xs font-medium text-[#16A34A] mt-1 flex items-center gap-1">
-              <span>↑</span> 25%
-            </p>
+            {kpis.profitHint ? (
+              <p className={cn(
+                "text-xs font-medium mt-1",
+                kpis.profitHint.startsWith("↓") ? "text-[#DC2626]" : "text-[#16A34A]",
+              )}>
+                {kpis.profitHint}
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -688,7 +652,7 @@ export default function AssetDisposalReportPage() {
               <span className="flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-[#16A34A] text-white text-[9px] font-bold">
                 X
               </span>
-              Export Excel
+              Excel
             </Button>
             <Button
               type="button"
@@ -732,7 +696,7 @@ export default function AssetDisposalReportPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading && allDisposed === SAMPLE_DISPOSED_DATA ? (
+              {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={11} className="py-8 text-center text-xs text-[#94A3B8]">
                     Loading assets...
@@ -803,114 +767,85 @@ export default function AssetDisposalReportPage() {
             <h3 className="text-sm font-bold text-[#1E3A8A]">Disposal Summary Chart</h3>
           </div>
           <div className="p-5 flex-1 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-6 min-h-[220px]">
-            {/* Donut SVG Chart */}
-            <div className="relative h-[150px] w-[150px] shrink-0">
-              <svg viewBox="0 0 160 160" className="h-full w-full">
-                {/* 4 segments: 48% (blue), 24% (red), 12% (orange), 16% (purple) */}
-                {/* Circumference = 2 * PI * 54 = 339.292 */}
-                {/* Profit 48% = 162.86 */}
-                <circle
-                  cx="80"
-                  cy="80"
-                  r="54"
-                  fill="none"
-                  stroke="#2563EB"
-                  strokeWidth="20"
-                  strokeDasharray="162.86 176.43"
-                  strokeDashoffset="0"
-                  transform="rotate(-90 80 80)"
-                />
-                {/* Loss 24% = 81.43 */}
-                <circle
-                  cx="80"
-                  cy="80"
-                  r="54"
-                  fill="none"
-                  stroke="#DC2626"
-                  strokeWidth="20"
-                  strokeDasharray="81.43 257.86"
-                  strokeDashoffset="-162.86"
-                  transform="rotate(-90 80 80)"
-                />
-                {/* Scrapped 12% = 40.71 */}
-                <circle
-                  cx="80"
-                  cy="80"
-                  r="54"
-                  fill="none"
-                  stroke="#EA580C"
-                  strokeWidth="20"
-                  strokeDasharray="40.71 298.58"
-                  strokeDashoffset="-244.29"
-                  transform="rotate(-90 80 80)"
-                />
-                {/* Others 16% = 54.29 */}
-                <circle
-                  cx="80"
-                  cy="80"
-                  r="54"
-                  fill="none"
-                  stroke="#7C3AED"
-                  strokeWidth="20"
-                  strokeDasharray="54.29 285.0"
-                  strokeDashoffset="-285.0"
-                  transform="rotate(-90 80 80)"
-                />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
-                <span className="text-[16px] font-bold text-[#0F172A] leading-tight">
-                  {kpis.totalSaleFormatted}
-                </span>
-                <span className="text-[11px] text-[#64748B] mt-0.5">Total Sale</span>
-              </div>
-            </div>
+            {(() => {
+              const chartParts = [
+                { key: "profit", label: "Profit", color: "#2563EB", value: kpis.profitRaw },
+                { key: "loss", label: "Loss", color: "#DC2626", value: kpis.lossRaw },
+                { key: "scrapped", label: "Scrapped", color: "#EA580C", value: kpis.scrappedRaw },
+                { key: "others", label: "Others", color: "#7C3AED", value: kpis.othersRaw },
+              ];
+              const chartTotal = chartParts.reduce((s, p) => s + Math.max(0, p.value), 0);
+              const circumference = 2 * Math.PI * 54;
+              let offset = 0;
+              const arcs = chartParts.map((part) => {
+                const share = chartTotal > 0 ? Math.max(0, part.value) / chartTotal : 0;
+                const length = share * circumference;
+                const dasharray = `${length} ${Math.max(0, circumference - length)}`;
+                const dashoffset = -offset;
+                offset += length;
+                return { ...part, share, dasharray, dashoffset, pct: Math.round(share * 100) };
+              });
 
-            {/* Legend on the right */}
-            <div className="space-y-2.5 min-w-[170px] shrink-0">
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#2563EB] shrink-0" />
-                  <span className="text-[#334155] font-medium">Profit</span>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <span className="font-semibold text-[#0F172A] tabular-nums">S$ 1,200</span>
-                  <span className="text-[#64748B] text-right w-9">(48%)</span>
-                </div>
-              </div>
+              return (
+                <>
+                  <div className="relative h-[150px] w-[150px] shrink-0">
+                    <svg viewBox="0 0 160 160" className="h-full w-full">
+                      {chartTotal <= 0 ? (
+                        <circle
+                          cx="80"
+                          cy="80"
+                          r="54"
+                          fill="none"
+                          stroke="#E2E8F0"
+                          strokeWidth="20"
+                        />
+                      ) : (
+                        arcs.map((arc) => (
+                          <circle
+                            key={arc.key}
+                            cx="80"
+                            cy="80"
+                            r="54"
+                            fill="none"
+                            stroke={arc.color}
+                            strokeWidth="20"
+                            strokeDasharray={arc.dasharray}
+                            strokeDashoffset={arc.dashoffset}
+                            transform="rotate(-90 80 80)"
+                          />
+                        ))
+                      )}
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+                      <span className="text-[16px] font-bold text-[#0F172A] leading-tight">
+                        {kpis.totalSaleFormatted}
+                      </span>
+                      <span className="text-[11px] text-[#64748B] mt-0.5">Total Sale</span>
+                    </div>
+                  </div>
 
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#DC2626] shrink-0" />
-                  <span className="text-[#334155] font-medium">Loss</span>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <span className="font-semibold text-[#0F172A] tabular-nums">S$ 600</span>
-                  <span className="text-[#64748B] text-right w-9">(24%)</span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#EA580C] shrink-0" />
-                  <span className="text-[#334155] font-medium">Scrapped</span>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <span className="font-semibold text-[#0F172A] tabular-nums">S$ 300</span>
-                  <span className="text-[#64748B] text-right w-9">(12%)</span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#7C3AED] shrink-0" />
-                  <span className="text-[#334155] font-medium">Others</span>
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <span className="font-semibold text-[#0F172A] tabular-nums">S$ 400</span>
-                  <span className="text-[#64748B] text-right w-9">(16%)</span>
-                </div>
-              </div>
-            </div>
+                  <div className="space-y-2.5 min-w-[170px] shrink-0">
+                    {arcs.map((arc) => (
+                      <div key={arc.key} className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: arc.color }}
+                          />
+                          <span className="text-[#334155] font-medium">{arc.label}</span>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          <span className="font-semibold text-[#0F172A] tabular-nums">
+                            {formatIntCurrency(arc.value)}
+                          </span>
+                          <span className="text-[#64748B] text-right w-9">({arc.pct}%)</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </section>
 
@@ -944,14 +879,20 @@ export default function AssetDisposalReportPage() {
               <div className="grid grid-cols-1 md:grid-cols-[130px_1fr_auto_1.15fr] gap-4 sm:gap-5 items-stretch">
                 {/* Left Column: Asset Thumbnail */}
                 <div className="flex items-center justify-center">
-                  <img
-                    src={selected.imageUrl || "/sample_laptop.png"}
-                    alt={selected.assetName}
-                    className="max-h-24 max-w-full w-auto object-contain rounded-md"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = "/sample_laptop.png";
-                    }}
-                  />
+                  {selected.imageUrl ? (
+                    <img
+                      src={selected.imageUrl}
+                      alt={selected.assetName}
+                      className="max-h-24 max-w-full w-auto object-contain rounded-md"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  ) : (
+                    <div className="flex h-24 w-24 items-center justify-center rounded-md border border-dashed border-[#CBD5E1] bg-[#F8FAFC] text-[11px] text-[#94A3B8]">
+                      No image
+                    </div>
+                  )}
                 </div>
 
                 {/* Middle Column: Metadata */}

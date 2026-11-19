@@ -287,6 +287,13 @@ export function PdfPreviewModal({
   const [markSentConfirmOpen, setMarkSentConfirmOpen] = useState(false);
   const [markingSent, setMarkingSent] = useState(false);
   const [hasMarkedSent, setHasMarkedSent] = useState(false);
+  /** Download waits for Yes/No on "Mark as sent?" — never starts before the choice. */
+  const [pendingDownload, setPendingDownload] = useState(false);
+  const markSentHandledRef = useRef(false);
+
+  const needsMarkSentPrompt = Boolean(
+    (askMarkSentOnClose || markSentUrl || onMarkAsSentExternal) && !hasMarkedSent,
+  );
 
   const handleOpenChange = (next: boolean) => {
     if (next) {
@@ -297,10 +304,23 @@ export function PdfPreviewModal({
     onOpenChange(false);
   };
 
+  const performDownload = async () => {
+    try {
+      await generatePdf();
+    } catch (e) {
+      console.error("Download failed", e);
+    }
+  };
+
   const handleMarkSent = async (markExternal: boolean) => {
+    if (markSentHandledRef.current) return;
+    markSentHandledRef.current = true;
+
+    const shouldDownload = pendingDownload;
+    setPendingDownload(false);
     setMarkSentConfirmOpen(false);
-    if (!markExternal) return;
-    if (markSentUrl || onMarkAsSentExternal) {
+
+    if (markExternal && (markSentUrl || onMarkAsSentExternal)) {
       setMarkingSent(true);
       try {
         if (markSentUrl) {
@@ -325,6 +345,10 @@ export function PdfPreviewModal({
         setMarkingSent(false);
       }
     }
+
+    if (shouldDownload) {
+      await performDownload();
+    }
   };
 
   useEffect(() => {
@@ -332,6 +356,8 @@ export function PdfPreviewModal({
       setPdfBase64(null);
       setHasMarkedSent(false);
       setMarkSentConfirmOpen(false);
+      setPendingDownload(false);
+      markSentHandledRef.current = false;
       return;
     }
 
@@ -356,14 +382,13 @@ export function PdfPreviewModal({
   }, [open]);
 
   const handleDownload = async () => {
-    try {
-      await generatePdf();
-      if ((askMarkSentOnClose || markSentUrl || onMarkAsSentExternal) && !hasMarkedSent) {
-        setMarkSentConfirmOpen(true);
-      }
-    } catch (e) {
-      console.error("Download failed", e);
+    if (needsMarkSentPrompt) {
+      markSentHandledRef.current = false;
+      setPendingDownload(true);
+      setMarkSentConfirmOpen(true);
+      return;
     }
+    await performDownload();
   };
 
   const handlePrint = () => {
@@ -393,7 +418,9 @@ export function PdfPreviewModal({
           window.removeEventListener("afterprint", onPrintDialogClosed);
         } catch {}
 
-        if ((askMarkSentOnClose || markSentUrl || onMarkAsSentExternal) && !hasMarkedSent) {
+        if (needsMarkSentPrompt) {
+          markSentHandledRef.current = false;
+          setPendingDownload(false);
           setMarkSentConfirmOpen(true);
         }
       };
@@ -472,7 +499,11 @@ export function PdfPreviewModal({
       <AlertDialog
         open={markSentConfirmOpen}
         onOpenChange={(v) => {
-          if (!v && !markingSent) void handleMarkSent(false);
+          if (v) {
+            markSentHandledRef.current = false;
+            return;
+          }
+          if (!markingSent) void handleMarkSent(false);
         }}
       >
         <AlertDialogContent>

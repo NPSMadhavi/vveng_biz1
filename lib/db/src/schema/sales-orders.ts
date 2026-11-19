@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, decimal, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, decimal, jsonb, boolean, smallint } from "drizzle-orm/pg-core";
 
 export const salesOrdersTable = pgTable("sales_orders", {
   id: serial("id").primaryKey(),
@@ -36,6 +36,9 @@ export const salesOrdersTable = pgTable("sales_orders", {
   createdBy: integer("created_by").notNull(),
   attachmentPath: text("attachment_path"),
   attachmentName: text("attachment_name"),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

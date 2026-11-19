@@ -17,7 +17,7 @@ import {
   stockItemsTable,
   projectsTable,
 } from "@workspace/db";
-import { eq, and, or, ilike, desc, SQL } from "drizzle-orm";
+import { eq, and, or, ilike, desc, sql, SQL } from "drizzle-orm";
 import { SEARCH_TYPE_MODULE } from "../lib/module-access.js";
 import { loadAssignedModules } from "../lib/assigned-modules.js";
 
@@ -122,6 +122,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(invoicesTable.companyId, companyId),
+            sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
             or(like(invoicesTable.invNumber, q), like(invoicesTable.customerName, q)),
           ),
         )
@@ -140,6 +141,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(quotationsTable.companyId, companyId),
+            sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`,
             or(like(quotationsTable.qtNumber, q), like(quotationsTable.customerName, q)),
           ),
         )
@@ -158,6 +160,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(salesOrdersTable.companyId, companyId),
+            sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`,
             or(like(salesOrdersTable.soNumber, q), like(salesOrdersTable.customerName, q)),
           ),
         )
@@ -176,6 +179,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(purchaseOrdersTable.companyId, companyId),
+            sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`,
             or(like(purchaseOrdersTable.poNumber, q), like(purchaseOrdersTable.vendorName, q)),
           ),
         )
@@ -194,6 +198,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(purchaseQuotationsTable.companyId, companyId),
+            sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`,
             or(like(purchaseQuotationsTable.pqNumber, q), like(purchaseQuotationsTable.vendorName, q)),
           ),
         )
@@ -212,6 +217,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(vendorInvoicesTable.companyId, companyId),
+            sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
             or(like(vendorInvoicesTable.piNumber, q), like(vendorInvoicesTable.vendorName, q)),
           ),
         )
@@ -248,6 +254,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(deliveryOrdersTable.companyId, companyId),
+            sql`COALESCE(${deliveryOrdersTable.isDeleted}, 0) = 0`,
             or(like(deliveryOrdersTable.doNumber, q), like(deliveryOrdersTable.customerName, q)),
           ),
         )
@@ -266,6 +273,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(grnTable.companyId, companyId),
+            sql`COALESCE(${grnTable.isDeleted}, 0) = 0`,
             or(like(grnTable.grnNumber, q), like(grnTable.vendorName, q), like(grnTable.poNumber, q)),
           ),
         )
@@ -284,6 +292,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(creditNotesTable.companyId, companyId),
+            sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`,
             or(like(creditNotesTable.cnNumber, q), like(creditNotesTable.customerName, q)),
           ),
         )
@@ -302,6 +311,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(debitNotesTable.companyId, companyId),
+            sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`,
             or(like(debitNotesTable.dnNumber, q), like(debitNotesTable.customerName, q)),
           ),
         )
@@ -316,7 +326,11 @@ router.get("/search", async (req, res): Promise<void> => {
           contact: customersTable.contactPerson,
         })
         .from(customersTable)
-        .where(and(eq(customersTable.companyId, companyId), like(customersTable.name, q)))
+        .where(and(
+          eq(customersTable.companyId, companyId),
+          sql`COALESCE(${customersTable.isDeleted}, 0) = 0`,
+          like(customersTable.name, q),
+        ))
         .orderBy(desc(customersTable.createdAt))
         .limit(limit),
     ),
@@ -328,7 +342,11 @@ router.get("/search", async (req, res): Promise<void> => {
           contact: vendorsTable.contactPerson,
         })
         .from(vendorsTable)
-        .where(and(eq(vendorsTable.companyId, companyId), like(vendorsTable.name, q)))
+        .where(and(
+          eq(vendorsTable.companyId, companyId),
+          sql`COALESCE(${vendorsTable.isDeleted}, 0) = 0`,
+          like(vendorsTable.name, q),
+        ))
         .orderBy(desc(vendorsTable.createdAt))
         .limit(limit),
     ),
@@ -343,6 +361,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(stockItemsTable.companyId, companyId),
+            sql`COALESCE(${stockItemsTable.isDeleted}, 0) = 0`,
             or(like(stockItemsTable.code, q), like(stockItemsTable.name, q)),
           ),
         )
@@ -360,6 +379,7 @@ router.get("/search", async (req, res): Promise<void> => {
         .where(
           and(
             eq(projectsTable.companyId, companyId),
+            sql`COALESCE(${projectsTable.isDeleted}, 0) = 0`,
             or(like(projectsTable.name, q), like(projectsTable.code, q)),
           ),
         )

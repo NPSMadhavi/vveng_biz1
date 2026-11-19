@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, decimal, smallint } from "drizzle-orm/pg-core";
 
 export const projectsTable = pgTable("projects", {
   id: serial("id").primaryKey(),
@@ -11,6 +11,9 @@ export const projectsTable = pgTable("projects", {
   startDate: text("start_date"),
   endDate: text("end_date"),
   createdBy: integer("created_by").notNull(),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

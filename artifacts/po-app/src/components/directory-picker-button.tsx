@@ -117,9 +117,11 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
   );
 
   function computeEffectiveGst(entry: { country?: string | null; gstRegistered?: boolean }): number {
-    if (!entry.gstRegistered) return 0;
-    // Local GST only when party country matches company (SG === Singapore)
+    // Other / overseas country → always 0% GST (zero-rated export)
+    if (isInternationalParty(entry.country, companyCountry)) return 0;
+    // Missing / unmatched country → no local GST
     if (!isSameCountry(entry.country, companyCountry)) return 0;
+    if (!entry.gstRegistered) return 0;
     return companyGstRate;
   }
 

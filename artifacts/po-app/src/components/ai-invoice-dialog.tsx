@@ -27,6 +27,8 @@ interface AiInvoiceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onApply: (data: AiGeneratedInvoice) => void;
+  /** Defaults to invoice. Use "quotation" on the quotation form. */
+  documentKind?: "invoice" | "quotation";
 }
 
 type Step = "prompt" | "generating" | "preview" | "error";
@@ -48,13 +50,23 @@ function extractJson(raw: string): AiGeneratedInvoice | null {
   }
 }
 
-const EXAMPLES = [
+const INVOICE_EXAMPLES = [
   "Invoice SP Sysnet for 3 days emergency IT support at $3,500/day. Payment 30 days.",
   "Create an invoice for Nexalab Pte Ltd for 10 units of Dell Latitude 5540 laptop at SGD 2,200 each.",
   "Invoice Acme Corp USD 8,500 for cloud infrastructure setup and 6 months managed services.",
 ];
 
-export function AiInvoiceDialog({ open, onOpenChange, onApply }: AiInvoiceDialogProps) {
+const QUOTATION_EXAMPLES = [
+  "Quotation for Acme Corp: 5 Cisco ISR 1100 routers at SGD 1,200 each, valid 30 days.",
+  "Quote Nexalab Pte Ltd for 10 Dell Latitude 5540 laptops at SGD 2,200 each, payment 30 days.",
+  "Generate a quotation for SP Sysnet for 3 days on-site IT support at $3,500/day.",
+];
+
+export function AiInvoiceDialog({ open, onOpenChange, onApply, documentKind = "invoice" }: AiInvoiceDialogProps) {
+  const isQuotation = documentKind === "quotation";
+  const docLabel = isQuotation ? "quotation" : "invoice";
+  const apiPath = isQuotation ? "/api/ai/generate-quotation" : "/api/ai/generate-invoice";
+  const EXAMPLES = isQuotation ? QUOTATION_EXAMPLES : INVOICE_EXAMPLES;
   const [step, setStep] = useState<Step>("prompt");
   const [prompt, setPrompt] = useState("");
   const [streamedText, setStreamedText] = useState("");
@@ -88,7 +100,7 @@ export function AiInvoiceDialog({ open, onOpenChange, onApply }: AiInvoiceDialog
     streamRef.current = "";
 
     try {
-      const res = await fetch("/api/ai/generate-invoice", {
+      const res = await fetch(apiPath, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -171,10 +183,10 @@ export function AiInvoiceDialog({ open, onOpenChange, onApply }: AiInvoiceDialog
             <div className="p-1.5 rounded-lg bg-violet-100 dark:bg-violet-900/50">
               <Sparkles className="h-4 w-4 text-violet-600 dark:text-violet-400" />
             </div>
-            Generate Invoice with AI
+            Generate {isQuotation ? "Quotation" : "Invoice"} with AI
           </DialogTitle>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Describe the invoice in plain language — AI will extract all the details.
+            Describe the {docLabel} in plain language — AI will extract all the details.
           </p>
         </DialogHeader>
 
@@ -184,7 +196,11 @@ export function AiInvoiceDialog({ open, onOpenChange, onApply }: AiInvoiceDialog
               <Textarea
                 value={prompt}
                 onChange={e => setPrompt(e.target.value)}
-                placeholder="Describe the invoice... e.g. Create an invoice for Acme Corp for 5 days of network setup services at $800/day, payment 30 days."
+                placeholder={
+                  isQuotation
+                    ? "Describe the quotation... e.g. Quote Acme Corp for 5 days of network setup at $800/day, valid 30 days."
+                    : "Describe the invoice... e.g. Create an invoice for Acme Corp for 5 days of network setup services at $800/day, payment 30 days."
+                }
                 rows={6}
                 className="resize-none text-sm font-mono"
                 onKeyDown={e => {
@@ -216,7 +232,7 @@ export function AiInvoiceDialog({ open, onOpenChange, onApply }: AiInvoiceDialog
             <div className="p-6 space-y-4">
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
-                <span>AI is reading your description and extracting invoice data…</span>
+                <span>AI is reading your description and extracting {docLabel} data…</span>
               </div>
               <div
                 ref={scrollRef}

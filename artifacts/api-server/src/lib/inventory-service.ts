@@ -1,18 +1,18 @@
 import {
   db,
+  pool,
   warehouseStockTable,
   stockItemsTable,
   stockMovementsTable,
   warehousesTable,
-  openingStockTable,
   goodsReceiptItemsTable,
   goodsIssueItemsTable,
   stockTransferItemsTable,
   stockAdjustmentsTable,
-  stockSerialsTable,
 } from "@workspace/db";
 import { and, asc, eq, ilike, ne, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { softDeleteById } from "./soft-delete.js";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type WarehouseStockQty = typeof warehouseStockTable.$inferSelect.quantity;
@@ -488,52 +488,19 @@ async function itemHasDocumentReferences(tx: Tx | typeof db, stockItemId: number
   return checks.some((rows) => rows.length > 0);
 }
 
-/** Delete stock item and all its inventory history and document line references. */
+/** Soft-delete stock item (is_deleted=1). Inventory history rows are retained. */
 export async function deleteStockItem(companyId: number, stockItemId: number): Promise<void> {
   const [item] = await db.select({ id: stockItemsTable.id })
     .from(stockItemsTable)
-    .where(and(eq(stockItemsTable.id, stockItemId), eq(stockItemsTable.companyId, companyId)));
-  if (!item) throw new Error("Stock item not found");
-
-  await db.transaction(async (tx: Tx) => {
-    // Use raw SQL deletes so a missing optional WMS table cannot break the whole delete.
-    await tx.execute(sql`
-      DELETE FROM goods_receipt_items
-      WHERE stock_item_id = ${stockItemId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM goods_issue_items
-      WHERE stock_item_id = ${stockItemId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM stock_transfer_items
-      WHERE stock_item_id = ${stockItemId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM stock_adjustments
-      WHERE stock_item_id = ${stockItemId} AND company_id = ${companyId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM stock_movements
-      WHERE stock_item_id = ${stockItemId} AND company_id = ${companyId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM opening_stock
-      WHERE stock_item_id = ${stockItemId} AND company_id = ${companyId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM warehouse_stock
-      WHERE stock_item_id = ${stockItemId} AND company_id = ${companyId}
-    `);
-    await tx.execute(sql`
-      DELETE FROM stock_serials
-      WHERE stock_item_id = ${stockItemId}
-    `);
-    await tx.delete(stockItemsTable).where(and(
+    .where(and(
       eq(stockItemsTable.id, stockItemId),
       eq(stockItemsTable.companyId, companyId),
+      sql`COALESCE(${stockItemsTable.isDeleted}, 0) = 0`,
     ));
-  });
+  if (!item) throw new Error("Stock item not found");
+
+  const ok = await softDeleteById(pool, "stock_items", { id: stockItemId, companyId });
+  if (!ok) throw new Error("Stock item not found");
 }
 
 export async function getWarehouseStockSummary(companyId: number, warehouseId?: number) {

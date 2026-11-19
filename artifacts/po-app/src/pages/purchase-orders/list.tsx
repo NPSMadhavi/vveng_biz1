@@ -10,7 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Link, useSearch } from "wouter";
+import { Link, useSearch, useLocation } from "wouter";
+import { filterDocsByManpowerScope, isManpowerPath } from "@/lib/doc-manpower";
 import { Search, Plus, ArrowRight, MailCheck, Calendar, ChevronLeft, ChevronRight, Mail } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -63,6 +64,8 @@ function isSendable(po: PurchaseOrder) {
 
 export default function PurchaseOrderList() {
   const { setLocation, href } = useDocNav();
+  const [location] = useLocation();
+  const manpowerScope = isManpowerPath(location);
   const searchString = useSearch();
   const [searchTerm, setSearchTerm] = useState("");
   const [vendorFilter, setVendorFilter] = useState("all");
@@ -116,13 +119,18 @@ export default function PurchaseOrderList() {
     return acc;
   }, {});
 
+  const scopedPos = useMemo(
+    () => filterDocsByManpowerScope(pos as any[] | undefined, manpowerScope),
+    [pos, manpowerScope],
+  );
+
   const vendorNames = useMemo(() => {
-    const names = new Set((pos ?? []).map(p => (p.vendorName || "").trim()).filter(Boolean));
+    const names = new Set(scopedPos.map(p => (p.vendorName || "").trim()).filter(Boolean));
     return [...names].sort((a, b) => a.localeCompare(b));
-  }, [pos]);
+  }, [scopedPos]);
 
   const filteredByDate = useMemo(() => {
-    const all = pos ?? [];
+    const all = scopedPos;
     if (filterMode === "all") {
       return workingYear.active ? all.filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to)) : all;
     }
@@ -142,7 +150,7 @@ export default function PurchaseOrderList() {
       const dt = new Date(d.createdAt);
       return dt.getFullYear() === filterYear && months.includes(dt.getMonth());
     });
-  }, [pos, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
+  }, [scopedPos, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const filteredPOs = useMemo(() => filteredByDate.filter(po => {
     if (statusFilter && po.status !== statusFilter) return false;

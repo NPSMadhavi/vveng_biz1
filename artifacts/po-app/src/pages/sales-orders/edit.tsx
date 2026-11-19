@@ -204,7 +204,11 @@ export default function SalesOrderEdit() {
   const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
   const updateMutation = useUpdateSalesOrder();
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   const appendLock = useRef(false);
   useEffect(() => {
@@ -276,7 +280,7 @@ export default function SalesOrderEdit() {
     const isCancelled = values.status === "cancelled";
     const newStatus = isCancelled ? "cancelled" : (openPreview ? "confirmed" : "draft");
     const payload: any = { ...values, qtId: linkedQt.current.qtId, qtNumber: values.qtNumber?.trim() || null, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount, ...attachment.payload };
-    if (!isManpower) delete payload.manpowerDetails;
+    payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
     updateMutation.mutate({ id, data: payload }, {
       onSuccess: async () => {
         await queryClient.refetchQueries({ queryKey: getGetSalesOrderQueryKey(id) });

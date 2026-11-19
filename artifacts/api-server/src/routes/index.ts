@@ -51,11 +51,13 @@ import globalSearchRouter from "./global-search";
 import salesPersonsRouter from "./sales-persons";
 import posSalesRouter from "./pos-sales";
 import superadminRouter from "./superadmin.js";
+import billingRouter from "./billing.js";
 import { enforceAssignedModules } from "../lib/module-guard.js";
 
 const router: IRouter = Router();
 
 router.use(superadminRouter);
+router.use(billingRouter);
 router.use(enforceAssignedModules);
 router.use(healthRouter);
 router.use(authRouter);

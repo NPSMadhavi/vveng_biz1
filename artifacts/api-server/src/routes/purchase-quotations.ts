@@ -8,11 +8,12 @@ import {
   usersTable,
   vendorsTable,
 } from "@workspace/db";
-import { and, desc, eq, ilike, inArray } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
 import { postVendorInvoiceJE } from "../lib/vendor-invoice-auto-post.js";
 import { ensureCompanyDocumentTables } from "../lib/company-database.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router: IRouter = Router();
 
@@ -128,8 +129,8 @@ router.get("/purchase-quotations/stats", async (req, res): Promise<void> => {
   try {
     const all = await withDocumentSchemaRetry(() =>
       companyId
-        ? db.select().from(purchaseQuotationsTable).where(eq(purchaseQuotationsTable.companyId, companyId))
-        : db.select().from(purchaseQuotationsTable),
+        ? db.select().from(purchaseQuotationsTable).where(and(eq(purchaseQuotationsTable.companyId, companyId), sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`))
+        : db.select().from(purchaseQuotationsTable).where(sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`),
     );
     const visible = all.filter((doc) =>
       canSee(doc, req.session.userId!, req.session.isAdmin ?? false, req.session.userRole === "external"),
@@ -156,9 +157,9 @@ router.get("/purchase-quotations", async (req, res): Promise<void> => {
         ? db
             .select()
             .from(purchaseQuotationsTable)
-            .where(eq(purchaseQuotationsTable.companyId, companyId))
+            .where(and(eq(purchaseQuotationsTable.companyId, companyId), sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`))
             .orderBy(desc(purchaseQuotationsTable.createdAt))
-        : db.select().from(purchaseQuotationsTable).orderBy(desc(purchaseQuotationsTable.createdAt)),
+        : db.select().from(purchaseQuotationsTable).where(sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`).orderBy(desc(purchaseQuotationsTable.createdAt)),
     );
     const visible = docs
       .filter((doc) => canSee(doc, req.session.userId!, req.session.isAdmin ?? false, req.session.userRole === "external"))
@@ -224,7 +225,7 @@ router.get("/purchase-quotations/:id", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Invalid ID" });
     return;
   }
-  const [doc] = await db.select().from(purchaseQuotationsTable).where(eq(purchaseQuotationsTable.id, id));
+  const [doc] = await db.select().from(purchaseQuotationsTable).where(and(eq(purchaseQuotationsTable.id, id), sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`));
   if (!doc || (req.session.companyId && doc.companyId !== req.session.companyId)) {
     res.status(404).json({ error: "Purchase quotation not found" });
     return;
@@ -272,8 +273,8 @@ router.put("/purchase-quotations/:id", async (req, res): Promise<void> => {
   if (req.body.currency !== undefined) data.currency = req.body.currency;
   if (req.body.isPrivate !== undefined) data.isPrivate = req.body.isPrivate === true;
   if (req.body.status) data.status = req.body.status;
-  data.manpowerDetails = req.body.manpowerDetails && typeof req.body.manpowerDetails === "object"
-    ? req.body.manpowerDetails
+  data.manpowerDetails = req.body.manpowerDetails !== undefined
+    ? (req.body.manpowerDetails && typeof req.body.manpowerDetails === "object" ? req.body.manpowerDetails : null)
     : existing.manpowerDetails ?? null;
   const [updated] = await db.update(purchaseQuotationsTable).set(data)
     .where(eq(purchaseQuotationsTable.id, id)).returning();
@@ -483,15 +484,22 @@ router.delete("/purchase-quotations/:id", async (req, res): Promise<void> => {
     return;
   }
   const id = Number(req.params.id);
-  const [deleted] = await db.delete(purchaseQuotationsTable).where(and(
+  const companyId = req.session.companyId!;
+  const [existing] = await db.select().from(purchaseQuotationsTable).where(and(
     eq(purchaseQuotationsTable.id, id),
-    eq(purchaseQuotationsTable.companyId, req.session.companyId!),
-  )).returning();
-  if (!deleted) {
+    eq(purchaseQuotationsTable.companyId, companyId),
+    sql`COALESCE(${purchaseQuotationsTable.isDeleted}, 0) = 0`,
+  ));
+  if (!existing) {
     res.status(404).json({ error: "Purchase quotation not found" });
     return;
   }
-  logAudit({ req, action: "delete", entityType: "purchase_quotation", entityId: id, entityLabel: deleted.pqNumber });
+  const ok = await softDeleteById(pool, "purchase_quotations", { id, companyId });
+  if (!ok) {
+    res.status(404).json({ error: "Purchase quotation not found" });
+    return;
+  }
+  logAudit({ req, action: "delete", entityType: "purchase_quotation", entityId: id, entityLabel: existing.pqNumber });
   res.json({ success: true });
 });
 

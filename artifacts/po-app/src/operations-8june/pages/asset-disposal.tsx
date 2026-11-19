@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { DatePicker } from "@/operations-8june/components/ui/date-picker";
 import {
-  Package, TrendingDown, TrendingUp, X, Loader2,
+  Package, TrendingDown, TrendingUp, Loader2,
   Pencil, List, Save, Calculator, Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,7 +30,7 @@ const DISPOSAL_TYPES = [
   { value: "sale", label: "Sale" },
   { value: "scrap", label: "Scrap" },
   { value: "write_off", label: "Write-off" },
-  { value: "donation", label: "Donation" },
+  { value: "donation", label: "Donation / Gift" },
 ] as const;
 
 function money(n: number) {
@@ -540,10 +540,9 @@ export default function AssetDisposalPage() {
         <Button
           type="button"
           variant="outline"
-          className="h-10 gap-2 border-[#D1D5DB] bg-white text-[#334155] hover:bg-[#F8FAFC] font-medium px-5 rounded-lg shadow-sm"
+          className="h-10 border-[#D1D5DB] bg-white text-[#334155] hover:bg-[#F8FAFC] font-medium px-5 rounded-lg shadow-sm"
           onClick={() => setLocation("/assets/register")}
         >
-          <X className="h-4 w-4" />
           Cancel
         </Button>
         <Button

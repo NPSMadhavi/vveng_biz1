@@ -881,6 +881,7 @@ export default function BalanceSheetPage() {
               <GroupLabel label="Equity" />
               {data.equity.filter(e => Math.abs(e.amount) > 0.005).map(e => {
                 const open = Boolean(expandedRows[e.code]);
+                const isBroughtForwardRe = e.code === "3100" || /retained earnings/i.test(e.name);
                 return (
                   <div key={e.code} className="border-b border-gray-100">
                     <div
@@ -889,7 +890,9 @@ export default function BalanceSheetPage() {
                     >
                       <span className="flex items-baseline gap-3 text-sm text-gray-600">
                         <span className="font-mono text-xs text-gray-400 w-10 shrink-0">{e.code}</span>
-                        <span className={cn(open && "text-blue-700 font-medium")}>{e.name}</span>
+                        <span className={cn(open && "text-blue-700 font-medium")}>
+                          {isBroughtForwardRe ? "Retained Earnings (Brought Forward)" : e.name}
+                        </span>
                         <ChevronDown className={cn("h-3.5 w-3.5 text-gray-400 transition-transform", open && "rotate-180 text-blue-600")} />
                       </span>
                       <span className={cn("font-mono text-sm tabular-nums ml-6 shrink-0", e.amount < 0 ? "text-red-600" : "text-gray-800")}>{fmtAmt(e.amount)}</span>
@@ -903,8 +906,12 @@ export default function BalanceSheetPage() {
                 );
               })}
               <div className="flex items-baseline justify-between px-5 py-2 border-b border-gray-100 hover:bg-gray-50/60">
-                <span className="flex items-baseline gap-3 text-sm text-gray-500 italic">
-                  <span className="w-10 shrink-0" />Retained Earnings
+                <span className="flex items-baseline gap-3 text-sm text-gray-600">
+                  <span className="w-10 shrink-0" />
+                  <span>
+                    Profit/(Loss) for the Period
+                    <span className="ml-2 text-[11px] italic text-gray-400">from Profit &amp; Loss</span>
+                  </span>
                 </span>
                 <span className={cn("font-mono text-sm tabular-nums ml-6 shrink-0", data.retainedEarnings < 0 ? "text-red-600" : "text-gray-800")}>{fmtAmt(data.retainedEarnings)}</span>
               </div>
@@ -918,7 +925,9 @@ export default function BalanceSheetPage() {
           </div>
 
           {!data.balanced && (
-            <p className="text-xs text-red-500">Difference: {fmtAmt(Math.abs(data.totalAssets - data.totalLiabilitiesAndEquity))} — check for unposted journal entries or missing account classifications.</p>
+            <p className="text-xs text-red-500">
+              Difference: {fmtAmt(Math.abs(data.totalAssets - data.totalLiabilitiesAndEquity))} — Assets must equal Liabilities + Equity (incl. Profit/(Loss) from P&amp;L). Check unposted journals, suspense lines, or misclassified accounts.
+            </p>
           )}
         </>
       )}

@@ -21,7 +21,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { useVedaFormFill } from "@/hooks/useVedaFormFill";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
-import { Trash2, Save, Eye, Lock, Plus, Layers, AlignLeft, AlignCenter, Upload, Copy, Package, ArrowLeft, X } from "lucide-react";
+import { Trash2, Save, Eye, Lock, Plus, Layers, AlignLeft, AlignCenter, Upload, Copy, Package, ArrowLeft, X, Sparkles } from "lucide-react";
+import { AiInvoiceDialog, type AiGeneratedInvoice } from "@/components/ai-invoice-dialog";
 import { cn, plainText } from "@/lib/utils";
 import type { FieldErrors } from "react-hook-form";
 import { generateQuotation_PDF } from "@/lib/pdf";
@@ -99,6 +100,7 @@ export default function QuotationNew() {
   const [importOpen, setImportOpen] = useState(false);
   const [importQtOpen, setImportQtOpen] = useState(false);
   const [poUploadOpen, setPoUploadOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const [stockPickerIndex, setStockPickerIndex] = useState<number | null>(null);
   const [discountPct, setDiscountPct] = useState(0);
 
@@ -120,9 +122,18 @@ export default function QuotationNew() {
   });
   useVedaFormFill(form);
 
+  const appliedDefaultGst = useRef(false);
   useEffect(() => {
-    if (settings) form.setValue("tax", settings.gstRate);
-  }, [settings]);
+    if (!settings || appliedDefaultGst.current) return;
+    appliedDefaultGst.current = true;
+    // Never overwrite overseas / zero-rated GST with company default
+    if (isOverseas || form.getValues("tax") === 0) return;
+    form.setValue("tax", settings.gstRate ?? 9);
+  }, [settings, isOverseas]);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   // Prefill from AI agent or "Copy to New Quotation"
   useEffect(() => {
@@ -220,7 +231,7 @@ export default function QuotationNew() {
   })();
 
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
 
   const appendLock = useRef(false);
   useEffect(() => {
@@ -289,6 +300,34 @@ export default function QuotationNew() {
     await doSubmit(values, openPreview);
   }
 
+  function handleAiApply(data: AiGeneratedInvoice) {
+    const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
+    const current = form.getValues();
+    form.reset({
+      ...current,
+      customerName: data.customerName || "",
+      customerAddress: data.customerAddress || "",
+      customerContact: data.customerContact || "",
+      customerContactEmail: data.customerContactEmail || "",
+      currency: data.currency || "SGD",
+      paymentTerms: data.paymentTerms || "30 Days Net",
+      notes: data.notes || "",
+      issueDate: current.issueDate || getToday(),
+      tax: settings?.gstRate ?? current.tax ?? 9,
+      discountAmount: Number(data.discountAmount) || 0,
+      items: data.items?.length
+        ? data.items.map((it) => ({
+            ...blankItem,
+            partNumber: it.partNumber || "",
+            description: it.description || "",
+            qty: Number(it.qty) || 1,
+            uom: it.uom || "",
+            unitPrice: Number(it.unitPrice) || 0,
+          }))
+        : [blankItem],
+    });
+  }
+
   function handlePoExtracted(data: ExtractedPoData) {
     const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
     const mappedItems = data.items
@@ -345,7 +384,7 @@ export default function QuotationNew() {
       return { ...i, partNumber, discount: disc, isFoc: !!(i as any).isFoc, amount: (i.qty * i.unitPrice * (1 - disc / 100)).toFixed(2) };
     });
     const payload: any = { ...values, status: openPreview ? "confirmed" : "draft", discountAmount: values.discountAmount, items: itemsWithAmount };
-    if (!isManpower) delete payload.manpowerDetails;
+    payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
     createMutation.mutate({ data: payload }, {
       onSuccess: async (data) => {
         // Show the new quotation in the list immediately (no manual refresh).
@@ -394,6 +433,15 @@ export default function QuotationNew() {
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          <Button
+ type="button"
+ variant="outline"
+ className="gap-2 border-dashed border-violet-500/60 text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/30"
+ onClick={() => setAiOpen(true)}
+          >
+            <Sparkles className="h-4 w-4" />
+            Generate with AI
+          </Button>
           <Button
  type="button"
  variant="outline"
@@ -575,7 +623,7 @@ export default function QuotationNew() {
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
-                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="Quotation Date" />
+                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="Quotation Date" hideHints />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -958,6 +1006,13 @@ export default function QuotationNew() {
             for (const item of newItems) append(item);
           }
         }}
+      />
+
+      <AiInvoiceDialog
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        onApply={handleAiApply}
+        documentKind="quotation"
       />
 
       <CustomerPoUploadDialog

@@ -64,4 +64,17 @@ describe("opening balance rules (documentation assertions)", () => {
     assert.ok(sales > 0 && purchases > 0);
     assert.equal(carryForwardIncomeExpense, false);
   });
+
+  it("folds P&L into retained earnings with debit−credit sign", () => {
+    // balance = debit − credit. Profit ⇒ revenue credit-heavy ⇒ plNet negative.
+    const revenueBalance = 0 - 100_000; // credit 100k
+    const expenseBalance = 40_000 - 0; // debit 40k
+    const plNet = revenueBalance + expenseBalance; // -60_000
+    const priorRetainedEarnings = 0 - 10_000; // credit 10k equity
+    // Adding plNet increases the credit side of RE (more negative debit−credit).
+    const nextRetainedEarnings = priorRetainedEarnings + plNet;
+    assert.equal(plNet, -60_000);
+    assert.equal(nextRetainedEarnings, -70_000);
+    assert.equal(nextRetainedEarnings < 0 ? Math.abs(nextRetainedEarnings) : 0, 70_000); // credit side
+  });
 });

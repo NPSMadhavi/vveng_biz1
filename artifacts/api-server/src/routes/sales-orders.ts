@@ -1,11 +1,12 @@
 import { Router, type IRouter } from "express";
 import { db, pool, salesOrdersTable, usersTable, customersTable, invoicesTable, deliveryOrdersTable } from "@workspace/db";
-import { eq, desc, inArray, ilike, and } from "drizzle-orm";
+import { eq, desc, inArray, ilike, and, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
 import { logger } from "../lib/logger.js";
 import { logServerError, sanitizeErrorMessage } from "../lib/safe-error.js";
 import { applyVoucherAttachment, sendVoucherFile, VOUCHER_UPLOAD_FOLDERS } from "../lib/operations-upload.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -87,8 +88,8 @@ router.get("/sales-orders/stats", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
 
   const all = companyId
-    ? await db.select().from(salesOrdersTable).where(eq(salesOrdersTable.companyId, companyId))
-    : await db.select().from(salesOrdersTable);
+    ? await db.select().from(salesOrdersTable).where(and(eq(salesOrdersTable.companyId, companyId), sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`))
+    : await db.select().from(salesOrdersTable).where(sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`);
   const visible = visibilityFilter(all, userId, isAdmin, isExternal);
   res.json({
     total: visible.length,
@@ -108,8 +109,8 @@ router.get("/sales-orders", async (req, res): Promise<void> => {
 
   await ensureManpowerDetails();
   const docs = companyId
-    ? await db.select().from(salesOrdersTable).where(eq(salesOrdersTable.companyId, companyId)).orderBy(desc(salesOrdersTable.createdAt))
-    : await db.select().from(salesOrdersTable).orderBy(desc(salesOrdersTable.createdAt));
+    ? await db.select().from(salesOrdersTable).where(and(eq(salesOrdersTable.companyId, companyId), sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`)).orderBy(desc(salesOrdersTable.createdAt))
+    : await db.select().from(salesOrdersTable).where(sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`).orderBy(desc(salesOrdersTable.createdAt));
   const visible = visibilityFilter(docs, userId, isAdmin, isExternal).map(parseDoc);
   res.json(await withUsernames(visible));
 });
@@ -205,7 +206,7 @@ router.get("/sales-orders/:id", async (req, res): Promise<void> => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
   await ensureManpowerDetails();
-  const [doc] = await db.select().from(salesOrdersTable).where(eq(salesOrdersTable.id, id));
+  const [doc] = await db.select().from(salesOrdersTable).where(and(eq(salesOrdersTable.id, id), sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Sales order not found" }); return; }
 
   const userId = req.session.userId!;
@@ -250,7 +251,9 @@ router.put("/sales-orders/:id", async (req, res): Promise<void> => {
     subtotal: subtotal.toFixed(2), discountAmount: docDiscount.toFixed(2),
     tax: taxAmt.toFixed(2), totalAmount: totalAmount.toFixed(2),
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
-    manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null,
+    manpowerDetails: manpowerDetails !== undefined
+      ? (manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null)
+      : existing.manpowerDetails ?? null,
   };
   if (qtId !== undefined) updateData.qtId = qtId ? Number(qtId) : null;
   if (qtNumber !== undefined) updateData.qtNumber = qtNumber || null;
@@ -458,8 +461,16 @@ router.delete("/sales-orders/:id", async (req, res): Promise<void> => {
   const isAdmin = req.session.isAdmin ?? false;
   if (!isAdmin) { res.status(403).json({ error: "Only administrators can delete sales orders" }); return; }
   const id = parseInt(req.params.id);
-  const [deleted] = await db.delete(salesOrdersTable).where(eq(salesOrdersTable.id, id)).returning();
-  logAudit({ req, action: "delete", entityType: "sales_order", entityId: id, entityLabel: deleted?.soNumber });
+  const companyId = req.session.companyId;
+  const [existing] = await db.select().from(salesOrdersTable).where(and(
+    eq(salesOrdersTable.id, id),
+    sql`COALESCE(${salesOrdersTable.isDeleted}, 0) = 0`,
+    ...(companyId ? [eq(salesOrdersTable.companyId, companyId)] : []),
+  ));
+  if (!existing) { res.status(404).json({ error: "Sales order not found" }); return; }
+  const ok = await softDeleteById(pool, "sales_orders", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Sales order not found" }); return; }
+  logAudit({ req, action: "delete", entityType: "sales_order", entityId: id, entityLabel: existing.soNumber });
   res.json({ success: true });
 });
 

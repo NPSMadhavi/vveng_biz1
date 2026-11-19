@@ -16,6 +16,7 @@ import {
   previewPayslipCompany,
   processIndividualPayrollCompany,
   repairPayrollMonthSnapshots,
+  savePayrollMonthSnapshot,
   syncEmployeeSalaryFromPayrollConfig,
   syncPayrollConfigFromEmployee,
   viewPayslipCompany,
@@ -1152,8 +1153,7 @@ router.delete("/licenses/:id", async (req, res): Promise<void> => {
 router.get("/employees", async (req, res): Promise<void> => {
   if (!requireAuth(req, res) || !requireCompany(req, res)) return;
   try {
-    const result = await pool.query(
-      `SELECT e.*,
+    const listSql = `SELECT e.*,
               COALESCE(docs.documents, '[]'::json) AS documents
        FROM employees e
        LEFT JOIN LATERAL (
@@ -1169,9 +1169,21 @@ router.get("/employees", async (req, res): Promise<void> => {
          WHERE d.employee_id = e.id AND d.company_id = e.company_id
        ) docs ON true
        WHERE e.company_id = $1
-       ORDER BY COALESCE(e.created_at, e.join_date) DESC NULLS LAST, e.id DESC`,
-      [req.session.companyId],
-    );
+         AND COALESCE(e.is_deleted, 0) = 0
+       ORDER BY COALESCE(e.created_at, e.join_date) DESC NULLS LAST, e.id DESC`;
+    let result;
+    try {
+      result = await pool.query(listSql, [req.session.companyId]);
+    } catch (err: any) {
+      if (err?.code !== "42P01") throw err;
+      result = await pool.query(
+        `SELECT e.* FROM employees e
+         WHERE e.company_id = $1
+           AND COALESCE(e.is_deleted, 0) = 0
+         ORDER BY COALESCE(e.created_at, e.join_date) DESC NULLS LAST, e.id DESC`,
+        [req.session.companyId],
+      );
+    }
     res.json(formatRows(result.rows));
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? "Failed to fetch employees" });
@@ -1184,7 +1196,7 @@ router.get("/employees/:id", async (req, res): Promise<void> => {
   if (id == null) { res.status(400).json({ error: "Invalid id" }); return; }
   try {
     const result = await pool.query(
-      `SELECT * FROM employees WHERE id = $1 AND company_id = $2`,
+      `SELECT * FROM employees WHERE id = $1 AND company_id = $2 AND COALESCE(is_deleted, 0) = 0`,
       [id, req.session.companyId],
     );
     if (!result.rows[0]) { res.status(404).json({ error: "Employee not found" }); return; }
@@ -1257,12 +1269,9 @@ router.delete("/employees/:id", async (req, res): Promise<void> => {
   if (id == null) { res.status(400).json({ error: "Invalid id" }); return; }
   try {
     const companyId = req.session.companyId!;
-    await pool.query(`DELETE FROM dependents WHERE employee_id = $1 AND company_id = $2`, [id, companyId]);
-    const result = await pool.query(
-      `DELETE FROM employees WHERE id = $1 AND company_id = $2 RETURNING id`,
-      [id, companyId],
-    );
-    if (!result.rows[0]) { res.status(404).json({ error: "Employee not found" }); return; }
+    const { softDeleteById } = await import("../../lib/soft-delete.js");
+    const ok = await softDeleteById(pool, "employees", { id, companyId });
+    if (!ok) { res.status(404).json({ error: "Employee not found" }); return; }
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? "Failed to delete employee" });
@@ -1503,9 +1512,68 @@ async function syncMonthlySalaryFromPayroll(
   await syncEmployeeSalaryFromPayrollConfig(pool, companyId, row);
 }
 
-async function savePayrollConfig(companyId: number, body: Record<string, unknown>) {
+async function monthPayrollAlreadyExists(
+  companyId: number,
+  employeeId: number,
+  year: number,
+  month: number,
+): Promise<boolean> {
+  if (!employeeId || !year || month < 1 || month > 12) return false;
+  try {
+    await repairPayrollMonthSnapshots(pool);
+  } catch {
+    // best effort
+  }
+  const existing = await pool.query<{ id: number }>(
+    `SELECT id FROM payroll_records
+     WHERE company_id = $1 AND employee_id = $2
+       AND (
+         (payroll_year = $3 AND payroll_month = $4)
+         OR (
+           EXTRACT(YEAR FROM (pay_period_start AT TIME ZONE 'Asia/Singapore')) = $3
+           AND EXTRACT(MONTH FROM (pay_period_start AT TIME ZONE 'Asia/Singapore')) = $4
+         )
+       )
+     ORDER BY id DESC
+     LIMIT 1`,
+    [companyId, employeeId, year, month],
+  );
+  return Boolean(existing.rows[0]);
+}
+
+async function savePayrollConfig(
+  companyId: number,
+  body: Record<string, unknown>,
+  opts?: { allowExistingMonth?: boolean },
+) {
   if (body.isActive == null) body.isActive = true;
   const employeeId = Number(body.employeeId);
+  const payrollMonth = Number(body.payrollMonth);
+  const payrollYear = Number(body.payrollYear);
+  delete body.payrollMonth;
+  delete body.payrollYear;
+  delete body.allowExistingMonth;
+
+  const hasMonth =
+    Number.isFinite(payrollMonth)
+    && payrollMonth >= 1
+    && payrollMonth <= 12
+    && Number.isFinite(payrollYear)
+    && payrollYear > 0;
+
+  if (
+    hasMonth
+    && Number.isFinite(employeeId)
+    && !opts?.allowExistingMonth
+    && (await monthPayrollAlreadyExists(companyId, employeeId, payrollYear, payrollMonth))
+  ) {
+    const err = new Error(
+      "Already month completed. This month's payroll is already created. Use Edit to change it.",
+    ) as Error & { status?: number };
+    err.status = 409;
+    throw err;
+  }
+
   const existing = Number.isFinite(employeeId)
     ? await pool.query<{ id: number }>(
       `SELECT id FROM employee_payroll
@@ -1543,7 +1611,28 @@ async function savePayrollConfig(companyId: number, body: Record<string, unknown
       console.error("Failed to sync employee salary from payroll config:", syncErr);
     }
   }
-  // Do NOT create/process payroll_records here — that happens only via Process Payroll.
+
+  // Persist the selected month snapshot so Create Payroll is once-per-month.
+  // Process Payroll still handles payment/processing separately.
+  if (hasMonth && Number.isFinite(employeeId) && row?.id != null) {
+    try {
+      await savePayrollMonthSnapshot(
+        pool,
+        companyId,
+        Number(row.id),
+        employeeId,
+        payrollMonth,
+        payrollYear,
+        Number(body.baseSalary ?? row.base_salary) || 0,
+        body.allowances ?? row.allowances,
+        body.deductions ?? row.deductions,
+      );
+    } catch (snapErr) {
+      console.error("Failed to save payroll month snapshot:", snapErr);
+      throw snapErr;
+    }
+  }
+
   const empMap = await fetchEmployeeMap(companyId);
   return mapPayrollConfigRow(row, empMap.get(row.employee_id as number));
 }
@@ -1552,10 +1641,12 @@ router.post("/employee-payroll", async (req, res): Promise<void> => {
   if (!requireAuth(req, res) || !requireCompany(req, res)) return;
   try {
     const companyId = req.session.companyId!;
-    const saved = await savePayrollConfig(companyId, mapPayrollBody(req.body));
+    const saved = await savePayrollConfig(companyId, mapPayrollBody(req.body), {
+      allowExistingMonth: false,
+    });
     res.status(201).json(saved);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to create payroll config" });
+    res.status(err?.status || 500).json({ error: err?.message ?? "Failed to create payroll config" });
   }
 });
 
@@ -1563,36 +1654,77 @@ router.post("/payroll/configs", async (req, res): Promise<void> => {
   if (!requireAuth(req, res) || !requireCompany(req, res)) return;
   try {
     const companyId = req.session.companyId!;
-    const saved = await savePayrollConfig(companyId, mapPayrollBody(req.body));
+    const saved = await savePayrollConfig(companyId, mapPayrollBody(req.body), {
+      allowExistingMonth: false,
+    });
     res.status(201).json(saved);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to create payroll config" });
+    res.status(err?.status || 500).json({ error: err?.message ?? "Failed to create payroll config" });
   }
 });
+
+async function updatePayrollConfigById(
+  companyId: number,
+  id: number,
+  body: Record<string, unknown>,
+) {
+  const payrollMonth = Number(body.payrollMonth);
+  const payrollYear = Number(body.payrollYear);
+  delete body.payrollMonth;
+  delete body.payrollYear;
+  delete body.allowExistingMonth;
+
+  const built = buildUpdate("employee_payroll", id, companyId, body, PAYROLL_CONFIG_COLUMNS);
+  if (!built) throw Object.assign(new Error("No fields to update"), { status: 400 });
+  const sql = built.sql.replace(" SET ", " SET updated_at = NOW(), ");
+  const result = await pool.query(sql, built.values);
+  if (!result.rows[0]) throw Object.assign(new Error("Payroll config not found"), { status: 404 });
+
+  if (body.baseSalary != null) {
+    try {
+      await syncMonthlySalaryFromPayroll(companyId, result.rows[0]);
+    } catch (syncErr) {
+      console.error("Failed to sync employee salary from payroll config:", syncErr);
+    }
+  }
+
+  const hasMonth =
+    Number.isFinite(payrollMonth)
+    && payrollMonth >= 1
+    && payrollMonth <= 12
+    && Number.isFinite(payrollYear)
+    && payrollYear > 0;
+  if (hasMonth) {
+    await savePayrollMonthSnapshot(
+      pool,
+      companyId,
+      id,
+      Number(result.rows[0].employee_id),
+      payrollMonth,
+      payrollYear,
+      Number(body.baseSalary ?? result.rows[0].base_salary) || 0,
+      body.allowances ?? result.rows[0].allowances,
+      body.deductions ?? result.rows[0].deductions,
+    );
+  }
+
+  const empMap = await fetchEmployeeMap(companyId);
+  return mapPayrollConfigRow(result.rows[0], empMap.get(result.rows[0].employee_id));
+}
 
 router.put("/employee-payroll/:id", async (req, res): Promise<void> => {
   if (!requireAuth(req, res) || !requireCompany(req, res)) return;
   const id = parseId(req.params.id);
   if (id == null) { res.status(400).json({ error: "Invalid id" }); return; }
   try {
-    const companyId = req.session.companyId!;
-    const body = mapPayrollBody(req.body);
-    const built = buildUpdate("employee_payroll", id, companyId, body, PAYROLL_CONFIG_COLUMNS);
-    if (!built) { res.status(400).json({ error: "No fields to update" }); return; }
-    const sql = built.sql.replace(" SET ", " SET updated_at = NOW(), ");
-    const result = await pool.query(sql, built.values);
-    if (!result.rows[0]) { res.status(404).json({ error: "Payroll config not found" }); return; }
-    if (body.baseSalary != null) {
-      try {
-        await syncMonthlySalaryFromPayroll(companyId, result.rows[0]);
-      } catch (syncErr) {
-        console.error("Failed to sync employee salary from payroll config:", syncErr);
-      }
-    }
-    const empMap = await fetchEmployeeMap(companyId);
-    res.json(mapPayrollConfigRow(result.rows[0], empMap.get(result.rows[0].employee_id)));
+    const saved = await updatePayrollConfigById(
+      req.session.companyId!,
+      id,
+      mapPayrollBody(req.body),
+    );
+    res.json(saved);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to update payroll config" });
+    res.status(err?.status || 500).json({ error: err?.message ?? "Failed to update payroll config" });
   }
 });
 
@@ -1601,24 +1733,14 @@ router.put("/payroll/configs/:id", async (req, res): Promise<void> => {
   const id = parseId(req.params.id);
   if (id == null) { res.status(400).json({ error: "Invalid id" }); return; }
   try {
-    const companyId = req.session.companyId!;
-    const body = mapPayrollBody(req.body);
-    const built = buildUpdate("employee_payroll", id, companyId, body, PAYROLL_CONFIG_COLUMNS);
-    if (!built) { res.status(400).json({ error: "No fields to update" }); return; }
-    const sql = built.sql.replace(" SET ", " SET updated_at = NOW(), ");
-    const result = await pool.query(sql, built.values);
-    if (!result.rows[0]) { res.status(404).json({ error: "Payroll config not found" }); return; }
-    if (body.baseSalary != null) {
-      try {
-        await syncMonthlySalaryFromPayroll(companyId, result.rows[0]);
-      } catch (syncErr) {
-        console.error("Failed to sync employee salary from payroll config:", syncErr);
-      }
-    }
-    const empMap = await fetchEmployeeMap(companyId);
-    res.json(mapPayrollConfigRow(result.rows[0], empMap.get(result.rows[0].employee_id)));
+    const saved = await updatePayrollConfigById(
+      req.session.companyId!,
+      id,
+      mapPayrollBody(req.body),
+    );
+    res.json(saved);
   } catch (err: any) {
-    res.status(500).json({ error: err?.message ?? "Failed to update payroll config" });
+    res.status(err?.status || 500).json({ error: err?.message ?? "Failed to update payroll config" });
   }
 });
 

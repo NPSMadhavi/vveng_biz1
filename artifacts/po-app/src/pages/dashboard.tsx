@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   useListInvoices, getListInvoicesQueryKey,
   useListPurchaseOrders, getListPurchaseOrdersQueryKey,
+  useListQuotations, getListQuotationsQueryKey,
+  useListDeliveryOrders, getListDeliveryOrdersQueryKey,
 } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import {
@@ -19,9 +21,10 @@ import {
   RotateCcw,
   AlertCircle,
   Clock,
+  ArrowRight,
+  ChevronDown,
 } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
-import { hasPosChannelAccess } from "@/contexts/auth-modules";
 import { fmtDate } from "@/lib/utils";
 import { DateRangeFilter } from "@/components/date-range-filter";
 import { CloseFyStartNextWizard, usePeriodReadOnly } from "@/components/financial-year-controls";
@@ -79,88 +82,268 @@ function vendorOutstanding(vi: { totalAmount?: string | number; paidAmount?: str
   return Math.max(0, total - paid);
 }
 
-function LineChart({ incomePts, expensePts, labels }: {
-  incomePts: string; expensePts: string; labels: string[];
+function formatAxisTick(v: number) {
+  if (v <= 0) return "0";
+  if (v >= 1_000_000) {
+    const m = v / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (v >= 1000) {
+    const k = v / 1000;
+    return `${Number.isInteger(k) ? k : Math.round(k * 10) / 10}k`;
+  }
+  return String(Math.round(v));
+}
+
+function niceChartMax(rawMax: number) {
+  if (rawMax <= 0) return 160;
+  const padded = rawMax * 1.15;
+  const mag = Math.pow(10, Math.floor(Math.log10(padded)));
+  const norm = padded / mag;
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 4 ? 4 : norm <= 5 ? 5 : 8;
+  return nice * mag;
+}
+
+function buildSmoothPath(
+  points: Array<{ x: number; y: number }>,
+  yMin: number,
+  yMax: number,
+) {
+  if (points.length === 0) return "";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  const clampY = (y: number) => Math.min(yMax, Math.max(yMin, y));
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] || p2;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = clampY(p1.y + (p2.y - p0.y) / 6);
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = clampY(p2.y - (p3.y - p1.y) / 6);
+    d += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x} ${p2.y}`;
+  }
+  return d;
+}
+
+function LineChart({
+  incomeValues,
+  expenseValues,
+  labels,
+}: {
+  incomeValues: number[];
+  expenseValues: number[];
+  labels: string[];
 }) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const padL = 44;
+  const padR = 16;
+  const padT = 12;
+  const padB = 30;
+  const width = 640;
+  const height = 280;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const baselineY = padT + plotH;
+  const n = Math.max(incomeValues.length, expenseValues.length, labels.length, 2);
+  const rawMax = Math.max(...incomeValues, ...expenseValues, 0);
+  const maxVal = niceChartMax(rawMax);
+  const ticks = [0, 1, 2, 3, 4].map((i) => (maxVal * (4 - i)) / 4);
+
+  const toPoint = (values: number[]) =>
+    Array.from({ length: n }, (_, i) => {
+      const v = Math.max(0, values[i] ?? 0);
+      const x = padL + (i / Math.max(n - 1, 1)) * plotW;
+      const y = baselineY - (v / maxVal) * plotH;
+      return { x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) };
+    });
+
+  const incomePts = toPoint(incomeValues);
+  const expensePts = toPoint(expenseValues);
+  const incomePath = buildSmoothPath(incomePts, padT, baselineY);
+  const expensePath = buildSmoothPath(expensePts, padT, baselineY);
+  const lastIncome = incomePts[incomePts.length - 1];
+  const areaD = incomePts.length
+    ? `${incomePath} L ${lastIncome.x} ${baselineY} L ${incomePts[0].x} ${baselineY} Z`
+    : "";
+
+  const activeIdx = hoverIdx ?? incomePts.length - 1;
+  const activeIncome = incomePts[activeIdx];
+  const activeExpense = expensePts[activeIdx];
+  const tipW = 128;
+  const tipH = 62;
+  const tipX = activeIncome
+    ? Math.min(Math.max(activeIncome.x - tipW / 2, padL), width - padR - tipW)
+    : padL;
+  const tipY = activeIncome
+    ? Math.max(padT, Math.min(activeIncome.y, activeExpense?.y ?? activeIncome.y) - tipH - 12)
+    : padT;
+
+  const onMove = (e: MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * width;
+    if (x < padL || x > width - padR) {
+      setHoverIdx(null);
+      return;
+    }
+    const t = (x - padL) / plotW;
+    const idx = Math.round(t * Math.max(n - 1, 1));
+    setHoverIdx(Math.max(0, Math.min(n - 1, idx)));
+  };
+
   return (
-    <svg viewBox="0 0 620 220" className="h-[220px] w-full">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <line
-          key={i}
-          x1="20"
-          y1={40 + i * 35}
-          x2="600"
-          y2={40 + i * 35}
-          stroke="#e8edf5"
-          strokeWidth="1"
-        />
-      ))}
-      <polyline
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="h-full min-h-[280px] w-full cursor-crosshair"
+      preserveAspectRatio="none"
+      role="img"
+      aria-label="Income vs expense chart"
+      onMouseMove={onMove}
+      onMouseLeave={() => setHoverIdx(null)}
+    >
+      <defs>
+        <linearGradient id="incomeAreaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#2B7BE8" stopOpacity="0.42" />
+          <stop offset="40%" stopColor="#2B7BE8" stopOpacity="0.18" />
+          <stop offset="100%" stopColor="#2B7BE8" stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+
+      {ticks.map((tick, i) => {
+        const y = padT + (i / 4) * plotH;
+        return (
+          <g key={`tick-${i}`}>
+            <line
+              x1={padL}
+              y1={y}
+              x2={width - padR}
+              y2={y}
+              stroke="#D7E0F0"
+              strokeWidth="1"
+              strokeDasharray="4 6"
+            />
+            <text
+              x={padL - 10}
+              y={y + 3.5}
+              textAnchor="end"
+              fill="#8B9BB4"
+              fontSize="11"
+            >
+              {formatAxisTick(tick)}
+            </text>
+          </g>
+        );
+      })}
+
+      <line x1={padL} y1={padT} x2={padL} y2={baselineY} stroke="#B8C5DB" strokeWidth="1.5" />
+      <line x1={padL} y1={baselineY} x2={width - padR} y2={baselineY} stroke="#B8C5DB" strokeWidth="1.5" />
+
+      {areaD ? <path d={areaD} fill="url(#incomeAreaGrad)" /> : null}
+
+      {/* Expense (#1E3A8A) under Income (#2B7BE8) — both visible like reference */}
+      <path
+        d={expensePath}
         fill="none"
-        stroke="#1a73e8"
-        strokeWidth="2.5"
+        stroke="#1E3A8A"
+        strokeWidth="2.75"
         strokeLinecap="round"
         strokeLinejoin="round"
-        points={incomePts}
       />
-      <polyline
+      <path
+        d={incomePath}
         fill="none"
-        stroke="#ef4444"
-        strokeWidth="2.5"
+        stroke="#2B7BE8"
+        strokeWidth="3.25"
         strokeLinecap="round"
         strokeLinejoin="round"
-        points={expensePts}
       />
-      {labels.map((label, i) => (
-        <text
-          key={label}
-          x={20 + i * 145}
-          y="210"
-          fill="#94a3b8"
-          fontSize="11"
-        >
-          {label}
-        </text>
-      ))}
+
+      {lastIncome && hoverIdx === null ? (
+        <>
+          {expensePts[expensePts.length - 1] ? (
+            <circle
+              cx={expensePts[expensePts.length - 1].x}
+              cy={expensePts[expensePts.length - 1].y}
+              r="4.5"
+              fill="#FFFFFF"
+              stroke="#1E3A8A"
+              strokeWidth="2.25"
+            />
+          ) : null}
+          <circle
+            cx={lastIncome.x}
+            cy={lastIncome.y}
+            r="6.5"
+            fill="#FFFFFF"
+            stroke="#2B7BE8"
+            strokeWidth="3"
+          />
+        </>
+      ) : null}
+
+      {labels.map((label, i) => {
+        const x = padL + (i / Math.max(n - 1, 1)) * plotW;
+        return (
+          <g key={`${label}-${i}`}>
+            <line
+              x1={x}
+              y1={baselineY}
+              x2={x}
+              y2={baselineY + 5}
+              stroke="#B8C5DB"
+              strokeWidth="1.5"
+            />
+            <text
+              x={x}
+              y={height - 6}
+              fill="#8B9BB4"
+              fontSize="11"
+              textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"}
+            >
+              {label}
+            </text>
+          </g>
+        );
+      })}
+
+      {hoverIdx !== null && activeIncome && activeExpense ? (
+        <g pointerEvents="none">
+          <line
+            x1={activeIncome.x}
+            y1={padT}
+            x2={activeIncome.x}
+            y2={baselineY}
+            stroke="#94A3B8"
+            strokeWidth="1"
+            strokeDasharray="3 4"
+          />
+          <circle cx={activeIncome.x} cy={activeIncome.y} r="6" fill="#FFFFFF" stroke="#2B7BE8" strokeWidth="3" />
+          <circle cx={activeExpense.x} cy={activeExpense.y} r="5.5" fill="#FFFFFF" stroke="#1E3A8A" strokeWidth="2.5" />
+          <rect
+            x={tipX}
+            y={tipY}
+            width={tipW}
+            height={tipH}
+            rx="10"
+            fill="#0F1C33"
+            opacity="0.92"
+          />
+          <text x={tipX + 12} y={tipY + 18} fill="#E2E8F0" fontSize="10" fontWeight="600">
+            {labels[hoverIdx] ?? ""}
+          </text>
+          <circle cx={tipX + 16} cy={tipY + 34} r="3.5" fill="#2B7BE8" />
+          <text x={tipX + 24} y={tipY + 37} fill="#FFFFFF" fontSize="11">
+            {money(incomeValues[hoverIdx] ?? 0)}
+          </text>
+          <circle cx={tipX + 16} cy={tipY + 52} r="3.5" fill="#1E3A8A" />
+          <text x={tipX + 24} y={tipY + 55} fill="#FFFFFF" fontSize="11">
+            {money(expenseValues[hoverIdx] ?? 0)}
+          </text>
+        </g>
+      ) : null}
     </svg>
   );
-}
-
-function DonutChart({ segments }: { segments: { pct: number; color: string; offset: number }[] }) {
-  const r = 70;
-  const c = 2 * Math.PI * r;
-  return (
-    <svg viewBox="0 0 180 180" className="h-[160px] w-[160px] shrink-0">
-      <circle cx="90" cy="90" r={r} fill="none" stroke="#e8edf5" strokeWidth="22" />
-      {segments.map((seg) => (
-        <circle
-          key={`${seg.color}-${seg.offset}`}
-          cx="90"
-          cy="90"
-          r={r}
-          fill="none"
-          stroke={seg.color}
-          strokeWidth="22"
-          strokeDasharray={`${(seg.pct / 100) * c} ${c}`}
-          strokeDashoffset={-((seg.offset / 100) * c)}
-          transform="rotate(-90 90 90)"
-        />
-      ))}
-    </svg>
-  );
-}
-
-function buildSparkline(values: number[], yMin = 10, yMax = 160): string {
-  const n = values.length;
-  if (n === 0) return "20,100 600,100";
-  const max = Math.max(...values, 1);
-  return values
-    .map((v, i) => {
-      const x = 20 + (i / Math.max(n - 1, 1)) * 580;
-      const y = yMax - (v / max) * (yMax - yMin);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
 }
 
 export default function Dashboard() {
@@ -184,6 +367,11 @@ export default function Dashboard() {
     reconcileAgainstFinancialYears,
   } = useDateRangeOptional();
   const [fyRolloverRequest, setFyRolloverRequest] = useState<{ from: string; to: string } | null>(null);
+  const [selectedCard, setSelectedCard] = useState("Total Income");
+  const [hoveredCard, setHoveredCard] = useState<string | null>(null);
+  const cardHighlightStyle: CSSProperties = {
+    background: "linear-gradient(135deg, #2F4FC4 0%, #2B7BE8 100%)",
+  };
 
   const periodChipLabel = PERIOD_PRESETS.find((p) => p.id === periodPreset)?.label ?? "Custom Range";
   const periodLabel = fmtRangeLabel(rangeFrom, rangeTo);
@@ -232,29 +420,35 @@ export default function Dashboard() {
 
   const invoicesEnabled = hasModuleAccess("invoices") && !!companyId;
   const purchaseOrdersEnabled = hasModuleAccess("purchase_orders") && !!companyId;
+  const quotationsEnabled = hasModuleAccess("quotations") && !!companyId;
+  const deliveryOrdersEnabled = hasModuleAccess("delivery_orders") && !!companyId;
   const expensesEnabled = hasModuleAccess("accounting_expenses") && !!companyId;
   const incomeEnabled = hasModuleAccess("accounting_income") && !!companyId;
   const vendorInvoicesEnabled = hasModuleAccess("vendor_invoices") && !!companyId;
   const stockEnabled = hasModuleAccess("stock_items") && !!companyId;
 
-  const {
-    data: invoices = [],
-    isError: invoicesError,
-    isFetched: invoicesFetched,
-  } = useListInvoices({
+  const { data: invoices = [] } = useListInvoices({
     query: {
       queryKey: [...getListInvoicesQueryKey(), companyId],
       enabled: invoicesEnabled,
     },
   });
-  const {
-    data: purchaseOrders = [],
-    isError: purchaseOrdersError,
-    isFetched: purchaseOrdersFetched,
-  } = useListPurchaseOrders({
+  const { data: purchaseOrders = [] } = useListPurchaseOrders({
     query: {
       queryKey: [...getListPurchaseOrdersQueryKey(), companyId],
       enabled: purchaseOrdersEnabled,
+    },
+  });
+  const { data: quotations = [] } = useListQuotations({
+    query: {
+      queryKey: [...getListQuotationsQueryKey(), companyId],
+      enabled: quotationsEnabled,
+    },
+  });
+  const { data: deliveryOrders = [] } = useListDeliveryOrders({
+    query: {
+      queryKey: [...getListDeliveryOrdersQueryKey(), companyId],
+      enabled: deliveryOrdersEnabled,
     },
   });
 
@@ -287,21 +481,6 @@ export default function Dashboard() {
   const incomeRecords = incomeQuery.data ?? [];
   const stockItems = stockQuery.data ?? [];
   const vendorInvoices = vendorInvoicesQuery.data ?? [];
-
-  /** KPI list sources only — stock is not used for income/expense/AR/AP/recent. */
-  const kpiSourceEnabled =
-    invoicesEnabled ||
-    expensesEnabled ||
-    incomeEnabled ||
-    vendorInvoicesEnabled ||
-    purchaseOrdersEnabled;
-  /** Treat settled as fetched OR errored so a dead proxy does not block empty-state logic forever. */
-  const kpiSourcesSettled =
-    (!invoicesEnabled || invoicesFetched || invoicesError) &&
-    (!purchaseOrdersEnabled || purchaseOrdersFetched || purchaseOrdersError) &&
-    (!expensesEnabled || expensesQuery.isFetched || expensesQuery.isError) &&
-    (!incomeEnabled || incomeQuery.isFetched || incomeQuery.isError) &&
-    (!vendorInvoicesEnabled || vendorInvoicesQuery.isFetched || vendorInvoicesQuery.isError);
 
   const metrics = useMemo(() => {
     const invList = (invoices as any[]) || [];
@@ -360,17 +539,22 @@ export default function Dashboard() {
     const payable = monthVendorInvoices
       .reduce((s, vi) => s + vendorOutstanding(vi), 0);
 
-    // Split selected range into up to 5 buckets for the sparkline
+    // Split selected range into 5 buckets for the overview chart
     const spanMs = Math.max(rangeTo.getTime() - rangeFrom.getTime(), 24 * 60 * 60 * 1000);
-    const bucketCount = 4;
+    const bucketCount = 5;
     const bucketMs = spanMs / bucketCount;
     const weeks = Array.from({ length: bucketCount }, (_, w) => {
       const start = new Date(rangeFrom.getTime() + w * bucketMs);
       const end = new Date(Math.min(rangeFrom.getTime() + (w + 1) * bucketMs - 1, rangeTo.getTime()));
-      const inc = invList
-        .filter((i) => inRange(i.issueDate || i.createdAt, start, end))
-        .filter((i) => i.status !== "void" && i.status !== "cancelled" && i.status !== "draft")
-        .reduce((s, i) => s + (parseFloat(i.totalAmount) || 0), 0);
+      const inc =
+        invList
+          .filter((i) => inRange(i.issueDate || i.createdAt, start, end))
+          .filter((i) => i.status !== "void" && i.status !== "cancelled" && i.status !== "draft")
+          .reduce((s, i) => s + (parseFloat(i.totalAmount) || 0), 0)
+        + incomeList
+          .filter((r) => inRange(r.incomeDate || r.createdAt, start, end))
+          .filter((r) => r.status !== "void")
+          .reduce((s, r) => s + (parseFloat(r.amount ?? r.totalAmount) || 0), 0);
       const exp =
         expList
           .filter((e) => inRange(e.expenseDate || e.createdAt, start, end))
@@ -410,15 +594,14 @@ export default function Dashboard() {
       return seg;
     });
 
-    const chartLabels = weeks.map((w) =>
-      w.start.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }),
+    const chartLabels = weeks.map((w, i) =>
+      (i === weeks.length - 1 ? rangeTo : w.start).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+      }),
     );
-    while (chartLabels.length < 5) {
-      chartLabels.push(rangeTo.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }));
-    }
-
-    const incomePts = buildSparkline(weeks.map((w) => w.inc));
-    const expensePts = buildSparkline(weeks.map((w) => w.exp), 40, 160);
+    const incomeValues = weeks.map((w) => w.inc);
+    const expenseValues = weeks.map((w) => w.exp);
 
     const overdueCount = monthInvoices.filter((i) => {
       if (["paid", "void", "cancelled", "draft"].includes(String(i.status))) return false;
@@ -523,8 +706,8 @@ export default function Dashboard() {
       payable,
       cats,
       donutSegments,
-      incomePts,
-      expensePts,
+      incomeValues,
+      expenseValues,
       chartLabels: chartLabels.slice(0, 5),
       overdueCount,
       overdueAmount: overdueReceivable,
@@ -541,150 +724,186 @@ export default function Dashboard() {
   const carriedForward = carriedReceivable > 0 || carriedPayable > 0;
   const rangeIsActiveYear =
     !!activeFy && rangeFromStr === activeFy.startDate && rangeToStr === activeFy.endDate;
-  const carriedTransactions = [
-    carriedReceivable > 0
-      ? {
-          date: fmtDate(selectedFy?.startDate) || selectedFy?.startDate || "—",
-          type: "Opening",
-          typeCode: "O",
-          typeColor: "bg-[#f3e8ff] text-[#9333ea]",
-          number: selectedFy?.label || "Opening",
-          party: "Receivable carried forward",
-          amount: moneyExact(carriedReceivable),
-          status: "Opening",
-          statusColor: "bg-[#f3e8ff] text-[#9333ea]",
-          href: "/accounting/balance-sheet",
-        }
-      : null,
-    carriedPayable > 0
-      ? {
-          date: fmtDate(selectedFy?.startDate) || selectedFy?.startDate || "—",
-          type: "Opening",
-          typeCode: "O",
-          typeColor: "bg-[#fee2e2] text-[#dc2626]",
-          number: selectedFy?.label || "Opening",
-          party: "Payable carried forward",
-          amount: moneyExact(carriedPayable),
-          status: "Opening",
-          statusColor: "bg-[#fee2e2] text-[#dc2626]",
-          href: "/accounting/balance-sheet",
-        }
-      : null,
-  ].filter((row): row is NonNullable<typeof row> => row !== null);
-  const recentTransactions = [...carriedTransactions, ...metrics.transactions].slice(0, 5);
-
   const summaryCards = [
     {
       title: "Total Income",
       value: money(metrics.totalIncome),
-      change: null as string | null,
-      up: true,
       icon: TrendingUp,
-      iconBg: "bg-[#dbeafe]",
-      iconColor: "text-[#1a73e8]",
-      sub: null as string | null,
     },
     {
       title: "Total Expenses",
       value: money(metrics.totalExpenses),
-      change: null,
-      up: false,
       icon: TrendingDown,
-      iconBg: "bg-[#dcfce7]",
-      iconColor: "text-[#16a34a]",
-      sub: null,
     },
     {
       title: "Net Profit",
       value: money(metrics.netProfit),
-      change: null,
-      up: metrics.netProfit >= 0,
       icon: DollarSign,
-      iconBg: "bg-[#fef9c3]",
-      iconColor: "text-[#ca8a04]",
-      sub: null,
     },
     {
       title: "Outstanding Receivable",
       value: money(metrics.receivable + carriedReceivable),
-      change: null,
-      up: true,
       icon: ArrowUpRight,
-      iconBg: "bg-[#f3e8ff]",
-      iconColor: "text-[#9333ea]",
-      sub: [
-        carriedReceivable > 0 ? `Carried forward: ${money(carriedReceivable)}` : null,
-        metrics.overdueReceivable > 0 ? `Overdue: ${money(metrics.overdueReceivable)}` : null,
-      ].filter(Boolean).join(" · ") || null,
     },
     {
       title: "Outstanding Payable",
       value: money(metrics.payable + carriedPayable),
-      change: null,
-      up: false,
       icon: ArrowDownRight,
-      iconBg: "bg-[#fee2e2]",
-      iconColor: "text-[#dc2626]",
-      sub: carriedPayable > 0 ? `Carried forward: ${money(carriedPayable)}` : null,
     },
   ];
 
+  const recentPurchaseOrders = ((purchaseOrders as any[]) || [])
+    .slice()
+    .sort((a, b) => new Date(b.issueDate || b.createdAt || 0).getTime() - new Date(a.issueDate || a.createdAt || 0).getTime())
+    .slice(0, 5)
+    .map((po) => ({
+      id: po.id,
+      number: po.poNumber || "—",
+      party: po.vendorName || "—",
+      amount: money(parseFloat(String(po.totalAmount)) || 0),
+      href: `/purchase-orders/${po.id}`,
+    }));
+
+  const recentQuotations = ((quotations as any[]) || [])
+    .slice()
+    .sort((a, b) => new Date(b.issueDate || b.createdAt || 0).getTime() - new Date(a.issueDate || a.createdAt || 0).getTime())
+    .slice(0, 5)
+    .map((qt) => ({
+      id: qt.id,
+      number: qt.qtNumber || "—",
+      party: qt.customerName || "—",
+      amount: money(parseFloat(String(qt.totalAmount)) || 0),
+      href: `/quotations/${qt.id}`,
+    }));
+
+  const recentInvoices = ((invoices as any[]) || [])
+    .slice()
+    .sort((a, b) => new Date(b.issueDate || b.createdAt || 0).getTime() - new Date(a.issueDate || a.createdAt || 0).getTime())
+    .slice(0, 5)
+    .map((inv) => ({
+      id: inv.id,
+      number: inv.invNumber || "—",
+      party: inv.customerName || "—",
+      amount: money(parseFloat(String(inv.totalAmount)) || 0),
+      href: `/invoices/${inv.id}`,
+    }));
+
+  const recentDeliveryOrders = ((deliveryOrders as any[]) || [])
+    .slice()
+    .sort((a, b) => new Date(b.issueDate || b.createdAt || 0).getTime() - new Date(a.issueDate || a.createdAt || 0).getTime())
+    .slice(0, 5)
+    .map((d) => ({
+      id: d.id,
+      number: d.doNumber || "—",
+      party: d.customerName || "—",
+      status: String(d.status || "draft"),
+      href: `/delivery-orders/${d.id}`,
+    }));
+
+  const activityPanels = [
+    {
+      title: "Purchase Orders",
+      href: "/purchase-orders",
+      headerClass: "bg-[#2B7BE8]",
+      show: purchaseOrdersEnabled,
+      cols: ["Invoice", "Customers", "Amount"] as const,
+      rows: recentPurchaseOrders.map((r) => ({
+        key: String(r.id),
+        href: r.href,
+        cells: [r.number, r.party, r.amount] as const,
+        status: null as string | null,
+      })),
+    },
+    {
+      title: "Quotations",
+      href: "/quotations",
+      headerClass: "bg-[#3B82F6]",
+      show: quotationsEnabled,
+      cols: ["Invoice", "Customers", "Amount"] as const,
+      rows: recentQuotations.map((r) => ({
+        key: String(r.id),
+        href: r.href,
+        cells: [r.number, r.party, r.amount] as const,
+        status: null as string | null,
+      })),
+    },
+    {
+      title: "Invoices",
+      href: "/invoices",
+      headerClass: "bg-[#1E3A8A]",
+      show: invoicesEnabled,
+      cols: ["Invoice", "Customers", "Amount"] as const,
+      rows: recentInvoices.map((r) => ({
+        key: String(r.id),
+        href: r.href,
+        cells: [r.number, r.party, r.amount] as const,
+        status: null as string | null,
+      })),
+    },
+    {
+      title: "Delivery Orders",
+      href: "/delivery-orders",
+      headerClass: "bg-[#1E40AF]",
+      show: deliveryOrdersEnabled,
+      cols: ["Invoice", "Customers", "Status"] as const,
+      rows: recentDeliveryOrders.map((r) => ({
+        key: String(r.id),
+        href: r.href,
+        cells: [r.number, r.party, ""] as const,
+        status: r.status,
+      })),
+    },
+  ].filter((p) => p.show);
+
   const quickActions = [
-    { label: "New Sale", icon: ShoppingCart, bg: "bg-[#dbeafe]", color: "text-[#1a73e8]", href: "/point-of-sale/retail", module: "point_of_sale" as const },
-    { label: "New Invoice", icon: FileText, bg: "bg-[#dbeafe]", color: "text-[#1a73e8]", href: "/invoices/new", module: "invoices" as const },
-    { label: "New Receipt", icon: Receipt, bg: "bg-[#dcfce7]", color: "text-[#16a34a]", href: "/accounting/income/new", module: "accounting_income" as const },
-    { label: "New Purchase Order", icon: ShoppingCart, bg: "bg-[#fee2e2]", color: "text-[#dc2626]", href: "/purchase-orders/new", module: "purchase_orders" as const },
-    { label: "New Payment", icon: CreditCard, bg: "bg-[#f3e8ff]", color: "text-[#9333ea]", href: "/accounting/expenses/new", module: "accounting_expenses" as const },
-    { label: "New Product", icon: Package, bg: "bg-[#fef9c3]", color: "text-[#ca8a04]", href: "/stock", module: "stock_items" as const },
-    { label: "New credit Note", icon: RotateCcw, bg: "bg-[#ffedd5]", color: "text-[#ea580c]", href: "/credit-notes/new", module: "credit_notes" as const },
+    { label: "New Invoice", icon: FileText, bg: "bg-[#DBEAFE]", color: "text-[#2563EB]", href: "/invoices/new", module: "invoices" as const },
+    { label: "New Receipt", icon: Receipt, bg: "bg-[#DCFCE7]", color: "text-[#16A34A]", href: "/accounting/income/new", module: "accounting_income" as const },
+    { label: "New Purchase Order", icon: ShoppingCart, bg: "bg-[#FFEDD5]", color: "text-[#EA580C]", href: "/purchase-orders/new", module: "purchase_orders" as const },
+    { label: "New Payment", icon: CreditCard, bg: "bg-[#F3E8FF]", color: "text-[#9333EA]", href: "/accounting/expenses/new", module: "accounting_expenses" as const },
+    { label: "New Product", icon: Package, bg: "bg-[#CCFBF1]", color: "text-[#0D9488]", href: "/stock", module: "stock_items" as const },
+    { label: "New Credit Note", icon: RotateCcw, bg: "bg-[#FEE2E2]", color: "text-[#DC2626]", href: "/credit-notes/new", module: "credit_notes" as const },
   ].filter((action) =>
-    fyReadOnly
-      ? false
-      : action.href.startsWith("/point-of-sale")
-        ? hasPosChannelAccess(hasModuleAccess, "pos_retail")
-        : hasModuleAccess(action.module),
+    fyReadOnly ? false : hasModuleAccess(action.module),
   );
 
+  const lowStockCount = metrics.lowStock;
   const reminders = [
+    {
+      title: `${lowStockCount} Low Stock Item${lowStockCount === 1 ? "" : "s"}`,
+      amount: "≤ 5 units",
+      icon: Package,
+      href: "/stock",
+      kind: "low_stock" as const,
+      show: true,
+    },
     {
       title: `${metrics.overdueCount} Invoice${metrics.overdueCount === 1 ? "" : "s"} Overdue`,
       amount: money(metrics.overdueAmount),
       icon: AlertCircle,
-      color: "text-[#dc2626]",
-      bg: "bg-[#fee2e2]",
       href: "/invoices",
+      kind: "other" as const,
       show: hasModuleAccess("invoices") && metrics.overdueCount > 0,
     },
     {
       title: `${metrics.draftCount} Draft Invoice${metrics.draftCount === 1 ? "" : "s"}`,
       amount: "Needs review",
       icon: Clock,
-      color: "text-[#ca8a04]",
-      bg: "bg-[#fef9c3]",
       href: "/invoices",
+      kind: "other" as const,
       show: hasModuleAccess("invoices") && metrics.draftCount > 0,
-    },
-    {
-      title: `${metrics.lowStock} Low Stock Item${metrics.lowStock === 1 ? "" : "s"}`,
-      amount: "≤ 5 units",
-      icon: Package,
-      color: "text-[#9333ea]",
-      bg: "bg-[#f3e8ff]",
-      href: "/stock",
-      show: hasModuleAccess("stock_items") && metrics.lowStock > 0,
     },
   ].filter((r) => r.show);
 
   return (
     <div className="space-y-6 pb-8">
-      {/* Page Header — matches India_BizOne */}
+      {/* Page Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="m-0 text-2xl font-bold tracking-tight text-[#2563EB]">
+          <h1 className="m-0 text-[28px] font-bold tracking-tight text-[#2F4FC4]">
             Dashboard
           </h1>
           <p className="mt-1 text-[14px] text-[#64748b]">
-            Welcome back, {userName}! 👋
+            Welcome back, {userName}!
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -729,7 +948,7 @@ export default function Dashboard() {
                 <Button
                   type="button"
                   size="sm"
-                  className="bg-[#2563EB] text-white hover:bg-[#1d4ed8]"
+                  className="bg-[#2F4FC4] text-white hover:bg-[#2540a8]"
                   onClick={() => applyFinancialYear(activeFy)}
                 >
                   Use Active FY{activeFy.label ? ` (${activeFy.label})` : ""}
@@ -740,234 +959,236 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3 2xl:grid-cols-5 xl:gap-4">
+      {/* Summary Cards — equal size, full-width row; blue on hover/click */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {summaryCards.map((card) => {
           const Icon = card.icon;
+          const highlighted = hoveredCard
+            ? hoveredCard === card.title
+            : selectedCard === card.title;
           return (
-            <div
+            <button
+              type="button"
               key={card.title}
-              className="rounded-2xl border border-[#e8edf5] bg-white p-3.5 sm:p-4 shadow-[0_2px_8px_rgba(15,28,51,0.04)] min-w-0 overflow-hidden flex flex-col justify-between"
+              onClick={() => setSelectedCard(card.title)}
+              onMouseEnter={() => setHoveredCard(card.title)}
+              onMouseLeave={() => setHoveredCard(null)}
+              onFocus={() => setHoveredCard(card.title)}
+              onBlur={() => setHoveredCard(null)}
+              className={`flex h-[128px] w-full min-w-0 flex-col justify-between rounded-[16px] p-5 text-left shadow-[0_4px_16px_rgba(47,79,196,0.08)] transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-[#2B7BE8]/40 ${
+                highlighted
+                  ? "border border-transparent text-white"
+                  : "border border-[#e4ebf7] bg-white text-[#0F1C33]"
+              }`}
+              style={highlighted ? cardHighlightStyle : undefined}
             >
-              <div>
-                <div className="mb-2 flex items-start justify-between gap-1">
-                  <p className="text-[11px] sm:text-[12px] font-medium text-[#64748b] leading-tight truncate mr-1" title={card.title}>
-                    {card.title}
-                  </p>
-                  <div className={`flex h-8 w-8 sm:h-9 sm:w-9 shrink-0 items-center justify-center rounded-xl ${card.iconBg}`}>
-                    <Icon size={16} className={card.iconColor} />
-                  </div>
-                </div>
+              <div
+                className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                  highlighted ? "bg-white/20" : "bg-[#E8F1FC]"
+                }`}
+              >
+                <Icon size={18} className={highlighted ? "text-white" : "text-[#2F4FC4]"} />
+              </div>
+              <div className="min-w-0">
                 <p
-                  className="text-[1.15rem] sm:text-[1.3rem] font-bold tracking-tight text-[#101828] truncate leading-tight"
+                  className={`mb-1 truncate text-[13px] font-medium ${
+                    highlighted ? "text-white/90" : "text-[#64748b]"
+                  }`}
+                  title={card.title}
+                >
+                  {card.title}
+                </p>
+                <p
+                  className={`truncate text-[26px] font-bold leading-none tracking-tight ${
+                    highlighted ? "text-white" : "text-[#0F1C33]"
+                  }`}
                   title={card.value}
                 >
                   {card.value}
                 </p>
               </div>
-              <div>
-                {card.change && (
-                  <p
-                    className={`mt-1.5 flex items-center gap-1 text-[11px] sm:text-[12px] font-semibold truncate ${
-                      card.up ? "text-[#16a34a]" : "text-[#dc2626]"
-                    }`}
-                  >
-                    {card.up ? <TrendingUp size={12} className="shrink-0" /> : <TrendingDown size={12} className="shrink-0" />}
-                    <span className="truncate">{card.change}</span>
-                  </p>
-                )}
-                {card.sub && (
-                  <p className="mt-1 text-[10px] sm:text-[11px] font-medium text-[#dc2626] truncate" title={card.sub}>
-                    {card.sub}
-                  </p>
-                )}
-              </div>
-            </div>
+            </button>
           );
         })}
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-5 xl:grid-cols-1">
-        <div className="rounded-2xl border border-[#e8edf5] bg-white p-5 shadow-[0_2px_8px_rgba(15,28,51,0.04)] 2xl:col-span-3 min-w-0 overflow-hidden">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-[15px] font-semibold text-[#101828]">
+      {/* Charts + Reminders + Quick Actions */}
+      <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-12">
+        <div className="flex min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-[28px] border border-[#E2E9F5] bg-white p-5 shadow-[0_8px_24px_rgba(47,79,196,0.08)] xl:col-span-7">
+          <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
+            <h2 className="text-[20px] font-bold tracking-tight text-[#0F1C33]">
               Income vs Expense Overview
             </h2>
-            <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5 text-[12px] text-[#64748b]">
-                <span className="h-2.5 w-2.5 rounded-full bg-[#1a73e8]" />
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="flex items-center gap-1.5 text-[12px] text-[#6B7C99]">
+                <span className="h-2 w-2 rounded-full bg-[#2B7BE8]" />
                 Income
               </span>
-              <span className="flex items-center gap-1.5 text-[12px] text-[#64748b]">
-                <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]" />
+              <span className="flex items-center gap-1.5 text-[12px] text-[#6B7C99]">
+                <span className="h-2 w-2 rounded-full bg-[#1E3A8A]" />
                 Expense
               </span>
-              <span className="inline-flex items-center gap-1 rounded-lg border border-[#e8edf5] bg-[#f8fafc] px-2.5 py-1 text-[11px] text-[#64748b]">
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#EEF3FB] px-2.5 py-1 text-[11px] font-semibold text-[#2F4FC4]">
                 {periodChipLabel}
+                <ChevronDown size={12} className="opacity-70" />
               </span>
             </div>
           </div>
-          <LineChart
-            incomePts={metrics.incomePts}
-            expensePts={metrics.expensePts}
-            labels={metrics.chartLabels}
-          />
-        </div>
 
-        <div className="rounded-2xl border border-[#e8edf5] bg-white p-5 shadow-[0_2px_8px_rgba(15,28,51,0.04)] 2xl:col-span-2 min-w-0 overflow-hidden">
-          <h2 className="mb-4 text-[15px] font-semibold text-[#101828]">
-            Income by Category
-          </h2>
-          <div className="flex flex-col sm:flex-row xl:flex-row 2xl:flex-col items-center gap-4 min-w-0">
-            <DonutChart segments={metrics.donutSegments} />
-            <div className="w-full space-y-3 min-w-0">
-              {metrics.cats.map((cat) => (
-                <div key={cat.label} className="flex items-center justify-between gap-2 min-w-0">
-                  <div className="flex items-center gap-2 min-w-0 truncate">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: cat.color }}
-                    />
-                    <span className="text-[12px] text-[#64748b] truncate">{cat.label}</span>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[12px] font-semibold text-[#101828]">{cat.value}</p>
-                    <p className="text-[10px] text-[#94a3b8]">{cat.pct}</p>
-                  </div>
-                </div>
-              ))}
+          <div className="mb-3 flex shrink-0 flex-wrap gap-2.5">
+            <div className="min-w-[140px] max-w-[200px] flex-1 rounded-2xl border border-[#DCE5F5] bg-[#F4F7FC] px-3.5 py-2.5">
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-[#2B7BE8]" />
+                <span className="text-[12px] font-medium text-[#6B7C99]">Income</span>
+              </div>
+              <p className="text-[18px] font-bold leading-none tracking-tight text-[#0F1C33]">
+                {money(metrics.totalIncome)}
+              </p>
+            </div>
+            <div className="min-w-[140px] max-w-[200px] flex-1 rounded-2xl border border-[#DCE5F5] bg-[#F4F7FC] px-3.5 py-2.5">
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-[#1E3A8A]" />
+                <span className="text-[12px] font-medium text-[#6B7C99]">Expense</span>
+              </div>
+              <p className="text-[18px] font-bold leading-none tracking-tight text-[#0F1C33]">
+                {money(metrics.totalExpenses)}
+              </p>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Bottom Row */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        {/* Recent Transactions */}
-        <div className="rounded-2xl border border-[#e8edf5] bg-white p-5 shadow-[0_2px_8px_rgba(15,28,51,0.04)] xl:col-span-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-[15px] font-semibold text-[#101828]">
-              Recent Transactions
-            </h2>
-            {hasModuleAccess("invoices") ? (
-              <Link href="/invoices" className="text-[12px] font-semibold text-[#1a73e8] hover:underline">
-                View All
-              </Link>
-            ) : null}
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[480px] text-left text-[12px]">
-              <thead>
-                <tr className="border-b border-[#e8edf5] text-[#94a3b8]">
-                  <th className="pb-3 pr-3 font-medium">Date</th>
-                  <th className="pb-3 pr-3 font-medium">Type</th>
-                  <th className="pb-3 pr-3 font-medium">Number</th>
-                  <th className="pb-3 pr-3 font-medium">Party</th>
-                  <th className="pb-3 pr-3 font-medium">Amount</th>
-                  <th className="pb-3 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentTransactions.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-[#94a3b8]">
-                      No transactions yet.
-                    </td>
-                  </tr>
-                ) : (
-                  recentTransactions.map((tx) => (
-                    <tr key={`${tx.type}-${tx.number}-${tx.party}`} className="border-b border-[#f1f5f9] last:border-0">
-                      <td className="py-3 pr-3 text-[#64748b]">{tx.date}</td>
-                      <td className="py-3 pr-3">
-                        <span
-                          className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-[10px] font-bold ${tx.typeColor}`}
-                        >
-                          {tx.typeCode}
-                        </span>
-                      </td>
-                      <td className="py-3 pr-3 font-medium text-[#101828]">
-                        <Link href={tx.href} className="hover:text-[#1a73e8] hover:underline">
-                          {tx.number}
-                        </Link>
-                      </td>
-                      <td className="py-3 pr-3 text-[#64748b]">{tx.party}</td>
-                      <td className="py-3 pr-3 font-semibold text-[#101828]">{tx.amount}</td>
-                      <td className="py-3">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${tx.statusColor}`}
-                        >
-                          {tx.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+          <div className="mt-auto min-h-[280px] flex-1">
+            <LineChart
+              incomeValues={metrics.incomeValues}
+              expenseValues={metrics.expenseValues}
+              labels={metrics.chartLabels}
+            />
           </div>
         </div>
 
-        {/* Quick Actions */}
-        <div className="rounded-2xl border border-[#e8edf5] bg-white p-5 shadow-[0_2px_8px_rgba(15,28,51,0.04)] xl:col-span-4">
-          <h2 className="mb-4 text-[15px] font-semibold text-[#101828]">Quick Actions</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {quickActions.length === 0 ? (
-              <p className="col-span-full text-[12px] text-[#94a3b8]">No actions for your assigned modules.</p>
-            ) : quickActions.map((action) => {
-              const Icon = action.icon;
-              return (
-                <Link
-                  key={action.label}
-                  href={action.href}
-                  className="flex flex-col items-center gap-2 rounded-xl border border-[#f1f5f9] bg-[#fafbfc] px-3 py-4 transition hover:border-[#e8edf5] hover:bg-white hover:shadow-sm"
-                >
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${action.bg}`}>
-                    <Icon size={18} className={action.color} />
-                  </div>
-                  <span className="text-center text-[11px] font-medium text-[#64748b]">
-                    {action.label}
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Reminders */}
-        <div className="rounded-2xl border border-[#e8edf5] bg-white p-5 shadow-[0_2px_8px_rgba(15,28,51,0.04)] xl:col-span-3">
-          <h2 className="mb-4 text-[15px] font-semibold text-[#101828]">Reminders</h2>
-          <div className="space-y-3">
-            {reminders.length === 0 ? (
-              <p className="text-[12px] text-[#94a3b8]">No reminders right now.</p>
-            ) : (
-              reminders.map((item) => {
+        <div className="flex min-w-0 flex-col gap-4 xl:col-span-5">
+          <div className="rounded-[20px] border border-[#e4ebf7] bg-white p-5 shadow-[0_4px_16px_rgba(47,79,196,0.06)]">
+            <h2 className="mb-3 text-[15px] font-semibold text-[#0F1C33]">Reminders</h2>
+            <div className="space-y-3">
+              {reminders.map((item) => {
                 const Icon = item.icon;
+                const isLowStock = item.kind === "low_stock";
                 return (
                   <div
                     key={item.title}
-                    className="flex items-center gap-3 rounded-xl border border-[#f1f5f9] bg-[#fafbfc] p-3"
+                    className="flex items-center gap-3 rounded-xl border border-[#eef2f8] bg-white p-3"
                   >
-                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${item.bg}`}>
-                      <Icon size={16} className={item.color} />
-                    </div>
+                    {isLowStock ? (
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#E8EEF9] p-[3px]">
+                        <div className="flex h-full w-full items-center justify-center rounded-full bg-[#1E3A8A]">
+                          <Icon size={16} className="text-white" strokeWidth={2} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#FEE2E2]">
+                        <Icon size={16} className="text-[#DC2626]" />
+                      </div>
+                    )}
                     <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-semibold text-[#101828]">{item.title}</p>
+                      <p className="truncate text-[13px] font-semibold text-[#0F1C33]">{item.title}</p>
                       <p className="text-[11px] text-[#64748b]">{item.amount}</p>
                     </div>
                     <Link
                       href={item.href}
-                      className="shrink-0 text-[11px] font-semibold text-[#1a73e8] hover:underline"
+                      className="shrink-0 rounded-lg bg-[#2B7BE8] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#2569c7]"
                     >
-                      View now
+                      View All
                     </Link>
                   </div>
                 );
-              })
-            )}
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-[20px] border border-[#e4ebf7] bg-white p-5 shadow-[0_4px_16px_rgba(47,79,196,0.06)]">
+            <h2 className="mb-4 text-[15px] font-semibold text-[#0F1C33]">Quick Actions</h2>
+            <div className="grid grid-cols-2 gap-3">
+              {quickActions.length === 0 ? (
+                <p className="col-span-full text-[12px] text-[#94a3b8]">No actions for your assigned modules.</p>
+              ) : quickActions.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <Link
+                    key={action.label}
+                    href={action.href}
+                    className="flex flex-col items-center gap-2 rounded-xl border border-[#e8edf5] bg-[#F5F7FB] px-3 py-4 transition hover:border-[#dce5f5] hover:shadow-sm"
+                  >
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${action.bg}`}>
+                      <Icon size={18} className={action.color} />
+                    </div>
+                    <span className="text-center text-[13px] font-semibold text-[#334155]">
+                      {action.label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Activity tables — 2×2 */}
+      {activityPanels.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {activityPanels.map((panel) => (
+            <div
+              key={panel.title}
+              className="overflow-hidden rounded-2xl border border-[#e4ebf7] bg-white shadow-[0_4px_16px_rgba(47,79,196,0.06)]"
+            >
+              <div className={`flex items-center justify-between px-4 py-3 text-white ${panel.headerClass}`}>
+                <h2 className="text-[14px] font-semibold">{panel.title}</h2>
+                <Link href={panel.href} className="inline-flex items-center gap-1 text-[12px] font-medium text-white/95 hover:text-white">
+                  All <ArrowRight size={14} />
+                </Link>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[320px] text-left text-[12px]">
+                  <thead>
+                    <tr className="border-b border-[#eef2f8] text-[#94a3b8]">
+                      {panel.cols.map((col) => (
+                        <th key={col} className="px-4 py-2.5 font-medium">{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {panel.rows.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-4 py-8 text-center text-[#94a3b8]">
+                          No records yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      panel.rows.map((row) => (
+                        <tr key={row.key} className="border-b border-[#f5f7fb] last:border-0">
+                          <td className="px-4 py-3 font-medium text-[#0F1C33]">
+                            <Link href={row.href} className="hover:text-[#2B7BE8] hover:underline">
+                              {row.cells[0]}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3 text-[#64748b]">{row.cells[1]}</td>
+                          <td className="px-4 py-3 font-semibold text-[#0F1C33]">
+                            {row.status ? (
+                              <span className="inline-flex rounded-full bg-[#dcfce7] px-2.5 py-0.5 text-[10px] font-semibold uppercase text-[#16a34a]">
+                                {row.status === "confirmed" || row.status === "delivered" ? "OK" : row.status}
+                              </span>
+                            ) : (
+                              row.cells[2]
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

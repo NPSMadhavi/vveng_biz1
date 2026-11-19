@@ -194,7 +194,7 @@ router.get("/stock-items", async (req, res): Promise<void> => {
   const typeFilter = typeof req.query.type === "string" ? req.query.type : "";
 
   let items = await db.select().from(stockItemsTable)
-    .where(eq(stockItemsTable.companyId, companyId))
+    .where(and(eq(stockItemsTable.companyId, companyId), sql`COALESCE(${stockItemsTable.isDeleted}, 0) = 0`))
     .orderBy(stockItemsTable.code);
 
   if (search) {
@@ -596,7 +596,7 @@ router.get("/stock-items/:id", async (req, res): Promise<void> => {
   if (!req.session.userId) { res.status(401).json({ error: "Not authenticated" }); return; }
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
-  const [item] = await db.select().from(stockItemsTable).where(eq(stockItemsTable.id, id));
+  const [item] = await db.select().from(stockItemsTable).where(and(eq(stockItemsTable.id, id), sql`COALESCE(${stockItemsTable.isDeleted}, 0) = 0`));
   if (!item) { res.status(404).json({ error: "Not found" }); return; }
   res.json(withBatches(item));
 });
@@ -802,12 +802,14 @@ router.delete("/stock-items/:id", async (req, res): Promise<void> => {
 
   const [existing] = await db.select({ id: stockItemsTable.id })
     .from(stockItemsTable)
-    .where(and(eq(stockItemsTable.id, id), eq(stockItemsTable.companyId, companyId)));
+    .where(and(
+      eq(stockItemsTable.id, id),
+      eq(stockItemsTable.companyId, companyId),
+      sql`COALESCE(${stockItemsTable.isDeleted}, 0) = 0`,
+    ));
   if (!existing) { res.status(404).json({ error: "Not found" }); return; }
 
   try {
-    // Clears warehouse balances, movements, serials and related inventory lines
-    // before removing the item — a bare DELETE hits FK constraints (HTTP 500).
     await deleteStockItem(companyId, id);
     res.json({ success: true });
   } catch (err) {

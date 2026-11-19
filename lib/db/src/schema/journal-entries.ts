@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, smallint } from "drizzle-orm/pg-core";
 
 export const journalEntriesTable = pgTable("journal_entries", {
   id:           serial("id").primaryKey(),
@@ -11,6 +11,9 @@ export const journalEntriesTable = pgTable("journal_entries", {
   status:       text("status").notNull().default("posted"), // draft | posted | reversed
   reversalOfId: integer("reversal_of_id"),       // if this is a reversal, points to original entry id
   createdBy:    integer("created_by").notNull(),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
   createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

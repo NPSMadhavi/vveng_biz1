@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import {
   db,
+  pool,
   grnTable,
   purchaseOrdersTable,
   stockItemsTable,
@@ -12,6 +13,7 @@ import { eq, desc, and, ilike, or, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { adjustWarehouseQuantity, applyMovement, getWarehouseBalance, getDefaultWarehouseId, ensureDefaultWarehouse } from "../lib/inventory-service.js";
 import { requireWarehouseId } from "../lib/document-stock-sync.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -553,7 +555,10 @@ export async function postPurchaseOrderWarehouseStock(params: {
 }
 
 export async function autoDeleteGrnIfEmpty(poId: number): Promise<{ blocked: boolean; grnNumber?: string }> {
-  const [grn] = await db.select().from(grnTable).where(eq(grnTable.poId, poId));
+  const [grn] = await db.select().from(grnTable).where(and(
+    eq(grnTable.poId, poId),
+    sql`COALESCE(${grnTable.isDeleted}, 0) = 0`,
+  ));
   if (!grn) return { blocked: false };
 
   const items = (grn.items as any[]) || [];
@@ -562,7 +567,7 @@ export async function autoDeleteGrnIfEmpty(poId: number): Promise<{ blocked: boo
     return { blocked: true, grnNumber: grn.grnNumber };
   }
 
-  await db.delete(grnTable).where(eq(grnTable.id, grn.id));
+  await softDeleteById(pool, "grn", { id: grn.id, companyId: grn.companyId });
   return { blocked: false };
 }
 
@@ -662,8 +667,8 @@ router.get("/grn", async (req, res): Promise<void> => {
   const companyId = req.session.companyId;
 
   const rows = companyId
-    ? await db.select().from(grnTable).where(eq(grnTable.companyId, companyId)).orderBy(desc(grnTable.createdAt))
-    : await db.select().from(grnTable).orderBy(desc(grnTable.createdAt));
+    ? await db.select().from(grnTable).where(and(eq(grnTable.companyId, companyId), sql`COALESCE(${grnTable.isDeleted}, 0) = 0`)).orderBy(desc(grnTable.createdAt))
+    : await db.select().from(grnTable).where(sql`COALESCE(${grnTable.isDeleted}, 0) = 0`).orderBy(desc(grnTable.createdAt));
 
   res.json(rows);
 });
@@ -673,7 +678,7 @@ router.get("/grn/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [grn] = await db.select().from(grnTable).where(eq(grnTable.id, id));
+  const [grn] = await db.select().from(grnTable).where(and(eq(grnTable.id, id), sql`COALESCE(${grnTable.isDeleted}, 0) = 0`));
   if (!grn) { res.status(404).json({ error: "GRN not found" }); return; }
 
   res.json(grn);
@@ -997,7 +1002,7 @@ router.delete("/grn/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [existing] = await db.select().from(grnTable).where(eq(grnTable.id, id));
+  const [existing] = await db.select().from(grnTable).where(and(eq(grnTable.id, id), sql`COALESCE(${grnTable.isDeleted}, 0) = 0`));
   if (!existing) { res.status(404).json({ error: "GRN not found" }); return; }
 
   const companyId = existing.companyId;
@@ -1059,10 +1064,8 @@ router.delete("/grn/:id", async (req, res): Promise<void> => {
   }
 
   try {
-    await db.transaction(async (tx) => {
-      await tx.delete(stockSerialsTable).where(eq(stockSerialsTable.grnId, id));
-      await tx.delete(grnTable).where(eq(grnTable.id, id));
-    });
+    const ok = await softDeleteById(pool, "grn", { id, companyId });
+    if (!ok) { res.status(404).json({ error: "GRN not found" }); return; }
     res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message || "Failed to delete GRN" });

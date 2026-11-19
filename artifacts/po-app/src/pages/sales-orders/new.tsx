@@ -133,9 +133,17 @@ export default function SalesOrderNew() {
   });
   useVedaFormFill(form);
 
+  const appliedDefaultGst = useRef(false);
   useEffect(() => {
-    if (settings) form.setValue("tax", settings.gstRate);
-  }, [settings]);
+    if (!settings || appliedDefaultGst.current) return;
+    appliedDefaultGst.current = true;
+    if (isOverseas || form.getValues("tax") === 0) return;
+    form.setValue("tax", settings.gstRate ?? 9);
+  }, [settings, isOverseas]);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   const prefillFromQuotation = (qt: any) => {
     const qtItems = (qt.items as any[]) ?? [];
@@ -292,7 +300,7 @@ export default function SalesOrderNew() {
   })();
 
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
 
   const appendLock = useRef(false);
   useEffect(() => {
@@ -409,7 +417,7 @@ export default function SalesOrderNew() {
         items: itemsWithAmount,
         ...attachment.payload,
       };
-      if (!isManpower) delete payload.manpowerDetails;
+      payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
       const data = await createMutation.mutateAsync({
         data: payload,
       });

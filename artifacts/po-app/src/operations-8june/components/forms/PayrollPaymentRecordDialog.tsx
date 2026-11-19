@@ -179,17 +179,12 @@ export function PayrollPaymentRecordDialog({
       const period = recordPayrollMonthYear(record);
       return period.year === year && period.month === monthNumber;
     });
-    if (matched.length > 0) {
-      const latest = matched.reduce((best, record) =>
-        Number(record.id) >= Number(best.id) ? record : best,
-      );
-      return recordNet(latest);
-    }
-    const fallback = salaryConfigs.find((c) => Number(c.employeeId) === id);
-    if (fallback) {
-      return fallback.netPay > 0 ? fallback.netPay : fallback.baseSalary;
-    }
-    return 0;
+    // Only show amounts for months that were actually processed.
+    if (matched.length === 0) return 0;
+    const latest = matched.reduce((best, record) =>
+      Number(record.id) >= Number(best.id) ? record : best,
+    );
+    return recordNet(latest);
   };
 
   const cpfDetailsForEmployee = (id: number) => {
@@ -200,24 +195,17 @@ export function PayrollPaymentRecordDialog({
       const period = recordPayrollMonthYear(record);
       return period.year === year && period.month === monthNumber;
     });
-    if (matched.length > 0) {
-      const latest = matched.reduce((best, record) =>
-        Number(record.id) >= Number(best.id) ? record : best,
-      );
-      const employeeCpf = Number(latest.cpfDeduction) || 0;
-      const employerCpf = Number((latest as any).cpfEmployer) || 0;
-      const totalCpf = Math.round((employeeCpf + employerCpf) * 100) / 100 || employeeCpf;
-      return { employeeCpf, employerCpf, totalCpf };
+    // Only show CPF for months that were actually processed.
+    if (matched.length === 0) {
+      return { employeeCpf: 0, employerCpf: 0, totalCpf: 0 };
     }
-    const fallback = salaryConfigs.find((c) => Number(c.employeeId) === id);
-    if (fallback) {
-      return {
-        employeeCpf: fallback.employeeCpf,
-        employerCpf: fallback.employerCpf,
-        totalCpf: fallback.totalCpf > 0 ? fallback.totalCpf : fallback.employeeCpf,
-      };
-    }
-    return { employeeCpf: 0, employerCpf: 0, totalCpf: 0 };
+    const latest = matched.reduce((best, record) =>
+      Number(record.id) >= Number(best.id) ? record : best,
+    );
+    const employeeCpf = Number(latest.cpfDeduction) || 0;
+    const employerCpf = Number((latest as any).cpfEmployer) || 0;
+    const totalCpf = Math.round((employeeCpf + employerCpf) * 100) / 100 || employeeCpf;
+    return { employeeCpf, employerCpf, totalCpf };
   };
 
   const cpfForEmployee = (id: number) => {
@@ -310,7 +298,7 @@ export function PayrollPaymentRecordDialog({
       },
       { employeeSum: 0, employerSum: 0, totalSum: 0 }
     );
-  }, [month, targetEmployeeIds, payrollRecords, salaryConfigs]);
+  }, [month, targetEmployeeIds, payrollRecords]);
 
   const computedTotal = useMemo(() => {
     if (employeeId === null || employeeId === undefined || !month) return 0;
@@ -319,7 +307,7 @@ export function PayrollPaymentRecordDialog({
       (sum, id) => sum + (paymentType === "cpf" ? cpfForEmployee(id) : netForEmployee(id)),
       0
     );
-  }, [employeeId, month, targetEmployeeIds, paymentType, payrollRecords, salaryConfigs]);
+  }, [employeeId, month, targetEmployeeIds, paymentType, payrollRecords]);
 
   const totalValue = computedTotal;
 

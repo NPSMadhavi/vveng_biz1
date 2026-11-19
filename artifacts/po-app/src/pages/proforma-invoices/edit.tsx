@@ -202,7 +202,11 @@ export default function ProformaInvoiceEdit() {
   });
 
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   const appendLock = useRef(false);
   useEffect(() => {

@@ -67,7 +67,7 @@ export default function EmployeesPage() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | null>(null);
   
   // Fetch employees
-  const { data: employees = [], isLoading } = useQuery<Employee[]>({
+  const { data: employees = [], isLoading, isError, error } = useQuery<Employee[]>({
     queryKey: ["/api/employees"],
   });
   
@@ -165,7 +165,7 @@ export default function EmployeesPage() {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  className="flex items-center gap-2 border-[#E4E4E4]"
+                  className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
                   disabled={filteredEmployees.length === 0}
                 >
                   <Download className="h-4 w-4" />
@@ -173,11 +173,17 @@ export default function EmployeesPage() {
                   <ChevronDown className="h-4 w-4 opacity-60" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleExport("excel")}>
+              <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+                <DropdownMenuItem
+                  onClick={() => handleExport("excel")}
+                  className="cursor-pointer px-2.5 py-1 text-sm"
+                >
                   Excel
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleExport("pdf")}>
+                <DropdownMenuItem
+                  onClick={() => handleExport("pdf")}
+                  className="cursor-pointer px-2.5 py-1 text-sm"
+                >
                   PDF
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -201,6 +207,10 @@ export default function EmployeesPage() {
       <ManagementTableCard pagination={{ page, totalPages, onPageChange: setPage }}>
           {isLoading ? (
             <p className="py-16 text-center text-sm text-[#6B7280]">Loading...</p>
+          ) : isError ? (
+            <p className="py-16 text-center text-sm text-red-600">
+              {error instanceof Error ? error.message : "Could not load employees."}
+            </p>
           ) : employees.length > 0 && filteredEmployees.length > 0 ? (
             <ManagementTableContainer>
               <Table>

@@ -227,7 +227,7 @@ export default function PurchaseOrderEdit() {
   const updateMutation = useUpdatePurchaseOrder();
 
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = Number(form.watch("tax") ?? 0);
 
   // Auto-append a new empty row ONLY when the user edits the very last row (after init)
   const appendLock = useRef(false);
@@ -314,7 +314,7 @@ export default function PurchaseOrderEdit() {
     }));
 
     updateMutation.mutate(
-      { id, data: (() => { const payload: any = { ...values, status: "draft", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload }; if (!isManpower) delete payload.manpowerDetails; return payload; })() },
+      { id, data: (() => { const payload: any = { ...values, status: "draft", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload }; payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null; return payload; })() },
       {
         onSuccess: async (data) => {
           queryClient.setQueryData(getListPurchaseOrdersQueryKey(), (old: any) =>
@@ -358,7 +358,7 @@ export default function PurchaseOrderEdit() {
       warehouseName: (i as any).warehouseName || undefined,
     }));
     updateMutation.mutate(
-      { id, data: (() => { const payload: any = { ...values, status: "confirmed", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload }; if (!isManpower) delete payload.manpowerDetails; return payload; })() },
+      { id, data: (() => { const payload: any = { ...values, status: "confirmed", items: itemsWithAmount, customerId: values.customerId ?? undefined, ...attachment.payload }; payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null; return payload; })() },
       {
         onSuccess: async (data) => {
           queryClient.setQueryData(getListPurchaseOrdersQueryKey(), (old: any) =>
@@ -518,7 +518,8 @@ export default function PurchaseOrderEdit() {
                             form.setValue("vendorAddress", v.fullAddress);
                             form.setValue("vendorContact", v.contactPerson);
                             form.setValue("vendorContactEmail", v.contactEmail);
-                            if (v.effectiveGstRate !== undefined) form.setValue("tax", v.effectiveGstRate);
+                            if (v.isOverseas) form.setValue("tax", 0);
+                            else if (v.effectiveGstRate !== undefined) form.setValue("tax", v.effectiveGstRate);
                             if (v.currency) {
                               form.setValue("currency", v.currency);
                               setDirectoryCurrency(v.currency);

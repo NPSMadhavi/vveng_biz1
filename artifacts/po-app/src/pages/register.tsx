@@ -6,7 +6,6 @@ import {
 } from "react-icons/fi";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/auth-context";
-import { BUSINESS_TYPES } from "@/contexts/auth-modules";
 import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { useToast } from "@/hooks/use-toast";
 import { getAccountPasswordError } from "@/lib/account-password";
@@ -25,27 +24,29 @@ import {
   authMobileLabelClass,
 } from "@/components/auth/AuthMobileShell";
 import logo from "@assets/bizone_logo_optimized.webp";
-import Advanced from "@assets/Advanced.png";
-import SecureBusiness from "@assets/SecureBusiness.png";
-import Multitenant from "@assets/Multitenant.png";
+import loginOfficeBg from "@/assets/login-office-bg.jpg";
+import {
+  BarChart3,
+  ClipboardCheck,
+  LineChart,
+  Package,
+  ShieldCheck,
+  Users,
+  Zap,
+} from "lucide-react";
 
-const slides = [
-  {
-    title: "Advanced reporting",
-    subtitle: "Real-time analytics and insights for informed decision making",
-    image: Advanced,
-  },
-  {
-    title: "Secure Business Management",
-    subtitle: "Track and manage enterprise assets with role-based access control",
-    image: SecureBusiness,
-  },
-  {
-    title: "Multi - tenant architecture",
-    subtitle: "Support multiple organizations with isolated data with customizable features",
-    image: Multitenant,
-  },
-];
+const FEATURES = [
+  { label: "Sales & CRM", Icon: ClipboardCheck },
+  { label: "Inventory Management", Icon: Package },
+  { label: "Reports & Analytics", Icon: BarChart3 },
+  { label: "HR & Accounts", Icon: Users },
+] as const;
+
+const BENEFITS = [
+  { label: "Faster Productivity", Icon: Zap },
+  { label: "Higher Security", Icon: ShieldCheck },
+  { label: "Better Business Insights", Icon: LineChart },
+] as const;
 
 const desktopInputClassName =
   "w-full h-10 border border-gray-200 rounded-[10px] bg-white px-3 text-[0.85rem] text-[#101828] outline-none focus:border-blue-300 focus:shadow-[0_0_0_3px_rgba(37,99,235,0.12)] placeholder:text-gray-400";
@@ -112,7 +113,6 @@ function validateAccountStep(personal: PersonalForm, company: CompanyForm): stri
 function validateSecurityStep(personal: PersonalForm, company: CompanyForm): string | null {
   if (!company.slug.trim()) return "Slug is required";
   if (company.slug.trim().length < 3) return "Slug must be at least 3 letters or numbers";
-  if (!company.business_type.trim()) return "Select a business type";
   if (!company.fy_from || !company.fy_to) return "Select the financial year";
   if (company.fy_to < company.fy_from) return "Financial year end date must be on or after the start date";
   return null;
@@ -148,7 +148,6 @@ export default function Register() {
   const queryClient = useQueryClient();
 
   const [step, setStep] = useState<RegisterStep>(1);
-  const [active, setActive] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -168,13 +167,6 @@ export default function Register() {
     fy_from: "",
     fy_to: "",
   });
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setActive((prev) => (prev + 1) % slides.length);
-    }, 4500);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!isLoading && user) {
@@ -259,7 +251,7 @@ export default function Register() {
           companyName: companyForm.company_name.trim(),
           companyEmail: personalForm.email.trim().toLowerCase(),
           companyAddress: companyForm.company_address.trim(),
-          businessType: companyForm.business_type,
+          businessType: companyForm.business_type.trim() || "trading",
           gstRegistrationNo: companyForm.gst_registration_no.trim() || undefined,
           financialYearFrom: companyForm.fy_from,
           financialYearTo: companyForm.fy_to,
@@ -304,13 +296,13 @@ export default function Register() {
     return null;
   }
 
-  const slide = slides[active];
   const mobileTitle = step === 1 ? "Sign up" : "Company Details";
   const mobileSubtitle =
     step === 1
       ? "Create your BizOne account to start managing enterprise assets"
       : "Tell us about your company to complete registration";
   const progressActive = step === 1 ? 2 : 0;
+  const desktopTitle = step === 1 ? "Sign Up" : "Company Details";
 
   const signUpLink = (
     <p className="mb-0 mt-4 text-center text-[0.9rem] text-gray-600">
@@ -423,33 +415,17 @@ export default function Register() {
           />
         </label>
         <label className="flex min-w-0 flex-col gap-2">
-          <span className={`${authMobileLabelClass} text-[0.82rem]`}>Business Type<RequiredMark /></span>
-          <select
-            name="business_type"
-            value={companyForm.business_type}
-            onChange={(e) => setCompanyField("business_type", e.target.value)}
+          <span className={`${authMobileLabelClass} text-[0.82rem]`}>GST Registration</span>
+          <input
+            type="text"
+            name="gst_registration_no"
+            value={companyForm.gst_registration_no}
+            onChange={(e) => setCompanyField("gst_registration_no", e.target.value)}
             className={`${registerMobileInputClass} h-10 text-[0.85rem]`}
             style={{ fontFamily: "Poppins, sans-serif" }}
-          >
-            <option value="">Select business type</option>
-            {BUSINESS_TYPES.map((type) => (
-              <option key={type.id} value={type.id}>{type.label}</option>
-            ))}
-          </select>
+          />
         </label>
       </div>
-
-      <label className="flex min-w-0 flex-col gap-2">
-        <span className={authMobileLabelClass}>GST Registration</span>
-        <input
-          type="text"
-          name="gst_registration_no"
-          value={companyForm.gst_registration_no}
-          onChange={(e) => setCompanyField("gst_registration_no", e.target.value)}
-          className={registerMobileInputClass}
-          style={{ fontFamily: "Poppins, sans-serif" }}
-        />
-      </label>
 
       <div className="flex min-w-0 flex-col gap-2">
         <span className={authMobileLabelClass}>Financial Year<RequiredMark /></span>
@@ -648,33 +624,17 @@ export default function Register() {
         </label>
 
         <label className="flex min-w-0 flex-col gap-1">
-          <span className="text-[0.82rem] font-semibold text-[#101828]">Business Type<RequiredMark /></span>
-          <select
-            name="business_type"
-            value={companyForm.business_type}
-            onChange={(e) => setCompanyField("business_type", e.target.value)}
+          <span className="text-[0.82rem] font-semibold text-[#101828]">GST Registration</span>
+          <input
+            type="text"
+            name="gst_registration_no"
+            value={companyForm.gst_registration_no}
+            onChange={(e) => setCompanyField("gst_registration_no", e.target.value)}
             className={desktopInputClassName}
             style={{ fontFamily: "Poppins, sans-serif" }}
-          >
-            <option value="">Select business type</option>
-            {BUSINESS_TYPES.map((type) => (
-              <option key={type.id} value={type.id}>{type.label}</option>
-            ))}
-          </select>
+          />
         </label>
       </div>
-
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className="text-[0.82rem] font-semibold text-[#101828]">GST Registration</span>
-        <input
-          type="text"
-          name="gst_registration_no"
-          value={companyForm.gst_registration_no}
-          onChange={(e) => setCompanyField("gst_registration_no", e.target.value)}
-          className={desktopInputClassName}
-          style={{ fontFamily: "Poppins, sans-serif" }}
-        />
-      </label>
 
       <div className="flex min-w-0 flex-col gap-1">
         <span className="text-[0.82rem] font-semibold text-[#101828]">Financial Year<RequiredMark /></span>
@@ -789,61 +749,98 @@ export default function Register() {
         {step === 1 ? personalFormMobile : companyFormMobile}
       </AuthMobileShell>
 
+      {/* Same shell as login — only the right box switches to Sign Up */}
       <div
-        className="auth-page hidden h-screen min-[901px]:flex items-center justify-center overflow-hidden px-[100px] py-4 max-[1100px]:px-10"
-        style={{
-          background: "linear-gradient(120deg, #071536 0%, #0d2f7a 42%, #1d4ed8 100%)",
-          fontFamily: "Poppins, sans-serif",
-        }}
+        className="auth-page fixed inset-0 z-10 hidden overflow-hidden min-[901px]:block"
+        style={{ fontFamily: "Poppins, sans-serif" }}
       >
-        <div className="grid h-full w-full max-w-[1240px] grid-cols-2 items-center">
-          <aside className="flex items-center justify-start py-4 pl-0 pr-4">
-            <div className="w-full max-w-[560px] text-left text-white">
-              <div className="w-[min(460px,100%)]">
+        <div
+          className="relative origin-top-left"
+          style={{ width: "80vw", height: "80vh", transform: "scale(1.25)" }}
+        >
+          <div
+            className="pointer-events-none absolute inset-0 bg-cover bg-center bg-no-repeat"
+            style={{ backgroundImage: `url(${loginOfficeBg})` }}
+            aria-hidden
+          />
+
+          <div className="relative z-10 flex h-full w-full flex-col pb-8 pl-12 pr-[min(540px,42%)] pt-12 xl:pl-14 xl:pt-14">
+            <aside className="flex min-h-0 flex-1 flex-col">
+              <div className="max-w-[520px]">
                 <img
-                  src={slide.image}
-                  alt={slide.title}
-                  className="mb-5 h-auto w-full animate-[floatY_4.5s_ease-in-out_infinite] object-contain"
+                  src={logo}
+                  alt="BizOne"
+                  className="mb-8 block h-[4.75rem] w-auto object-contain object-left"
                 />
-                <h2 className="m-0 mb-3 text-center text-[clamp(1.45rem,2.1vw,1.9rem)] leading-none tracking-tight whitespace-nowrap">
-                  {slide.title}
-                </h2>
-                <p className="m-0 text-center text-[1.05rem] leading-relaxed text-white/80">
-                  {slide.subtitle}
+
+                <h1 className="m-0 text-[clamp(2.5rem,3.8vw,3.35rem)] font-extrabold leading-[1.12] tracking-tight">
+                  <span className="block whitespace-nowrap text-[#0B1F44]">Smarter Business.</span>
+                  <span className="block whitespace-nowrap text-[#2563EB]">Greater Growth.</span>
+                </h1>
+                <p className="mt-4 max-w-[420px] text-[1.2rem] font-medium leading-[1.55] text-[#64748B]">
+                  Powerful ERP Solution to Manage,
+                  <br />
+                  Automate and Grow Your Business.
                 </p>
-                <div className="mt-6 flex w-full items-center justify-center gap-2.5">
-                  {slides.map((_, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      aria-label={`Slide ${index + 1}`}
-                      onClick={() => setActive(index)}
-                      className={`h-2.5 w-2.5 cursor-pointer rounded-full border-0 p-0 transition ${
-                        index === active ? "scale-110 bg-white" : "bg-white/40"
+
+                <ul className="mt-8 max-w-[250px] space-y-0">
+                  {FEATURES.map(({ label, Icon }, index) => (
+                    <li
+                      key={label}
+                      className={`flex items-center gap-3.5 py-[11px] ${
+                        index < FEATURES.length - 1 ? "border-b border-[#CBD5E1]/75" : ""
                       }`}
-                    />
+                    >
+                      <span className="flex h-[34px] w-[34px] items-center justify-center rounded-[10px] border border-[#93C5FD] bg-white/95 text-[#2563EB] shadow-sm">
+                        <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </span>
+                      <span className="text-[0.98rem] font-semibold text-[#0B1F44]">{label}</span>
+                    </li>
                   ))}
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          <section className="flex items-center justify-center p-4">
-            <div className="flex min-h-[580px] w-full max-w-[520px] flex-col rounded-[22px] bg-white px-10 py-8 shadow-[0_24px_60px_rgba(2,12,40,0.28)]">
-              <div className="mb-5">
-                <img src={logo} alt="BizOne" className="block h-12 w-auto object-contain" />
+                </ul>
               </div>
 
-              <h1 className="m-0 mb-2 text-[1.85rem] tracking-tight text-[#101828]">
-                {step === 1 ? "Sign Up" : "Company Details"}
-              </h1>
-              <p className="m-0 mb-5 text-[0.9rem] leading-relaxed text-gray-500">
-                {mobileSubtitle}
-              </p>
+              <div className="mt-auto flex flex-nowrap items-center gap-x-4 pb-1 pt-10 whitespace-nowrap">
+                {BENEFITS.map(({ label, Icon }, index) => (
+                  <div key={label} className="flex shrink-0 items-center gap-3">
+                    {index > 0 ? (
+                      <span className="mr-1 h-6 w-px shrink-0 bg-[#94A3B8]/65" aria-hidden />
+                    ) : null}
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#93C5FD] bg-white/95 text-[#2563EB]">
+                        <Icon className="h-3.5 w-3.5" strokeWidth={1.8} />
+                      </span>
+                      <span className="text-[0.82rem] font-semibold text-[#0B1F44]">
+                        <span className="text-[#2563EB]">{label.split(" ")[0]}</span>{" "}
+                        {label.split(" ").slice(1).join(" ")}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          </div>
 
-              {step === 1 ? personalFormDesktop : companyFormDesktop}
+          {/* Auth box — same original 520×580 size/place as Sign In */}
+          <section
+            className="absolute top-1/2 z-20 -translate-y-1/2"
+            style={{ left: "62%", right: "2%" }}
+          >
+            <div className="ml-auto flex w-[520px] max-w-full flex-col rounded-[22px] bg-white px-10 pb-8 pt-9 shadow-[0_24px_60px_rgba(2,12,40,0.28)]">
+              <div className="mb-5 shrink-0 text-center">
+                <h2 className="m-0 text-[1.85rem] font-bold tracking-tight text-[#101828]">
+                  {desktopTitle}
+                </h2>
+                <p className="mx-auto mt-2 max-w-[380px] text-[0.9rem] leading-relaxed text-gray-500">
+                  {mobileSubtitle}
+                </p>
+              </div>
 
-              <p className="mb-0 mt-auto shrink-0 pt-[22px] text-center text-[0.9rem] text-gray-600">
+              <div className="flex flex-col">
+                {step === 1 ? personalFormDesktop : companyFormDesktop}
+              </div>
+
+              <p className="mb-0 shrink-0 pt-5 text-center text-[0.9rem] text-gray-600">
                 Already have an account?{" "}
                 <Link href="/login" className="font-semibold text-blue-600 no-underline hover:underline">
                   Sign in

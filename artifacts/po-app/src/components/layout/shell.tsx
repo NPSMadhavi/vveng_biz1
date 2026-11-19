@@ -2,6 +2,7 @@ import React from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/auth-context";
 import { type AppModule, MODULE_GROUPS } from "@/contexts/auth-modules";
+import { LicensePaywall } from "@/components/license-paywall";
 import {
   LayoutDashboard,
   FileText,
@@ -300,11 +301,17 @@ function TxnBranch({
         type="button"
         onClick={onToggle}
         className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition-all ${
-          open ? "bg-[#f0f4ff] text-[#1a73e8]" : "text-[#334155] hover:bg-[#f0f4ff] hover:text-[#1a73e8]"
+          open
+            ? "bg-[#f0f4ff] text-[#1a73e8]"
+            : "text-[#64748b] hover:bg-[#f0f4ff] hover:text-[#1a73e8]"
         }`}
       >
         <span className="flex-1 text-left">{label}</span>
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        <ChevronDown
+          className={`h-3.5 w-3.5 transition-transform duration-200 ${
+            open ? "rotate-180 text-[#1a73e8]" : "text-[#64748b]"
+          }`}
+        />
       </button>
       {open && <div className="space-y-0.5 py-0.5">{children}</div>}
     </div>
@@ -508,10 +515,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
     const group = getGroupForRoute(location);
     if (group) setOpenGroup(group);
     const path = location.split("?")[0];
+    // Exclusive: Veda/sidebar navigation opens only the matching branch
     if (path.startsWith("/manpower")) {
-      setTxnBranch((prev) => ({ ...prev, manpower: true }));
+      setTxnBranch({ general: false, manpower: true });
     } else if (isGeneralTransaction(path)) {
-      setTxnBranch((prev) => ({ ...prev, general: true }));
+      setTxnBranch({ general: true, manpower: false });
     }
   }, [location]);
 
@@ -690,7 +698,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <TxnBranch
           label="General"
           open={txnBranch.general}
-          onToggle={() => setTxnBranch((prev) => ({ ...prev, general: !prev.general }))}
+          onToggle={() =>
+            setTxnBranch((prev) =>
+              prev.general
+                ? { ...prev, general: false }
+                : { general: true, manpower: false },
+            )
+          }
         >
           {(hasModuleAccess("purchase_quotations") || hasModuleAccess("purchase_orders") || hasModuleAccess("vendor_invoices") || hasModuleAccess("vendor_proforma_invoices") || hasModuleAccess("grn") || hasModuleAccess("debit_notes")) && (
             <div className="px-3 pt-2 pb-0.5">
@@ -773,7 +787,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <TxnBranch
           label="Man power supply"
           open={txnBranch.manpower}
-          onToggle={() => setTxnBranch((prev) => ({ ...prev, manpower: !prev.manpower }))}
+          onToggle={() =>
+            setTxnBranch((prev) =>
+              prev.manpower
+                ? { ...prev, manpower: false }
+                : { manpower: true, general: false },
+            )
+          }
         >
           <div className="px-3 pt-2 pb-0.5">
             <span className="text-xs font-bold uppercase tracking-wide text-[#334155] select-none">Vendors</span>
@@ -815,35 +835,38 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </TxnBranch>
       </NavGroup>
 
-<NavGroup
-  id="point_of_sale"
-  label="Point of Sale"
-  icon={Store}
-  isOpen={openGroup === "point_of_sale"}
-  onToggle={toggleGroup}
-  visible
-  hasActive={location.startsWith("/point-of-sale")}
->
-  <NavItem href="/point-of-sale/retail" icon={Store} active={location.startsWith("/point-of-sale/retail")} inGroup>
-    Retail
-  </NavItem>
-  <NavItem href="/point-of-sale/supermarket" icon={ShoppingBag} active={location.startsWith("/point-of-sale/supermarket")} inGroup>
-    Supermarket
-  </NavItem>
-  <NavItem href="/point-of-sale/restaurants" icon={UtensilsCrossed} active={location.startsWith("/point-of-sale/restaurants")} inGroup>
-    Restaurants
-  </NavItem>
-  <NavItem href="/point-of-sale/pharmacy" icon={Pill} active={location.startsWith("/point-of-sale/pharmacy")} inGroup>
-    Pharmacy
-  </NavItem>
-  <NavItem href="/point-of-sale/electronics" icon={Monitor} active={location.startsWith("/point-of-sale/electronics")} inGroup>
-    Electronics
-  </NavItem>
-  <NavItem href="/point-of-sale/reports" icon={BarChart3} active={location.startsWith("/point-of-sale/reports")} inGroup>
-    Reports
-  </NavItem>
-</NavGroup>
-      {hasModuleAccess("bill_of_materials") && (
+{/* Point of Sale + Bill of Materials hidden from sidebar */}
+      {false && (
+        <NavGroup
+          id="point_of_sale"
+          label="Point of Sale"
+          icon={Store}
+          isOpen={openGroup === "point_of_sale"}
+          onToggle={toggleGroup}
+          visible
+          hasActive={location.startsWith("/point-of-sale")}
+        >
+          <NavItem href="/point-of-sale/retail" icon={Store} active={location.startsWith("/point-of-sale/retail")} inGroup>
+            Retail
+          </NavItem>
+          <NavItem href="/point-of-sale/supermarket" icon={ShoppingBag} active={location.startsWith("/point-of-sale/supermarket")} inGroup>
+            Supermarket
+          </NavItem>
+          <NavItem href="/point-of-sale/restaurants" icon={UtensilsCrossed} active={location.startsWith("/point-of-sale/restaurants")} inGroup>
+            Restaurants
+          </NavItem>
+          <NavItem href="/point-of-sale/pharmacy" icon={Pill} active={location.startsWith("/point-of-sale/pharmacy")} inGroup>
+            Pharmacy
+          </NavItem>
+          <NavItem href="/point-of-sale/electronics" icon={Monitor} active={location.startsWith("/point-of-sale/electronics")} inGroup>
+            Electronics
+          </NavItem>
+          <NavItem href="/point-of-sale/reports" icon={BarChart3} active={location.startsWith("/point-of-sale/reports")} inGroup>
+            Reports
+          </NavItem>
+        </NavGroup>
+      )}
+      {false && hasModuleAccess("bill_of_materials") && (
         <NavItem href="/bill-of-materials" icon={Boxes} active={location.startsWith("/bill-of-materials")}>
           Bill of Materials
         </NavItem>
@@ -1154,7 +1177,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className="h-[100dvh] max-h-[100dvh] flex flex-col md:flex-row bg-muted/20 overflow-hidden"
+      className="h-[100dvh] max-h-[100dvh] flex flex-col md:flex-row bg-[#EDF2FB] overflow-hidden"
       style={{ ["--app-sidebar-width" as string]: sidebarHidden ? "0px" : collapsed ? "3.5rem" : "16rem" }}
     >
       {/* ── Mobile header ────────────────────────────────────── */}
@@ -1214,16 +1237,16 @@ export function Shell({ children }: { children: React.ReactNode }) {
       {/* ── Main content: fixed top chrome + scrollable body ─── */}
       <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
         <StickyHeaderSlotContext.Provider value={stickyHeaderSlot}>
-          <div className="shrink-0 z-40 relative bg-background px-4 md:px-6 xl:px-8 pt-4 md:pt-6 xl:pt-8 border-b border-border/40">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-[240px] flex-1">
+          <div className="shrink-0 z-40 relative bg-[#EDF2FB] px-4 md:px-6 xl:px-8 pt-4 md:pt-6 xl:pt-8 border-b border-[#dce5f5]/70">
+            <div className="flex flex-wrap items-start justify-between gap-3 bg-transparent">
+              <div className="min-w-[240px] max-w-lg w-full sm:w-auto sm:flex-1">
                 <GlobalSearch />
               </div>
               <FinancialYearSwitcher />
             </div>
             <div ref={setStickyHeaderSlot} />
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 md:px-6 xl:px-8 py-4 md:py-6">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-[#EDF2FB] px-4 md:px-6 xl:px-8 py-4 md:py-6">
             <ClosedPeriodWriteGuard>
               {children}
             </ClosedPeriodWriteGuard>
@@ -1232,6 +1255,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </main>
       <LocalBackupScheduler />
       <AgentPanel />
+      <LicensePaywall />
     </div>
   );
 }

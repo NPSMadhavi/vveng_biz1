@@ -429,12 +429,13 @@ export async function previewOpeningBalances(companyId: number, previousFyId: nu
   if (!prev) throw new Error("Previous financial year not found");
 
   const balances = await accountBalancesAsOf(companyId, prev.endDate);
-  // Income/expense stay in prior year — net P&L folds into retained earnings for carry-forward
+  // Income/expense do NOT carry forward as lines — net P&L folds into Retained Earnings only.
+  // balance is always debit − credit, so profit makes plNet negative (credit-heavy).
+  // Adding plNet to RE (also debit − credit) correctly increases the credit (equity) side.
   const plNet = balances
     .filter((b) => b.accountType === "revenue" || b.accountType === "expense")
     .reduce((s, b) => s + b.balance, 0);
-  // profit (credit) = -plNet when balance = debit - credit
-  const retainedEarningsAdjustment = -plNet;
+  const retainedEarningsAdjustment = plNet;
 
   const bsAccounts = balances
     .filter((b) => ["asset", "liability", "equity"].includes(b.accountType))
@@ -455,17 +456,39 @@ export async function previewOpeningBalances(companyId: number, previousFyId: nu
       return b;
     });
 
+  // If Retained Earnings had a zero prior balance it still must receive the P&L plug.
+  const hasRetainedEarningsLine = bsAccounts.some(
+    (b) =>
+      Math.abs(b.balance) > 0.005 &&
+      (b.accountCode === "3100" || (/retained earnings/i.test(b.accountName) && b.accountCode !== "3200")),
+  );
+  if (!hasRetainedEarningsLine && Math.abs(retainedEarningsAdjustment) > 0.005) {
+    const reSeed =
+      balances.find((b) => b.accountCode === "3100") ||
+      balances.find((b) => /retained earnings/i.test(b.accountName) && b.accountCode !== "3200");
+    if (reSeed) {
+      const nextBal = retainedEarningsAdjustment;
+      bsAccounts.push({
+        ...reSeed,
+        balance: nextBal,
+        debit: nextBal > 0 ? nextBal : 0,
+        credit: nextBal < 0 ? Math.abs(nextBal) : 0,
+      });
+    }
+  }
+
   const customers = await customerOutstandings(companyId, prev.endDate);
   const vendors = await vendorOutstandings(companyId, prev.endDate);
   const inventory = await inventoryClosing(companyId);
 
+  // Subledger bank openings: cash/bank only — not every current asset (AR/inventory/GST).
   const bankCash = bsAccounts.filter(
     (b) =>
       b.accountType === "asset" &&
-      (b.subType === "current_asset" || /cash|bank/i.test(b.accountName) || /cash|bank/i.test(b.accountCode)),
+      (/cash|bank/i.test(b.accountName) || /cash|bank/i.test(b.accountCode)),
   );
   const fixedAssets = bsAccounts.filter(
-    (b) => b.accountType === "asset" && (b.subType === "fixed_asset" || /fixed|ppe|asset/i.test(b.subType)),
+    (b) => b.accountType === "asset" && (b.subType === "fixed_asset" || /fixed|ppe/i.test(b.subType || "")),
   );
 
   const summary = {

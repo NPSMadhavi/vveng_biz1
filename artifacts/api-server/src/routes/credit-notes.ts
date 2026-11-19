@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
-import { db, creditNotesTable, usersTable, customersTable, settingsTable } from "@workspace/db";
-import { eq, desc, inArray, ilike, and } from "drizzle-orm";
+import { db, pool, creditNotesTable, usersTable, customersTable, settingsTable } from "@workspace/db";
+import { eq, desc, inArray, ilike, and, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
 import { reverseCreditNoteStock, syncCreditNoteStock } from "../lib/credit-note-stock.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -72,8 +73,8 @@ router.get("/credit-notes/stats", async (req, res): Promise<void> => {
   const userId = req.session.userId!;
   const isAdmin = req.session.isAdmin ?? false;
   const all = companyId
-    ? await db.select().from(creditNotesTable).where(eq(creditNotesTable.companyId, companyId))
-    : await db.select().from(creditNotesTable);
+    ? await db.select().from(creditNotesTable).where(and(eq(creditNotesTable.companyId, companyId), sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`))
+    : await db.select().from(creditNotesTable).where(sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`);
   const visible = visibilityFilter(all, userId, isAdmin);
   res.json({
     total: visible.length,
@@ -92,8 +93,8 @@ router.get("/credit-notes", async (req, res): Promise<void> => {
   const isAdmin = req.session.isAdmin ?? false;
 
   const all = companyId
-    ? await db.select().from(creditNotesTable).where(eq(creditNotesTable.companyId, companyId)).orderBy(desc(creditNotesTable.createdAt))
-    : await db.select().from(creditNotesTable).orderBy(desc(creditNotesTable.createdAt));
+    ? await db.select().from(creditNotesTable).where(and(eq(creditNotesTable.companyId, companyId), sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`)).orderBy(desc(creditNotesTable.createdAt))
+    : await db.select().from(creditNotesTable).where(sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`).orderBy(desc(creditNotesTable.createdAt));
 
   const visible = visibilityFilter(all, userId, isAdmin);
   const withNames = await withUsernames(visible);
@@ -145,8 +146,32 @@ router.post("/credit-notes", async (req, res): Promise<void> => {
   }).returning();
 
   await upsertCustomer(companyId, customerName, customerAddress, contactPerson, contactEmail);
+
+  // Confirm-on-create must post stock return (frontend POSTs status=confirmed, not /confirm)
+  if (doc.status === "confirmed") {
+    try {
+      await syncCreditNoteStock({
+        companyId,
+        creditNoteId: doc.id,
+        cnNumber: doc.cnNumber,
+        items: (doc.items as any[]) || [],
+        userId,
+        username: (req.session as any).username,
+      });
+    } catch (e: any) {
+      await db.update(creditNotesTable).set({ status: "draft" }).where(eq(creditNotesTable.id, doc.id));
+      res.status(400).json({
+        error: e.message || "Failed to post credit note stock return",
+        creditNoteId: doc.id,
+        cnNumber: doc.cnNumber,
+      });
+      return;
+    }
+  }
+
   logAudit({ req, action: "create", entityType: "credit_note", entityId: doc.id, entityLabel: doc.cnNumber });
-  res.status(201).json(parseDoc(doc));
+  const [fresh] = await db.select().from(creditNotesTable).where(eq(creditNotesTable.id, doc.id));
+  res.status(201).json(parseDoc(fresh || doc));
 });
 
 // ── GET /credit-notes/:id ────────────────────────────────────────────────────
@@ -155,7 +180,7 @@ router.get("/credit-notes/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [doc] = await db.select().from(creditNotesTable).where(eq(creditNotesTable.id, id));
+  const [doc] = await db.select().from(creditNotesTable).where(and(eq(creditNotesTable.id, id), sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Credit note not found" }); return; }
 
   const userId = req.session.userId!;
@@ -213,6 +238,24 @@ router.put("/credit-notes/:id", async (req, res): Promise<void> => {
   }).where(eq(creditNotesTable.id, id)).returning();
 
   if (customerName) await upsertCustomer(companyId, customerName, customerAddress, contactPerson, contactEmail);
+
+  // Keep warehouse stock in sync whenever CN is (or becomes) confirmed
+  if (doc.status === "confirmed") {
+    try {
+      await syncCreditNoteStock({
+        companyId,
+        creditNoteId: doc.id,
+        cnNumber: doc.cnNumber,
+        items: (doc.items as any[]) || [],
+        userId,
+        username: (req.session as any).username,
+      });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message || "Failed to post credit note stock return" });
+      return;
+    }
+  }
+
   logAudit({ req, action: "update", entityType: "credit_note", entityId: doc.id, entityLabel: doc.cnNumber });
   res.json(parseDoc(doc));
 });
@@ -287,11 +330,26 @@ router.delete("/credit-notes/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [existing] = await db.select().from(creditNotesTable).where(eq(creditNotesTable.id, id));
+  const [existing] = await db.select().from(creditNotesTable).where(and(eq(creditNotesTable.id, id), sql`COALESCE(${creditNotesTable.isDeleted}, 0) = 0`));
   if (!existing) { res.status(404).json({ error: "Credit note not found" }); return; }
   if (existing.status === "void") { res.status(400).json({ error: "Cannot delete a voided credit note." }); return; }
 
-  await db.delete(creditNotesTable).where(eq(creditNotesTable.id, id));
+  if (existing.status === "confirmed") {
+    try {
+      await reverseCreditNoteStock({
+        companyId: existing.companyId,
+        creditNoteId: id,
+        cnNumber: existing.cnNumber,
+        userId: req.session.userId!,
+        username: (req.session as any).username,
+      });
+    } catch (stockErr: any) {
+      req.log?.warn?.({ err: stockErr }, "Credit note stock reverse failed on delete");
+    }
+  }
+
+  const ok = await softDeleteById(pool, "credit_notes", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Credit note not found" }); return; }
   logAudit({ req, action: "delete", entityType: "credit_note", entityId: id, entityLabel: existing.cnNumber });
   res.json({ ok: true });
 });

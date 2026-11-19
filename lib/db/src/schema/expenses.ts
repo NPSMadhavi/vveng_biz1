@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, decimal, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, decimal, boolean, timestamp, smallint } from "drizzle-orm/pg-core";
 import { companiesTable } from "./companies";
 
 export const EXPENSE_CATEGORIES = [
@@ -44,6 +44,9 @@ export const expensesTable = pgTable("expenses", {
   status: text("status").notNull().default("draft"),
   notes: text("notes"),
   createdBy: integer("created_by").notNull(),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

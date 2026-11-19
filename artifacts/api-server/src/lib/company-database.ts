@@ -11,6 +11,7 @@ import {
 import { migrateOperationsOnPool } from "../migrate-operations-tables.js";
 import { migrateWmsOnPool } from "../migrate-wms-tables.js";
 import { ensureFullTenantSchema } from "./apply-full-tenant-schema.js";
+import { ensureSoftDeleteColumns } from "./soft-delete.js";
 
 const prepared = new Map<string, Promise<pg.Pool | null>>();
 const pools = new Map<string, pg.Pool>();
@@ -18,6 +19,8 @@ const pools = new Map<string, pg.Pool>();
 const companyDbNameCache = new Map<number, string>();
 /** database_name → already ran heavy schema heal this process */
 const schemaHealed = new Set<string>();
+/** `${databaseName}:${companyId}` → already checked master for business rows to copy */
+const tenantBusinessBackfillDone = new Set<string>();
 /** database_name → dropped FKs that reference companies(id) (tenant DBs only) */
 const companyFksDropped = new Set<string>();
 /** `${databaseName}:${companyId}` → company stub row confirmed */
@@ -668,6 +671,69 @@ async function dropTenantCompanyForeignKeys(
   companyFksDropped.add(databaseName);
 }
 
+function databaseNameFromUrl(databaseUrl: string): string {
+  try {
+    return decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\//, ""));
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Deployments often load employees and documents into the server database
+ * (DATABASE_URL) while the app reads the company's own database. If that
+ * company database has no employees and the server database does, copy the
+ * company's rows across once. ON CONFLICT DO NOTHING keeps existing tenant rows.
+ */
+async function backfillEmptyTenantFromMaster(
+  pool: pg.Pool,
+  databaseUrl: string,
+  tenantUrl: string,
+  databaseName: string,
+  companyId: number,
+): Promise<void> {
+  const key = `${databaseName}:${companyId}`;
+  if (tenantBusinessBackfillDone.has(key)) return;
+  if (databaseNameFromUrl(databaseUrl) === databaseName) {
+    tenantBusinessBackfillDone.add(key);
+    return;
+  }
+
+  let tenantEmployees = 0;
+  try {
+    const result = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM employees WHERE company_id = $1`,
+      [companyId],
+    );
+    tenantEmployees = result.rows[0]?.n ?? 0;
+  } catch {
+    tenantBusinessBackfillDone.add(key);
+    return;
+  }
+  if (tenantEmployees > 0) {
+    tenantBusinessBackfillDone.add(key);
+    return;
+  }
+
+  const masterEmployees = await withClient(databaseUrl, async (client) => {
+    const result = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM employees WHERE company_id = $1`,
+      [companyId],
+    ).catch(() => ({ rows: [{ n: 0 }] }));
+    return Number(result.rows[0]?.n ?? 0);
+  });
+  if (masterEmployees <= 0) {
+    tenantBusinessBackfillDone.add(key);
+    return;
+  }
+
+  console.log(
+    `[company-database] copying ${masterEmployees} employees and related rows into ${databaseName} for company ${companyId}`,
+  );
+  await copyCompany(databaseUrl, tenantUrl, companyId);
+  tenantBusinessBackfillDone.add(key);
+}
+
 async function prepareCompanyPool(databaseUrl: string, databaseName: string, companyId: number): Promise<pg.Pool> {
   const tenantUrl = databaseUrlFor(databaseUrl, databaseName);
 
@@ -690,7 +756,9 @@ async function prepareCompanyPool(databaseUrl: string, databaseName: string, com
   // Document tables (PQ/PO/SO/invoices/…) — must run even when tenantLooksReady is true,
   // otherwise Westcon-style partial tenants 500 with "relation does not exist".
   await healTenantDocumentSchema(pool, databaseName);
+  await ensureSoftDeleteColumns(pool).catch(() => undefined);
   await dropTenantCompanyForeignKeys(pool, databaseName, true);
+  await backfillEmptyTenantFromMaster(pool, databaseUrl, tenantUrl, databaseName, companyId);
 
   // Fast path: tenant already has company row + core tables — skip copy/DDL heal.
   if (schemaHealed.has(databaseName) || (await tenantLooksReady(pool, companyId))) {

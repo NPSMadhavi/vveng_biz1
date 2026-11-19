@@ -119,6 +119,15 @@ export async function runStartupMigrations(): Promise<void> {
     );
   }
 
+  // Soft-delete flag on every public table (master + later each tenant on open).
+  try {
+    const { ensureSoftDeleteColumns } = await import("./soft-delete.js");
+    const n = await ensureSoftDeleteColumns(pool);
+    logger.info({ tables: n }, "[startup-migrations] soft-delete columns ensured on current DB");
+  } catch (err) {
+    logger.warn({ err }, "[startup-migrations] soft-delete column ensure failed (non-fatal)");
+  }
+
   if (!leanMaster) {
     // Bring shared/Plesk DB from incomplete dumps (~61 tables) up to full app schema (~91).
     try {
@@ -145,29 +154,40 @@ export async function runStartupMigrations(): Promise<void> {
     }
   } else {
     // Lean master: heal every company DB that has database_name set.
-    try {
-      const { rows } = await pool.query<{ id: number; database_name: string }>(
-        `SELECT id, database_name FROM companies
-         WHERE database_name IS NOT NULL AND btrim(database_name) <> ''
-         ORDER BY id`,
+    // In local/dev, defer this — openCompanyPool already heals on first use, and
+    // eagerly healing every tenant blocks listen for 15–30s on each hot reload (503s).
+    const deferTenantHeal =
+      process.env.NODE_ENV !== "production" ||
+      process.env.BIZONE_DEFER_TENANT_HEAL === "1";
+    if (deferTenantHeal) {
+      logger.info(
+        "[startup-migrations] deferring company tenant schema heal until first company open (dev)",
       );
-      const { openCompanyPool } = await import("./company-database.js");
-      for (const row of rows) {
-        try {
-          await openCompanyPool(row.id);
-          logger.info(
-            { companyId: row.id, database: row.database_name },
-            "[startup-migrations] company tenant schema heal opened",
-          );
-        } catch (err) {
-          logger.warn(
-            { err, companyId: row.id, database: row.database_name },
-            "[startup-migrations] company tenant schema heal failed (non-fatal)",
-          );
+    } else {
+      try {
+        const { rows } = await pool.query<{ id: number; database_name: string }>(
+          `SELECT id, database_name FROM companies
+           WHERE database_name IS NOT NULL AND btrim(database_name) <> ''
+           ORDER BY id`,
+        );
+        const { openCompanyPool } = await import("./company-database.js");
+        for (const row of rows) {
+          try {
+            await openCompanyPool(row.id);
+            logger.info(
+              { companyId: row.id, database: row.database_name },
+              "[startup-migrations] company tenant schema heal opened",
+            );
+          } catch (err) {
+            logger.warn(
+              { err, companyId: row.id, database: row.database_name },
+              "[startup-migrations] company tenant schema heal failed (non-fatal)",
+            );
+          }
         }
+      } catch (err) {
+        logger.warn({ err }, "[startup-migrations] lean-master tenant heal scan failed (non-fatal)");
       }
-    } catch (err) {
-      logger.warn({ err }, "[startup-migrations] lean-master tenant heal scan failed (non-fatal)");
     }
   }
 

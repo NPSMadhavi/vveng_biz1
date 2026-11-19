@@ -1,12 +1,13 @@
 import { Router, type IRouter } from "express";
 import { db, companyDbContext, pool, expensesTable, companiesTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { logAudit } from "../lib/audit.js";
 import { postExpenseJE, reverseExpenseJE, backfillExpenseJEs } from "../lib/expense-auto-post.js";
 import { isSingaporeCountry } from "../lib/singapore.js";
 import { assertPeriodWritable } from "../lib/financial-year.js";
 import { sanitizeErrorMessage, logServerError } from "../lib/safe-error.js";
 import { logger } from "../lib/logger.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router: IRouter = Router();
 
@@ -101,7 +102,7 @@ router.get("/expenses", async (req, res): Promise<void> => {
     const companyId = req.session.companyId!;
     const expenses = await db.select()
       .from(expensesTable)
-      .where(eq(expensesTable.companyId, companyId))
+      .where(and(eq(expensesTable.companyId, companyId), sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`))
       .orderBy(desc(expensesTable.expenseDate), desc(expensesTable.createdAt));
 
     res.json(expenses.map(e => ({ ...e, receiptData: undefined })));
@@ -123,7 +124,11 @@ router.get("/expenses/:id", async (req, res): Promise<void> => {
   try {
     await ensureExpensesSchema();
     const [expense] = await db.select().from(expensesTable)
-      .where(and(eq(expensesTable.id, id), eq(expensesTable.companyId, req.session.companyId!)))
+      .where(and(
+        eq(expensesTable.id, id),
+        eq(expensesTable.companyId, req.session.companyId!),
+        sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
+      ))
       .limit(1);
     if (!expense) { res.status(404).json({ error: "Expense not found" }); return; }
 
@@ -273,7 +278,11 @@ router.delete("/expenses/:id", async (req, res): Promise<void> => {
   try {
     await ensureExpensesSchema();
     const [existing] = await db.select().from(expensesTable)
-      .where(and(eq(expensesTable.id, id), eq(expensesTable.companyId, req.session.companyId!)))
+      .where(and(
+        eq(expensesTable.id, id),
+        eq(expensesTable.companyId, req.session.companyId!),
+        sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
+      ))
       .limit(1);
     if (!existing) { res.status(404).json({ error: "Expense not found" }); return; }
     const deletePeriod = await assertPeriodWritable(existing.companyId, String(existing.expenseDate || "").slice(0, 10));
@@ -283,12 +292,13 @@ router.delete("/expenses/:id", async (req, res): Promise<void> => {
       res.status(403).json({ error: "Only admins and accountants can delete expenses." }); return;
     }
 
-    // If confirmed, reverse the journal entry before deleting
+    // If confirmed, reverse the journal entry before soft-deleting
     if (existing.status === "confirmed") {
       await reverseExpenseJE(id, existing.companyId, existing.vendorName, req.session.userId!);
     }
 
-    await db.delete(expensesTable).where(eq(expensesTable.id, id));
+    const ok = await softDeleteById(pool, "expenses", { id, companyId: existing.companyId });
+    if (!ok) { res.status(404).json({ error: "Expense not found" }); return; }
     logAudit({ req, action: "delete", entityType: "expense", entityId: id, entityLabel: existing.vendorName });
     res.json({ success: true });
   } catch (err) {

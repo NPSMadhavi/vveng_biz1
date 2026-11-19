@@ -1,12 +1,13 @@
 import { Router, type IRouter } from "express";
 import { db, companyDbContext, pool, incomeRecordsTable, incomeAttachmentsTable, companiesTable, accountsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { logAudit } from "../lib/audit.js";
 import { postIncomeJE, reverseIncomeJE } from "../lib/income-auto-post.js";
 import { isSingaporeCountry } from "../lib/singapore.js";
 import { assertPeriodWritable } from "../lib/financial-year.js";
 import { sanitizeErrorMessage, logServerError } from "../lib/safe-error.js";
 import { logger } from "../lib/logger.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router: IRouter = Router();
 
@@ -107,7 +108,7 @@ router.get("/income", async (req, res): Promise<void> => {
     const companyId = req.session.companyId!;
     const records = await db.select()
       .from(incomeRecordsTable)
-      .where(eq(incomeRecordsTable.companyId, companyId))
+      .where(and(eq(incomeRecordsTable.companyId, companyId), sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`))
       .orderBy(desc(incomeRecordsTable.incomeDate), desc(incomeRecordsTable.createdAt));
 
     res.json(records);
@@ -130,7 +131,11 @@ router.get("/income/:id", async (req, res): Promise<void> => {
 
     const [record] = await db.select()
       .from(incomeRecordsTable)
-      .where(and(eq(incomeRecordsTable.id, id), eq(incomeRecordsTable.companyId, req.session.companyId!)))
+      .where(and(
+        eq(incomeRecordsTable.id, id),
+        eq(incomeRecordsTable.companyId, req.session.companyId!),
+        sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`,
+      ))
       .limit(1);
     if (!record) { res.status(404).json({ error: "Income record not found" }); return; }
 
@@ -280,7 +285,11 @@ router.delete("/income/:id", async (req, res): Promise<void> => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
   const [existing] = await db.select().from(incomeRecordsTable)
-    .where(and(eq(incomeRecordsTable.id, id), eq(incomeRecordsTable.companyId, req.session.companyId!)))
+    .where(and(
+      eq(incomeRecordsTable.id, id),
+      eq(incomeRecordsTable.companyId, req.session.companyId!),
+      sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`,
+    ))
     .limit(1);
   if (!existing) { res.status(404).json({ error: "Income record not found" }); return; }
   const deletePeriod = await assertPeriodWritable(existing.companyId, String(existing.incomeDate || "").slice(0, 10));
@@ -290,7 +299,12 @@ router.delete("/income/:id", async (req, res): Promise<void> => {
     res.status(403).json({ error: "Only admins and accountants can delete income records." }); return;
   }
 
-  await db.delete(incomeRecordsTable).where(eq(incomeRecordsTable.id, id));
+  if (existing.status === "confirmed") {
+    await reverseIncomeJE(id, existing.companyId, existing.payerName, req.session.userId!).catch(() => undefined);
+  }
+
+  const ok = await softDeleteById(pool, "income_records", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Income record not found" }); return; }
   logAudit({ req, action: "delete", entityType: "income_record", entityId: id, entityLabel: existing.payerName });
   res.json({ success: true });
 });

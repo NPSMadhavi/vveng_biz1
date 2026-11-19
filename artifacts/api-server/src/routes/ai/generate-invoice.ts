@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { getAssistantChat, openai } from "@workspace/integrations-openai-ai-server";
-import { isVedaGatewayConfigured, vedaChat } from "../../lib/veda-gateway.js";
+import { openai } from "@workspace/integrations-openai-ai-server";
+import { isVedaGatewayConfigured, publicAiError, vedaChat } from "../../lib/veda-gateway.js";
 
 const router = Router();
 
-const SYSTEM_PROMPT = `You are an invoice data extraction assistant for an IT services company.
-The user will describe an invoice in natural language. Extract structured invoice data and return ONLY valid JSON with no markdown, no code fences, and no explanations.
+const SYSTEM_PROMPT = `You are an invoice/quotation data extraction assistant for an IT services company.
+The user will describe an invoice or quotation in natural language. Extract structured document data and return ONLY valid JSON with no markdown, no code fences, and no explanations.
 
 Return a JSON object with exactly this structure:
 {
@@ -37,7 +37,7 @@ Rules:
 - notes: any payment instructions, bank details, or general notes mentioned
 - Return ONLY valid JSON`;
 
-router.post("/ai/generate-invoice", async (req: any, res: any) => {
+async function generateDocumentFromPrompt(req: any, res: any): Promise<void> {
   if (!req.session?.userId) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -55,33 +55,11 @@ router.post("/ai/generate-invoice", async (req: any, res: any) => {
 
   try {
     if (isVedaGatewayConfigured()) {
-      const assistant = getAssistantChat();
-      try {
-        const stream = await assistant.client.chat.completions.create({
-          model: assistant.model,
-          max_tokens: 4096,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: prompt },
-          ],
-          stream: true,
-        });
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content;
-          if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
-        }
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
-        return;
-      } catch (gatewayErr: any) {
-        const status = Number(gatewayErr?.status || 0);
-        if (status !== 404 && status !== 405) throw gatewayErr;
-        const text = await vedaChat(`${SYSTEM_PROMPT}\n\n---\n\n${prompt}`);
-        if (text) res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
-        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-        res.end();
-        return;
-      }
+      const text = await vedaChat(prompt, { systemPrompt: SYSTEM_PROMPT, timeoutMs: 240_000 });
+      if (text) res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+      return;
     }
 
     const stream = await openai.chat.completions.create({
@@ -104,10 +82,16 @@ router.post("/ai/generate-invoice", async (req: any, res: any) => {
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     res.end();
   } catch (err) {
-    req.log.error({ err }, "AI invoice generation failed");
-    res.write(`data: ${JSON.stringify({ error: "AI generation failed. Please try again." })}\n\n`);
+    req.log.error({ err }, "AI document generation failed");
+    const message = isVedaGatewayConfigured()
+      ? publicAiError(err)
+      : "AI generation failed. Please try again.";
+    res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
     res.end();
   }
-});
+}
+
+router.post("/ai/generate-invoice", generateDocumentFromPrompt);
+router.post("/ai/generate-quotation", generateDocumentFromPrompt);
 
 export default router;

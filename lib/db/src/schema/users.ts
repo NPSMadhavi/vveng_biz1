@@ -1,4 +1,4 @@
-import { boolean, pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { boolean, pgTable, text, serial, timestamp, integer, smallint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { companiesTable } from "./companies";
@@ -15,6 +15,8 @@ export const usersTable = pgTable("users", {
   fullName: text("full_name"),
   phoneNumber: text("phone_number"),
   isActive: boolean("is_active").notNull().default(true),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
   companyId: integer("company_id").references(() => companiesTable.id, { onDelete: "set null" }),
   roleId: integer("role_id").references(() => rolesTable.id, { onDelete: "set null" }),
   salesPersonId: integer("sales_person_id").references(() => salesPersonsTable.id, { onDelete: "set null" }),

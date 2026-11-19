@@ -9,6 +9,9 @@ export function queueVedaFormAction(action: VedaFormAction) {
   window.dispatchEvent(new CustomEvent("veda:form-action", { detail: { action } }));
 }
 
+/** Alias used by guided document flows in the agent panel. */
+export const dispatchVedaFormAction = queueVedaFormAction;
+
 /**
  * Listen for Veda save / preview / download / close actions on the open document page.
  * Also consumes a pending action queued before navigation (list → view/edit).

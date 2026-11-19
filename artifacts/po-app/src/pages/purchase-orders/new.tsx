@@ -330,7 +330,7 @@ export default function PurchaseOrderNew() {
   })();
 
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = Number(form.watch("tax") ?? 0);
   const rawCurrency = form.watch("currency") || "SGD";
   const currency = normalizeCurrency(rawCurrency);
   const isPrivate = form.watch("isPrivate");
@@ -417,7 +417,7 @@ export default function PurchaseOrderNew() {
 
     return new Promise<any>((resolve, reject) => {
       createMutation.mutate(
-        { data: (() => { const payload: any = { ...values, items: itemsWithAmount, status, customerId: values.customerId ?? undefined, ...attachment.payload }; if (!isManpower) delete payload.manpowerDetails; return payload; })() },
+        { data: (() => { const payload: any = { ...values, items: itemsWithAmount, status, customerId: values.customerId ?? undefined, ...attachment.payload }; payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null; return payload; })() },
         {
           onSuccess: async (data) => {
             // Show the new PO in the list immediately (no manual refresh).
@@ -625,7 +625,8 @@ export default function PurchaseOrderNew() {
                             form.setValue("vendorAddress", v.fullAddress);
                             form.setValue("vendorContact", v.contactPerson);
                             form.setValue("vendorContactEmail", v.contactEmail);
-                            if (v.effectiveGstRate !== undefined) form.setValue("tax", v.effectiveGstRate);
+                            if (v.isOverseas) form.setValue("tax", 0);
+                            else if (v.effectiveGstRate !== undefined) form.setValue("tax", v.effectiveGstRate);
                             if (v.currency) {
                               form.setValue("currency", v.currency);
                               setDirectoryCurrency(v.currency);

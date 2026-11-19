@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
-import { db, proformaInvoicesTable, usersTable, customersTable, settingsTable } from "@workspace/db";
-import { eq, desc, inArray, ilike, and } from "drizzle-orm";
+import { db, pool, proformaInvoicesTable, usersTable, customersTable, settingsTable } from "@workspace/db";
+import { eq, desc, inArray, ilike, and, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router: IRouter = Router();
 
@@ -122,8 +123,8 @@ router.get("/proforma-invoices", async (req, res): Promise<void> => {
   const isAdmin = req.session.isAdmin ?? false;
 
   const all = companyId
-    ? await db.select().from(proformaInvoicesTable).where(eq(proformaInvoicesTable.companyId, companyId)).orderBy(desc(proformaInvoicesTable.createdAt))
-    : await db.select().from(proformaInvoicesTable).orderBy(desc(proformaInvoicesTable.createdAt));
+    ? await db.select().from(proformaInvoicesTable).where(and(eq(proformaInvoicesTable.companyId, companyId), sql`COALESCE(${proformaInvoicesTable.isDeleted}, 0) = 0`)).orderBy(desc(proformaInvoicesTable.createdAt))
+    : await db.select().from(proformaInvoicesTable).where(sql`COALESCE(${proformaInvoicesTable.isDeleted}, 0) = 0`).orderBy(desc(proformaInvoicesTable.createdAt));
 
   const visible = visibilityFilter(all, userId, isAdmin);
   const withNames = await withUsernames(visible);
@@ -136,7 +137,7 @@ router.get("/proforma-invoices/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [doc] = await db.select().from(proformaInvoicesTable).where(eq(proformaInvoicesTable.id, id));
+  const [doc] = await db.select().from(proformaInvoicesTable).where(and(eq(proformaInvoicesTable.id, id), sql`COALESCE(${proformaInvoicesTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Proforma invoice not found" }); return; }
 
   const userId = req.session.userId!;
@@ -305,8 +306,16 @@ router.delete("/proforma-invoices/:id", async (req, res): Promise<void> => {
   if (!isAdmin) { res.status(403).json({ error: "Only administrators can delete proforma invoices" }); return; }
 
   const id = parseInt(req.params.id);
-  const [deleted] = await db.delete(proformaInvoicesTable).where(eq(proformaInvoicesTable.id, id)).returning();
-  logAudit({ req, action: "delete", entityType: "proforma_invoice", entityId: id, entityLabel: deleted?.piNumber });
+  const companyId = req.session.companyId;
+  const [existing] = await db.select().from(proformaInvoicesTable).where(and(
+    eq(proformaInvoicesTable.id, id),
+    sql`COALESCE(${proformaInvoicesTable.isDeleted}, 0) = 0`,
+    ...(companyId ? [eq(proformaInvoicesTable.companyId, companyId)] : []),
+  ));
+  if (!existing) { res.status(404).json({ error: "Proforma invoice not found" }); return; }
+  const ok = await softDeleteById(pool, "proforma_invoices", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Proforma invoice not found" }); return; }
+  logAudit({ req, action: "delete", entityType: "proforma_invoice", entityId: id, entityLabel: existing.piNumber });
   res.json({ success: true });
 });
 

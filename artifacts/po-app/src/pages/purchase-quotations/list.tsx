@@ -7,7 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { filterDocsByManpowerScope, isManpowerPath } from "@/lib/doc-manpower";
 import { Search, Plus, MailCheck, CheckCircle2, MoreHorizontal, Eye, Pencil, ShoppingBag, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { usePagination } from "@/hooks/use-pagination";
@@ -55,6 +56,8 @@ function SentToCell({ emailSentTo }: { emailSentTo?: string | null }) {
 
 export default function PurchaseQuotationList() {
   const { setLocation, href } = useDocNav();
+  const [location] = useLocation();
+  const manpowerScope = isManpowerPath(location);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const workingYear = useWorkingYearBounds();
@@ -93,8 +96,13 @@ export default function PurchaseQuotationList() {
   const pqDate = (d: { issueDate?: string | null; createdAt?: string | null }) =>
     (d.issueDate || d.createdAt || "").slice(0, 10);
 
+  const scopedDocs = useMemo(
+    () => filterDocsByManpowerScope(docs as any[] | undefined, manpowerScope),
+    [docs, manpowerScope],
+  );
+
   const filteredByDate = useMemo(() => {
-    const all = docs ?? [];
+    const all = scopedDocs;
     if (filterMode === "all") {
       return workingYear.active ? all.filter((d) => isoInBounds(pqDate(d), workingYear.from, workingYear.to)) : all;
     }
@@ -116,11 +124,11 @@ export default function PurchaseQuotationList() {
       const [y, m] = s.split("-").map(Number);
       return y === filterYear && months.includes((m || 1) - 1);
     });
-  }, [docs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
+  }, [scopedDocs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: { vendorName?: string }) => d.vendorName || "";
   const bulk = useBulkPartyEmail({
-    allDocs: docs ?? [],
+    allDocs: scopedDocs,
     dateFiltered: filteredByDate,
     getPartyName,
   });

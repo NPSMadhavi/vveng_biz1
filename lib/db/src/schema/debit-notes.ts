@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, decimal, jsonb, boolean, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, decimal, jsonb, boolean, unique, smallint } from "drizzle-orm/pg-core";
 
 export const debitNotesTable = pgTable("debit_notes", {
   id: serial("id").primaryKey(),
@@ -33,6 +33,9 @@ export const debitNotesTable = pgTable("debit_notes", {
   createdBy: integer("created_by").notNull(),
   attachmentPath: text("attachment_path"),
   attachmentName: text("attachment_name"),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   companyDnUnique: unique("debit_notes_company_dn_number_unique").on(t.companyId, t.dnNumber),

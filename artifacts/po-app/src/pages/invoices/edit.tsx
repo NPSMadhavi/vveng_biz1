@@ -300,7 +300,11 @@ export default function InvoiceEdit() {
   const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
   const updateMutation = useUpdateInvoice();
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   const [importPOOpen, setImportPOOpen] = useState(false);
   function handleImportFromPO(imported: InvoiceImportItem[]) {
@@ -527,7 +531,7 @@ export default function InvoiceEdit() {
       createDeliveryOrder,
       exchangeRate: currency !== "SGD" ? parseFloat(exchangeRate) || 1 : 1,
     };
-    if (!isManpower) delete payload.manpowerDetails;
+    payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
     updateMutation.mutate({ id, data: payload }, {
       onSuccess: async (saved: any) => {
         try {

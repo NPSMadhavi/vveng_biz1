@@ -132,9 +132,17 @@ export default function PurchaseQuotationNew() {
   }, [stockPickerIndex]);
 
 
+  const appliedDefaultGst = useRef(false);
   useEffect(() => {
-    if (settings) form.setValue("tax", settings.gstRate);
-  }, [settings]);
+    if (!settings || appliedDefaultGst.current) return;
+    appliedDefaultGst.current = true;
+    if (isOverseas || form.getValues("tax") === 0) return;
+    form.setValue("tax", settings.gstRate ?? 9);
+  }, [settings, isOverseas]);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   // Aria prefill — populated by the AI agent via navigateTo
   useEffect(() => {
@@ -173,7 +181,7 @@ export default function PurchaseQuotationNew() {
   })();
 
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
 
   const appendLock = useRef(false);
   useEffect(() => {
@@ -243,7 +251,7 @@ export default function PurchaseQuotationNew() {
       return { ...i, discount: disc, isFoc: !!(i as any).isFoc, amount: (i.qty * i.unitPrice * (1 - disc / 100)).toFixed(2) };
     });
     const payload: any = { ...values, status: openPreview ? "confirmed" : "draft", discountAmount: values.discountAmount, items: itemsWithAmount };
-    if (!isManpower) delete payload.manpowerDetails;
+    payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
     createMutation.mutate({ data: payload }, {
       onSuccess: async (data) => {
         // Show the new purchaseQuotation in the list immediately (no manual refresh).

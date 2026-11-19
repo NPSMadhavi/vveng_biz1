@@ -46,8 +46,6 @@ import {
   Download,
   ExternalLink,
   Eye,
-  FileSpreadsheet,
-  FileText,
   Send,
 } from "lucide-react";
 
@@ -360,7 +358,7 @@ export default function AisSubmissionPage() {
             <DropdownMenuTrigger asChild>
               <Button
                 variant="outline"
-                className="gap-2 border-[#E5E7EB] bg-white text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
+                className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
                 disabled={filtered.length === 0}
               >
                 <Download className="h-4 w-4" />
@@ -368,13 +366,17 @@ export default function AisSubmissionPage() {
                 <ChevronDown className="h-4 w-4 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => handleExport("excel")} className="gap-2 cursor-pointer">
-                <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+            <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+              <DropdownMenuItem
+                onClick={() => handleExport("excel")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
                 Excel
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExport("pdf")} className="gap-2 cursor-pointer">
-                <FileText className="h-4 w-4 text-red-600" />
+              <DropdownMenuItem
+                onClick={() => handleExport("pdf")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
                 PDF
               </DropdownMenuItem>
             </DropdownMenuContent>

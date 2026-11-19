@@ -808,6 +808,32 @@ export const DRIZZLE_COLUMN_MIGRATIONS: string[] = [
   `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'`,
   `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS notes text`,
   `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()`,
+
+  // ── soft delete (is_deleted: 0 = visible in app, 1 = hidden; row kept in DB) ──
+  `ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE stock_items ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE quotations ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE purchase_quotations ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE delivery_orders ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE grn ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE proforma_invoices ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE credit_notes ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE debit_notes ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE income_records ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE sales_persons ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE assets ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE licenses ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
+  `ALTER TABLE email_contacts ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
 ];
 
 /** Columns that MUST exist after migration or startup must fail. */
@@ -967,8 +993,10 @@ const MASTER_DIRECTORY_MIGRATIONS: string[] = [
   `ALTER TABLE companies ADD COLUMN IF NOT EXISTS slug text`,
   `ALTER TABLE companies ADD COLUMN IF NOT EXISTS database_name text`,
   `ALTER TABLE companies ADD COLUMN IF NOT EXISTS business_type text`,
+  `ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
   `CREATE UNIQUE INDEX IF NOT EXISTS companies_slug_unique ON companies (slug) WHERE slug IS NOT NULL`,
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS database_name text`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_deleted smallint NOT NULL DEFAULT 0`,
   `CREATE TABLE IF NOT EXISTS login_credentials (
     user_id integer PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     password_hash text NOT NULL,

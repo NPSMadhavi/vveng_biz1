@@ -1,12 +1,13 @@
 /**
  * Veda AI Gateway client.
  *
- * Gateway API:
- *   POST {VEDA_GATEWAY_URL}/v1/chat/completions  (Qwen, OpenAI-compatible, used by the assistant)
- *   POST {VEDA_GATEWAY_URL}/chat  body: { message: string } → { response: string }
- *
- * Auth: Authorization Bearer and X-API-Key from VEDA_API_KEY.
- * Model: VEDA_MODEL, otherwise "qwen".
+ * Gateway API (Central AI Platform Gateway, same as the other apps):
+ *   POST {VEDA_GATEWAY_URL}/api/v1/chat
+ *     body: { message, system_prompt? } → { response }
+ *     header: X-API-Key from VEDA_API_KEY
+ *   GET  {VEDA_GATEWAY_URL}/api/v1/models
+ * Model: VEDA_LLM_MODEL (for example qwen3.5:9b). The gateway selects that model.
+ * If /api/v1/chat is missing, fall back to OpenAI /v1/chat/completions, then Ollama /api/chat.
  */
 
 export function isVedaGatewayConfigured(): boolean {
@@ -63,8 +64,8 @@ export function publicAiError(err: unknown): string {
   if (/429|rate limit|too many requests/i.test(raw)) {
     return "The AI gateway is rate limiting requests. Try again shortly.";
   }
-  if (/timeout|timed out|aborted/i.test(raw)) {
-    return "The AI request timed out.";
+  if (/timeout|timed out|aborted|This operation was aborted/i.test(raw)) {
+    return "The AI request timed out. The gateway is up, but the reply took too long — try a shorter question.";
   }
   if (/empty response/i.test(raw)) {
     return "The AI gateway returned an empty response.";
@@ -88,9 +89,13 @@ export function publicAiError(err: unknown): string {
 let modelLookup: Promise<string> | null = null;
 let modelLookupAt = 0;
 
-/** VEDA_MODEL, otherwise the first Qwen model the gateway reports, otherwise "qwen". */
+function configuredModelName(): string {
+  return (process.env.VEDA_LLM_MODEL || process.env.VEDA_MODEL || "").trim();
+}
+
+/** VEDA_LLM_MODEL, otherwise VEDA_MODEL, otherwise the first Qwen model the gateway reports. */
 export function ensureGatewayModel(): Promise<string> {
-  const configured = (process.env.VEDA_MODEL || "").trim();
+  const configured = configuredModelName();
   if (configured) return Promise.resolve(configured);
   if (!modelLookup || Date.now() - modelLookupAt > 30_000) {
     modelLookupAt = Date.now();
@@ -118,8 +123,16 @@ async function readJson(url: string): Promise<{ status: number; body: any } | nu
 async function discoverGatewayModel(): Promise<string> {
   const base = gatewayBase();
   if (!base) return "qwen";
+  const root = base.replace(/\/v1$/i, "");
   const names: string[] = [];
-  const models = await readJson(`${base.replace(/\/v1$/i, "")}/v1/models`);
+  const platform = await readJson(`${root}/api/v1/models`);
+  if (Array.isArray(platform?.body?.models)) {
+    for (const row of platform.body.models) {
+      const name = row?.name || row?.model || row?.id;
+      if (name) names.push(String(name));
+    }
+  }
+  const models = await readJson(`${root}/v1/models`);
   if (Array.isArray(models?.body?.data)) {
     for (const row of models.body.data) {
       if (row?.id) names.push(String(row.id));
@@ -134,7 +147,7 @@ async function discoverGatewayModel(): Promise<string> {
     }
   }
   const chosen = names.find((name) => /qwen/i.test(name)) || names[0] || "qwen";
-  if (names.length > 0 && !(process.env.VEDA_MODEL || "").trim()) process.env.VEDA_MODEL = chosen;
+  if (names.length > 0 && !configuredModelName()) process.env.VEDA_LLM_MODEL = chosen;
   return chosen;
 }
 
@@ -147,7 +160,10 @@ export async function logGatewayStatus(log?: { info?: Function; warn?: Function 
     return;
   }
   const model = await ensureGatewayModel();
-  const probe = await readJson(`${base.replace(/\/v1$/i, "")}/v1/models`);
+  const root = base.replace(/\/v1$/i, "");
+  const platform = await readJson(`${root}/api/v1/models`);
+  const health = !platform || platform.status === 404 ? await readJson(`${root}/health`) : null;
+  const probe = platform && platform.status !== 404 ? platform : health;
   if (!probe) {
     log?.warn?.({ model }, "[ai] Qwen gateway is configured but not reachable");
     return;
@@ -159,19 +175,32 @@ export async function logGatewayStatus(log?: { info?: Function; warn?: Function 
   log?.info?.({ status: probe.status, model, apiKey: hasKey ? "configured" : "missing" }, "[ai] Qwen gateway reachable");
 }
 
+function clipGatewayMessage(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= 20000) return trimmed;
+  return trimmed.slice(trimmed.length - 20000);
+}
+
 /** Simple chat completion against the Veda gateway. Returns plain text. */
-export async function vedaChat(message: string, opts?: { timeoutMs?: number }): Promise<string> {
+export async function vedaChat(
+  message: string,
+  opts?: { timeoutMs?: number; systemPrompt?: string },
+): Promise<string> {
   const base = gatewayBase();
   if (!base) {
     throw new Error("VEDA_GATEWAY_URL is not configured");
   }
 
   const controller = new AbortController();
-  const timeoutMs = opts?.timeoutMs ?? 90_000;
+  // qwen3.5:9b on the Ubuntu box often needs 1–2+ minutes on a cold start.
+  const timeoutMs = opts?.timeoutMs ?? 180_000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const model = await ensureGatewayModel();
   const root = base.replace(/\/v1$/i, "");
   const completionsUrl = /\/v1$/i.test(base) ? `${base}/chat/completions` : `${root}/v1/chat/completions`;
+  const userMessage = clipGatewayMessage(message);
+  if (!userMessage) throw new Error("Veda gateway returned an empty response");
+  const systemPrompt = (opts?.systemPrompt || "").trim();
 
   const post = (url: string, body: unknown) => fetch(url, {
     method: "POST",
@@ -181,22 +210,27 @@ export async function vedaChat(message: string, opts?: { timeoutMs?: number }): 
   });
 
   try {
-    let res = await post(completionsUrl, {
-      model,
-      messages: [{ role: "user", content: message }],
-      max_tokens: 4096,
-    });
+    const platformBody: Record<string, string> = { message: userMessage, model };
+    if (systemPrompt) platformBody.system_prompt = systemPrompt;
+    let res = await post(`${root}/api/v1/chat`, platformBody);
+
+    if (res.status === 404 || res.status === 405) {
+      const messages = systemPrompt
+        ? [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }]
+        : [{ role: "user", content: userMessage }];
+      res = await post(completionsUrl, { model, messages, max_tokens: 4096 });
+    }
 
     if (res.status === 404 || res.status === 405) {
       res = await post(`${root}/api/chat`, {
         model,
-        messages: [{ role: "user", content: message }],
+        messages: [{ role: "user", content: userMessage }],
         stream: false,
       });
     }
 
     if (res.status === 404 || res.status === 405) {
-      res = await post(`${root}/chat`, { message });
+      res = await post(`${root}/chat`, { message: userMessage });
     }
 
     const raw = await res.text();
@@ -209,6 +243,71 @@ export async function vedaChat(message: string, opts?: { timeoutMs?: number }): 
       throw new Error("Veda gateway returned an empty response");
     }
     return text.trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Speech to text on the same gateway: POST /api/v1/stt/transcribe, field "file". */
+export async function vedaTranscribe(audio: Buffer, filename = "audio.webm"): Promise<string> {
+  const base = gatewayBase();
+  if (!base) throw new Error("VEDA_GATEWAY_URL is not configured");
+  const root = base.replace(/\/v1$/i, "");
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(audio)]), filename);
+  const headers = gatewayHeaders();
+  delete headers["Content-Type"];
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  try {
+    const res = await fetch(`${root}/api/v1/stt/transcribe`, {
+      method: "POST",
+      headers,
+      body: form,
+      signal: controller.signal,
+    });
+    const raw = await res.text();
+    if (!res.ok) throw new Error(publicAiError(new Error(`Veda gateway ${res.status}`)));
+    const text = textFromGatewayBody(raw);
+    if (!text.trim()) throw new Error("Veda gateway returned an empty response");
+    return text.trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const DEFAULT_TTS_VOICE = "en/en_US-lessac-medium";
+
+/** Text to speech on the same gateway: POST /api/v1/tts/synthesize → WAV bytes. */
+export async function vedaSpeak(
+  text: string,
+  opts?: { voice?: string; timeoutMs?: number },
+): Promise<{ audio: Buffer; mimeType: string; voice: string }> {
+  const base = gatewayBase();
+  if (!base) throw new Error("VEDA_GATEWAY_URL is not configured");
+  const root = base.replace(/\/v1$/i, "");
+  const voice = (opts?.voice || process.env.VEDA_TTS_VOICE || DEFAULT_TTS_VOICE).trim();
+  const clean = String(text || "").replace(/\s+/g, " ").trim().slice(0, 2000);
+  if (!clean) throw new Error("Veda gateway returned an empty response");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 60_000);
+  try {
+    const res = await fetch(`${root}/api/v1/tts/synthesize`, {
+      method: "POST",
+      headers: gatewayHeaders(),
+      body: JSON.stringify({ text: clean, voice }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const raw = await res.text().catch(() => "");
+      throw new Error(publicAiError(new Error(raw || `Veda gateway ${res.status}`)));
+    }
+    const audio = Buffer.from(await res.arrayBuffer());
+    if (!audio.length) throw new Error("Veda gateway returned an empty response");
+    const mimeType = res.headers.get("content-type") || "audio/wav";
+    return { audio, mimeType, voice };
   } finally {
     clearTimeout(timer);
   }

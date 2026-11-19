@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, customersTable, pool } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router = Router();
 
@@ -57,6 +58,7 @@ async function loadAssignedEmployees(companyId: number): Promise<Map<number, Ass
        FROM customer_employees ce
        JOIN employees e ON e.id = ce.employee_id AND e.company_id = ce.company_id
        WHERE ce.company_id = $1
+         AND COALESCE(e.is_deleted, 0) = 0
        ORDER BY e.name ASC, e.id ASC`,
       [companyId],
     );
@@ -111,7 +113,10 @@ router.get("/customers", async (req, res) => {
   try {
     await ensureUsageType();
     const customers = await db.select().from(customersTable)
-      .where(eq(customersTable.companyId, companyId))
+      .where(and(
+        eq(customersTable.companyId, companyId),
+        sql`COALESCE(${customersTable.isDeleted}, 0) = 0`,
+      ))
       .orderBy(desc(customersTable.createdAt), desc(customersTable.id));
     const assigned = await loadAssignedEmployees(companyId);
     return res.json(customers.map((customer) => ({
@@ -296,11 +301,8 @@ router.delete("/customers/:id", async (req, res) => {
 
   const id = parseInt(req.params.id);
   try {
-    await pool.query(
-      `DELETE FROM customer_employees WHERE company_id = $1 AND customer_id = $2`,
-      [companyId, id],
-    ).catch(() => undefined);
-    await db.delete(customersTable).where(and(eq(customersTable.id, id), eq(customersTable.companyId, companyId)));
+    const ok = await softDeleteById(pool, "customers", { id, companyId });
+    if (!ok) return res.status(404).json({ error: "Customer not found" });
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: "Failed to delete customer" });

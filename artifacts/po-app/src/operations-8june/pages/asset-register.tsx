@@ -6,8 +6,6 @@ import {
   Package,
   Download,
   ChevronDown,
-  FileSpreadsheet,
-  FileText,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
@@ -227,37 +225,33 @@ export default function AssetRegisterPage() {
       <ManagementPageHeader
         title="Asset Register"
         action={
-          <div className="flex flex-wrap items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="gap-2 border-[#E5E7EB] bg-white text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
-                  disabled={rows.length === 0}
-                >
-                  <Download className="h-4 w-4" />
-                  Export
-                  <ChevronDown className="h-4 w-4 opacity-60" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => handleExport("excel")} className="gap-2 cursor-pointer">
-                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
-                  Excel
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleExport("pdf")} className="gap-2 cursor-pointer">
-                  <FileText className="h-4 w-4 text-red-600" />
-                  PDF
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              className="bg-[#2563EB] hover:bg-[#1D4ED8]"
-              onClick={() => setLocation("/assets/register/new")}
-            >
-              + Add Asset
-            </Button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
+                disabled={rows.length === 0}
+              >
+                <Download className="h-4 w-4" />
+                Export
+                <ChevronDown className="h-4 w-4 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+              <DropdownMenuItem
+                onClick={() => handleExport("excel")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
+                Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleExport("pdf")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
+                PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         }
       />
 
@@ -270,15 +264,7 @@ export default function AssetRegisterPage() {
           ) : rows.length === 0 ? (
             <ManagementEmptyState
               title="No assets"
-              description="Create an asset to populate the register."
-              action={
-                <Button
-                  className="bg-[#2563EB] hover:bg-[#1D4ED8]"
-                  onClick={() => setLocation("/assets/register/new")}
-                >
-                  + Add Asset
-                </Button>
-              }
+              description="Create an asset from Assets to populate the register."
             />
           ) : (
             <Table>

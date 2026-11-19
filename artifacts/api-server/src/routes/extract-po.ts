@@ -151,8 +151,8 @@ function friendlyAiError(err: any): { status: number; error: string } | null {
 
 async function extractWithVeda(documentText: string): Promise<any> {
   const content = await vedaChat(
-    `${EXTRACT_SYSTEM}\n\n---\n\nExtract data from this document:\n\n${documentText.slice(0, 28000)}`,
-    { timeoutMs: 120_000 },
+    `Extract data from this document:\n\n${documentText.slice(0, 19000)}`,
+    { timeoutMs: 240_000, systemPrompt: EXTRACT_SYSTEM },
   );
   return parseJsonLoose(content);
 }

@@ -28,9 +28,13 @@ import {
   Eye,
   UserPlus,
   ChevronDown,
-  Printer,
   Package,
+  Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
+import "jspdf-autotable";
+import { format } from "date-fns";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -405,6 +409,111 @@ export default function AssetsPage() {
     ].some((value) => String(value ?? "").toLowerCase().includes(q));
   }), [assetList, selectedLocation, searchTerm]);
 
+  const handleExport = (formatType: "excel" | "pdf") => {
+    if (filteredAssets.length === 0) {
+      toast({
+        title: "No data to export",
+        description: "There are no assets matching the current filters to export.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const titleCase = (value?: string | null) =>
+      value ? String(value).replace(/\b\w/g, (c) => c.toUpperCase()) : "—";
+
+    try {
+      if (formatType === "excel") {
+        const data = filteredAssets.map((asset) => ({
+          "Asset Tag": asset.tag || "—",
+          "Asset Type": titleCase(asset.type),
+          "Asset Category": titleCase(asset.category),
+          "Assignment Status": titleCase(asset.status),
+          "Assigned To": titleCase(asset.assignedTo),
+          Location: titleCase(asset.location),
+          "Warranty Expiry": asset.warrantyExpiry
+            ? new Date(asset.warrantyExpiry).toLocaleDateString("en-SG")
+            : "—",
+        }));
+        const worksheet = XLSX.utils.json_to_sheet(data);
+        worksheet["!cols"] = [
+          { wch: 14 },
+          { wch: 18 },
+          { wch: 20 },
+          { wch: 16 },
+          { wch: 18 },
+          { wch: 16 },
+          { wch: 16 },
+        ];
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "Assets");
+        XLSX.writeFile(workbook, `assets-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+        toast({
+          title: "Export successful",
+          description: "Assets list has been downloaded as an Excel file.",
+        });
+      } else {
+        const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+        const dateLabel = format(new Date(), "dd MMM yyyy");
+        const locationLabel =
+          selectedLocation === "all" ? "All Locations" : titleCase(selectedLocation);
+
+        doc.setFontSize(16);
+        doc.setTextColor(37, 99, 235);
+        doc.text("Assets", 14, 15);
+        doc.setFontSize(9);
+        doc.setTextColor(107, 114, 128);
+        doc.text(
+          `Generated: ${dateLabel}  |  Location: ${locationLabel}  |  Total: ${filteredAssets.length}`,
+          14,
+          21,
+        );
+
+        (doc as any).autoTable({
+          startY: 25,
+          head: [[
+            "Asset Tag",
+            "Asset Type",
+            "Category",
+            "Status",
+            "Assigned To",
+            "Location",
+            "Warranty Expiry",
+          ]],
+          body: filteredAssets.map((asset) => [
+            asset.tag || "—",
+            titleCase(asset.type),
+            titleCase(asset.category),
+            titleCase(asset.status),
+            titleCase(asset.assignedTo),
+            titleCase(asset.location),
+            asset.warrantyExpiry
+              ? new Date(asset.warrantyExpiry).toLocaleDateString("en-SG")
+              : "—",
+          ]),
+          headStyles: {
+            fillColor: [37, 99, 235],
+            textColor: 255,
+            fontStyle: "bold",
+          },
+          styles: { fontSize: 8, cellPadding: 2 },
+        });
+
+        doc.save(`assets-${format(new Date(), "yyyy-MM-dd")}.pdf`);
+        toast({
+          title: "Export successful",
+          description: "Assets list has been downloaded as a PDF file.",
+        });
+      }
+    } catch {
+      toast({
+        title: "Export failed",
+        description: "Unable to export assets. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const { page, setPage, totalPages, paginatedItems } = usePagination(filteredAssets);
 
   const getStatusPillStyle = (status: string) => {
@@ -514,16 +623,44 @@ export default function AssetsPage() {
             placeholder="Search..."
           />
         </div>
-        {locationReportSelected && (
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             variant="outline"
-            className="h-11 shrink-0 gap-2 border-[#E5E7EB]"
+            size="sm"
+            className="h-9 w-[5.5rem] shrink-0 border-[#E5E7EB] px-4 text-sm"
+            disabled={filteredAssets.length === 0}
             onClick={() => handlePrintLocationReport(selectedLocation)}
           >
-            <Printer className="h-4 w-4" />
             Print
           </Button>
-        )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
+                disabled={filteredAssets.length === 0}
+              >
+                <Download className="h-4 w-4" />
+                Export
+                <ChevronDown className="h-4 w-4 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+              <DropdownMenuItem
+                onClick={() => handleExport("excel")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
+                Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => handleExport("pdf")}
+                className="cursor-pointer px-2.5 py-1 text-sm"
+              >
+                PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <ManagementTableCard pagination={{ page, totalPages, onPageChange: setPage }}>

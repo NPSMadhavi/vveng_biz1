@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
 import { db, pool, purchaseOrdersTable, usersTable, vendorsTable, vendorInvoicesTable, customersTable } from "@workspace/db";
-import { eq, desc, and, inArray, ilike } from "drizzle-orm";
+import { eq, desc, and, inArray, ilike, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { autoCreateGrn, autoDeleteGrnIfEmpty, mergePurchaseOrderStockMeta, postPurchaseOrderWarehouseStock } from "./grn.js";
 import { logAudit } from "../lib/audit.js";
 import { applyVoucherAttachment, sendVoucherFile, VOUCHER_UPLOAD_FOLDERS } from "../lib/operations-upload.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -100,8 +101,8 @@ router.get("/purchase-orders/stats", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
 
   const all = companyId
-    ? await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.companyId, companyId))
-    : await db.select().from(purchaseOrdersTable);
+    ? await db.select().from(purchaseOrdersTable).where(and(eq(purchaseOrdersTable.companyId, companyId), sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`))
+    : await db.select().from(purchaseOrdersTable).where(sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`);
 
   const visible = visibilityFilter(all, userId, isAdmin, isExternal);
   res.json({
@@ -123,15 +124,15 @@ router.get("/purchase-orders", async (req, res): Promise<void> => {
   const excludeLinked = req.query.excludeLinked === "true";
 
   const pos = companyId
-    ? await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.companyId, companyId)).orderBy(desc(purchaseOrdersTable.createdAt))
-    : await db.select().from(purchaseOrdersTable).orderBy(desc(purchaseOrdersTable.createdAt));
+    ? await db.select().from(purchaseOrdersTable).where(and(eq(purchaseOrdersTable.companyId, companyId), sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`)).orderBy(desc(purchaseOrdersTable.createdAt))
+    : await db.select().from(purchaseOrdersTable).where(sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`).orderBy(desc(purchaseOrdersTable.createdAt));
 
   let visible = visibilityFilter(pos, userId, isAdmin, isExternal).map(parsePO);
 
   if (excludeLinked && companyId) {
     const vendorInvoices = await db.select({ poIds: vendorInvoicesTable.poIds, totalAmount: vendorInvoicesTable.totalAmount })
       .from(vendorInvoicesTable)
-      .where(eq(vendorInvoicesTable.companyId, companyId));
+      .where(and(eq(vendorInvoicesTable.companyId, companyId), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`));
 
     // Build map: PO id → total amount already invoiced (sum across all vendor invoices)
     const invoicedByPo = new Map<number, number>();
@@ -239,7 +240,7 @@ router.get("/purchase-orders/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [po] = await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, id));
+  const [po] = await db.select().from(purchaseOrdersTable).where(and(eq(purchaseOrdersTable.id, id), sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`));
   if (!po) { res.status(404).json({ error: "Purchase order not found" }); return; }
 
   const userId = req.session.userId!;
@@ -297,7 +298,9 @@ router.put("/purchase-orders/:id", async (req, res): Promise<void> => {
     totalAmount: totalAmount.toFixed(2),
     customerId: customerId ? Number(customerId) : null,
     customerPoRef: customerPoRef || null,
-    manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing[0].manpowerDetails ?? null,
+    manpowerDetails: manpowerDetails !== undefined
+      ? (manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null)
+      : existing[0].manpowerDetails ?? null,
   };
   if (currency !== undefined) updateData.currency = currency;
   if (isPrivate !== undefined) updateData.isPrivate = isPrivate === true;
@@ -390,7 +393,7 @@ router.delete("/purchase-orders/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [existing] = await db.select().from(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, id));
+  const [existing] = await db.select().from(purchaseOrdersTable).where(and(eq(purchaseOrdersTable.id, id), sql`COALESCE(${purchaseOrdersTable.isDeleted}, 0) = 0`));
   if (!existing) { res.status(404).json({ error: "Purchase order not found" }); return; }
 
   const grnResult = await autoDeleteGrnIfEmpty(id);
@@ -409,10 +412,10 @@ router.delete("/purchase-orders/:id", async (req, res): Promise<void> => {
     });
   }
 
-  const [po] = await db.delete(purchaseOrdersTable).where(eq(purchaseOrdersTable.id, id)).returning();
-  if (!po) { res.status(404).json({ error: "Purchase order not found" }); return; }
+  const ok = await softDeleteById(pool, "purchase_orders", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Purchase order not found" }); return; }
 
-  logAudit({ req, action: "delete", entityType: "purchase_order", entityId: id, entityLabel: po.poNumber });
+  logAudit({ req, action: "delete", entityType: "purchase_order", entityId: id, entityLabel: existing.poNumber });
   res.json({ success: true });
 });
 

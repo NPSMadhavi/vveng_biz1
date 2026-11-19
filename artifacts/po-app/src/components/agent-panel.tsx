@@ -7,8 +7,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/auth-context";
-import { queueVedaFormFill } from "@/hooks/useVedaFormFill";
-import { queueVedaFormAction } from "@/hooks/useVedaFormActions";
+import { queueVedaFormFill, dispatchVedaFormFill } from "@/hooks/useVedaFormFill";
+import { queueVedaFormAction, dispatchVedaFormAction } from "@/hooks/useVedaFormActions";
 import {
   dispatchOptimisticGuidedFill,
   guidedAnswerHint,
@@ -30,6 +30,13 @@ import {
   currentSoQuestion,
   type GuidedSalesOrderSession,
 } from "@/lib/veda-guided-sales-order";
+import {
+  applyGuidedDocumentAnswer,
+  createGuidedDocumentSession,
+  currentDocQuestion,
+  isGuidedDocumentCreatePath,
+  type GuidedDocumentSession,
+} from "@/lib/veda-guided-document";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   getGetPurchaseOrderQueryKey,
@@ -312,7 +319,7 @@ function looksLikeCreateOrNavPhrase(text: string): boolean {
   const t = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
   if (!t) return true;
   if (/\b(create|open|show|launch|add|make|go\s*to|goto|navigate|please\s*go|form|page|module)\b/.test(t)) return true;
-  if (/\b(new\s+)?(employee|staff|invoice|quotation|quote|purchase\s*order|delivery\s*order|customer|vendor|asset|fixed\s*asset)\b/.test(t)) return true;
+  if (/\b(new\s+)?(employee|staff|invoice|quotation|quat(?:at)?ion|quote|purchase\s*order|purchase\s*quat(?:at)?ion|delivery\s*order|customer|vendor|asset|fixed\s*asset)\b/.test(t)) return true;
   return false;
 }
 
@@ -523,11 +530,13 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
     });
     if (/\b(stock\s*items?|products?|inventory\s*items?|catalogue\s*items?)\b/.test(t)) return openNew("/stock/new");
     if (/\b(vendor\s*invoices?|supplier\s*invoices?)\b/.test(t)) return openNew("/vendor-invoices/new");
-    if (/\bpurchase\s*quotations?\b/.test(t)) return openNew("/purchase-quotations/new");
+    if (/\bpurchase\s*quat(?:at)?ions?\b|\bpurchase\s*quotations?\b|\bpurchase\s*quotes?\b|\bpq\b/.test(t)) {
+      return openNew("/purchase-quotations/new");
+    }
     if (/\bproforma\s*invoices?\b|\bpi\b/.test(t)) return openNew("/proforma-invoices/new");
     if (/\binvoices?\b/.test(t)) return openNew("/invoices/new");
-    if (/\bquotations?\b|\bquotes?\b/.test(t)) return openNew("/quotations/new");
-    if (/\bpurchase\s*orders?\b/.test(t)) return openNew("/purchase-orders/new");
+    if (/\bquotations?\b|\bquotes?\b|\bquat(?:at)?ions?\b/.test(t)) return openNew("/quotations/new");
+    if (/\bpurchase\s*orders?\b|\bpurchase\s*ord(?:er)?s?\b|\bpo\b/.test(t)) return openNew("/purchase-orders/new");
     if (/\bdelivery\s*orders?\b/.test(t)) return openNew("/delivery-orders/new");
     if (/\bsales\s*orders?\b/.test(t)) return openNew("/sales-orders/new");
     if (/\bcredit\s*notes?\b/.test(t)) return openNew("/credit-notes/new");
@@ -577,7 +586,9 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
 
   // Documents
   if (/\b(vendor\s*invoices?|supplier\s*invoices?)\b/.test(t)) return { path: "/vendor-invoices" };
-  if (/\bpurchase\s*quotations?\b/.test(t)) return { path: "/purchase-quotations" };
+  if (/\bpurchase\s*quat(?:at)?ions?\b|\bpurchase\s*quotations?\b|\bpurchase\s*quotes?\b/.test(t)) {
+    return { path: "/purchase-quotations" };
+  }
   if (/\bproforma\s*invoices?\b|\bpi\b/.test(t)) return { path: "/proforma-invoices" };
   if (/\bpurchase\s*orders?\b/.test(t)) return { path: "/purchase-orders" };
   if (/\bdelivery\s*orders?\b/.test(t)) return { path: "/delivery-orders" };
@@ -981,6 +992,41 @@ function speakBrowser(text: string, opts?: { rate?: number; deferMs?: number }):
   });
 }
 
+/** Prefer Ubuntu gateway TTS (/api/agent/speak); fall back to browser speech. */
+async function speakGateway(text: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${BASE}/api/agent/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) return false;
+    const data = await r.json().catch(() => ({} as { audio?: string; mimeType?: string }));
+    if (!data?.audio) return false;
+    const mime = data.mimeType || "audio/wav";
+    const src = `data:${mime};base64,${data.audio}`;
+    await new Promise<void>((resolve, reject) => {
+      const audio = new Audio(src);
+      _isSpeakingTts = true;
+      audio.onended = () => {
+        _isSpeakingTts = false;
+        _ttsFinishedTimestamp = Date.now();
+        resolve();
+      };
+      audio.onerror = () => {
+        _isSpeakingTts = false;
+        reject(new Error("gateway audio failed"));
+      };
+      void audio.play().catch(reject);
+    });
+    return true;
+  } catch {
+    _isSpeakingTts = false;
+    return false;
+  }
+}
+
 /** Fast wake acknowledgment word so user immediately hears Veda is awake and ready. */
 async function speakWakeGreeting(text: string): Promise<void> {
   const clean = String(text || "Ready!").trim();
@@ -989,12 +1035,14 @@ async function speakWakeGreeting(text: string): Promise<void> {
   if (typeof window !== "undefined" && window.speechSynthesis?.paused) {
     try { window.speechSynthesis.resume(); } catch {}
   }
+  if (await speakGateway(clean)) return;
   await speakBrowser(clean, { rate: 1.15, deferMs: 0 });
 }
 
 async function speak(text: string): Promise<void> {
   const clean = text.replace(/\*\*/g, "").replace(/\*/g, "").replace(/#{1,6}\s/g, "").replace(/`/g, "").replace(/•\s*/g, "").trim().slice(0, 600);
   if (!clean) return;
+  if (await speakGateway(clean)) return;
   await speakBrowser(clean);
 }
 
@@ -1002,6 +1050,7 @@ async function speak(text: string): Promise<void> {
 async function speakGuidedFast(text: string): Promise<void> {
   const clean = String(text || "").trim().slice(0, 80);
   if (!clean) return;
+  if (await speakGateway(clean)) return;
   await speakBrowser(clean, { rate: 1.0, deferMs: 40 });
 }
 
@@ -1921,6 +1970,7 @@ export function AgentPanel() {
   /** Local employee field-by-field session — fills instantly without LLM. */
   const guidedEmployeeRef = useRef<GuidedEmployeeSession | null>(null);
   const guidedSalesOrderRef = useRef<GuidedSalesOrderSession | null>(null);
+  const guidedDocRef = useRef<GuidedDocumentSession | null>(null);
   const [memory] = useState(() => loadMemory());
   const { selectedCompany } = useAuth();
   const queryClient = useQueryClient();
@@ -2035,6 +2085,7 @@ export function AgentPanel() {
     ambientHistoryRef.current = [];
     guidedEmployeeRef.current = null;
     guidedSalesOrderRef.current = null;
+    guidedDocRef.current = null;
 
     try {
       setConvState("greeting");
@@ -2075,7 +2126,7 @@ export function AgentPanel() {
           command = await listenForCommand(
             t => setConvText(t),
             ctrl.signal,
-            { silenceMs: guidedNow || guidedEmployeeRef.current || guidedSalesOrderRef.current ? 180 : 380 },
+            { silenceMs: guidedNow || guidedEmployeeRef.current || guidedSalesOrderRef.current || guidedDocRef.current ? 180 : 380 },
           );
         }
         if (ctrl.signal.aborted || !convActiveRef.current) break;
@@ -2112,7 +2163,7 @@ export function AgentPanel() {
 
         // Strip wake/filler before any form fill ("veda EMP01" → "EMP01")
         const cleanedAnswer = sanitizeGuidedAnswer(command);
-        if (guidedEmployeeRef.current || guidedSalesOrderRef.current || guidedNow) {
+        if (guidedEmployeeRef.current || guidedSalesOrderRef.current || guidedDocRef.current || guidedNow) {
           if (!cleanedAnswer) continue;
           command = cleanedAnswer;
         }
@@ -2130,6 +2181,7 @@ export function AgentPanel() {
         if (explicitAction) {
           guidedEmployeeRef.current = null;
           guidedSalesOrderRef.current = null;
+          guidedDocRef.current = null;
           guidedFormPathRef.current = null;
           if (explicitAction === "close") {
             const res = closeActiveFormsAndModals(navigate, resolveAgentPath());
@@ -2242,6 +2294,39 @@ export function AgentPanel() {
           continue;
         }
 
+        // ── Local guided document (PQ / PO / invoice / quotation / …) ──
+        if (guidedDocRef.current && isGuidedDocumentCreatePath(resolveAgentPath())) {
+          const session = guidedDocRef.current;
+          const result = await applyGuidedDocumentAnswer(session, command);
+          if (result.filled) {
+            window.setTimeout(() => dispatchVedaFormFill(result.filled!), 40);
+          }
+          ambientHistoryRef.current = [
+            ...ambientHistoryRef.current,
+            { role: "user", content: command },
+            { role: "assistant", content: result.nextAsk },
+          ].slice(-16);
+          setConvText(result.nextAsk);
+          appendVoiceTurn(command, result.nextAsk, result.filled ? ["fillCurrentForm"] : result.done ? ["submitCurrentForm"] : []);
+
+          if (result.done) {
+            dispatchVedaFormAction("save");
+            setConvState("speaking");
+            void speakGuidedFast("Saving.");
+            guidedDocRef.current = null;
+            continue;
+          }
+
+          setConvState("speaking");
+          const asked = await guidedAskNext(result.nextAsk, ctrl.signal, t => setConvText(t));
+          if (asked.stop) {
+            await speak("Okay, stopped.");
+            break;
+          }
+          if (asked.answer) pendingFirst = asked.answer;
+          continue;
+        }
+
         // Instant navigate for clear "go to / open / create …"
         const quick = matchQuickNavigate(command);
         if (quick) {
@@ -2254,6 +2339,7 @@ export function AgentPanel() {
           } else {
             guidedEmployeeRef.current = null;
             guidedSalesOrderRef.current = null;
+            guidedDocRef.current = null;
             guidedFormPathRef.current = null;
           }
           setConvState("speaking");
@@ -2262,6 +2348,7 @@ export function AgentPanel() {
           const partyHint = rawParty && !looksLikeCreateOrNavPhrase(rawParty) ? rawParty : undefined;
           const isEmployeeCreate = /\/employees\/new/.test(quickPath);
           const isSalesOrderCreate = /\/sales-orders\/new/.test(quickPath);
+          const isDocumentCreate = isGuidedDocumentCreatePath(quickPath);
 
           // Prefill only when we have trusted form keys (rare)
           if (quick.prefill) {
@@ -2318,6 +2405,35 @@ export function AgentPanel() {
             continue;
           }
 
+          // Purchase quotation / PO / invoice / quotation / DO / … — local guided fill
+          if (isDocumentCreate) {
+            const session = createGuidedDocumentSession(quickPath);
+            guidedDocRef.current = session;
+            guidedSalesOrderRef.current = null;
+            guidedEmployeeRef.current = null;
+            if (partyHint) {
+              const seeded = await applyGuidedDocumentAnswer(session, partyHint);
+              if (seeded.filled) {
+                window.setTimeout(() => dispatchVedaFormFill(seeded.filled!), 40);
+              }
+            }
+            const q = currentDocQuestion(session);
+            ambientHistoryRef.current = [
+              { role: "user", content: `[guided create started at ${quickPath}]` },
+              { role: "assistant", content: q },
+            ];
+            setConvText(q);
+            appendVoiceTurn(command, q, partyHint ? ["fillCurrentForm"] : ["navigateTo"]);
+            setConvState("speaking");
+            const asked = await guidedAskNext(q, ctrl.signal, t => setConvText(t));
+            if (asked.stop) {
+              await speak("Okay, stopped.");
+              break;
+            }
+            if (asked.answer) pendingFirst = asked.answer;
+            continue;
+          }
+
           const navMsg = partyHint ? `Opening ${label} for ${partyHint}` : `Opening ${label}`;
           setConvText(navMsg);
           appendVoiceTurn(command, navMsg, ["navigateTo"]);
@@ -2325,8 +2441,8 @@ export function AgentPanel() {
           await speak(navMsg);
           await new Promise(r => setTimeout(r, isGuidedCreatePath(quickPath) ? 120 : 250));
 
-          // New form / directory create → start guided field-by-field
-          if (quickPath.endsWith("/new") || /vedaNew=1/.test(quickPath)) {
+          // Directory create (customer/vendor dialog) → LLM guided kickoff
+          if (/vedaNew=1/.test(quickPath)) {
             setConvState("processing");
             let response = "";
             try {
@@ -2432,6 +2548,29 @@ export function AgentPanel() {
           );
           if (ctrl.signal.aborted || !convActiveRef.current) break;
 
+          // If the model only opened a create form, take over with local field-by-field fill
+          const openedPath = resolveAgentPath();
+          if (didNavigate && isGuidedDocumentCreatePath(openedPath) && !guidedDocRef.current) {
+            const session = createGuidedDocumentSession(openedPath);
+            guidedDocRef.current = session;
+            const q = currentDocQuestion(session);
+            ambientHistoryRef.current = [
+              ...ambientHistoryRef.current,
+              { role: "user", content: command },
+              { role: "assistant", content: q },
+            ].slice(-16);
+            setConvText(q);
+            appendVoiceTurn(command, q, ["navigateTo"]);
+            setConvState("speaking");
+            const asked = await guidedAskNext(q, ctrl.signal, t => setConvText(t));
+            if (asked.stop) {
+              await speak("Okay, stopped.");
+              break;
+            }
+            if (asked.answer) pendingFirst = asked.answer;
+            continue;
+          }
+
           if (response || didNavigate) {
             setMessages(p => p.map(m => m.id === aid ? { ...m, content: response || (didNavigate ? "Done." : ""), complete: true } : m));
             if (response) {
@@ -2452,7 +2591,7 @@ export function AgentPanel() {
             if (speakText) {
               const spoken = await speakAndMaybeCapture(speakText, {
                 signal: ctrl.signal,
-                captureAnswer: isGuidedCreatePath(agentPath),
+                captureAnswer: isGuidedCreatePath(agentPath) || !!guidedDocRef.current,
               });
               if (ctrl.signal.aborted || !convActiveRef.current) break;
 
@@ -2491,6 +2630,7 @@ export function AgentPanel() {
       guidedFormPathRef.current = null;
       guidedEmployeeRef.current = null;
       guidedSalesOrderRef.current = null;
+      guidedDocRef.current = null;
       cancelSpeech();
       killSpeechMic();
       await new Promise(r => setTimeout(r, 200));
@@ -2647,6 +2787,7 @@ export function AgentPanel() {
     } else {
       guidedEmployeeRef.current = null;
       guidedSalesOrderRef.current = null;
+      guidedDocRef.current = null;
       guidedFormPathRef.current = null;
     }
     const label = PATH_LABELS[normalized] || reason || normalized.split("/").filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
@@ -2669,6 +2810,7 @@ export function AgentPanel() {
       if (explicitAction === "close") {
         guidedEmployeeRef.current = null;
         guidedSalesOrderRef.current = null;
+        guidedDocRef.current = null;
         guidedFormPathRef.current = null;
         const res = closeActiveFormsAndModals(navigate, resolveAgentPath());
         setMessages(p => [...p,
@@ -2681,6 +2823,7 @@ export function AgentPanel() {
       }
       guidedEmployeeRef.current = null;
       guidedSalesOrderRef.current = null;
+      guidedDocRef.current = null;
       guidedFormPathRef.current = null;
       queueVedaFormAction(explicitAction);
       const actionMsg = explicitAction === "save" ? "Saving form now." : explicitAction === "preview" ? "Opening preview." : "Downloading PDF.";
@@ -2704,63 +2847,76 @@ export function AgentPanel() {
       const partyHint = rawParty && !looksLikeCreateOrNavPhrase(rawParty) ? rawParty : undefined;
       const uid = Date.now().toString();
       const aid = `asst-${uid}`;
-      const msg = partyHint ? `Opening ${label} for ${partyHint}.` : `Opening ${label}.`;
+      const isEmployee = /\/employees\//.test(quickPath);
+      const isSalesOrder = /\/sales-orders\//.test(quickPath);
+      const isDocumentCreate = isGuidedDocumentCreatePath(quickPath);
+
+      // Start local guided sessions BEFORE navigate so the first question is never lost
+      let firstAsk = "";
+      if (isEmployee) {
+        const session = createGuidedEmployeeSession();
+        guidedEmployeeRef.current = session;
+        guidedSalesOrderRef.current = null;
+        guidedDocRef.current = null;
+        firstAsk = currentEmployeeQuestion(session);
+      } else if (isSalesOrder) {
+        const session = createGuidedSalesOrderSession();
+        guidedSalesOrderRef.current = session;
+        guidedEmployeeRef.current = null;
+        guidedDocRef.current = null;
+        if (partyHint) {
+          const seeded = await applyGuidedSalesOrderAnswer(session, partyHint);
+          if (seeded.filled) window.setTimeout(() => dispatchVedaFormFill(seeded.filled!), 40);
+        }
+        firstAsk = currentSoQuestion(session);
+      } else if (isDocumentCreate) {
+        const session = createGuidedDocumentSession(quickPath);
+        guidedDocRef.current = session;
+        guidedEmployeeRef.current = null;
+        guidedSalesOrderRef.current = null;
+        if (partyHint) {
+          const seeded = await applyGuidedDocumentAnswer(session, partyHint);
+          if (seeded.filled) window.setTimeout(() => dispatchVedaFormFill(seeded.filled!), 40);
+        }
+        firstAsk = currentDocQuestion(session);
+      }
+
+      const msg = partyHint
+        ? `Opening ${label} for ${partyHint}.${firstAsk ? ` ${firstAsk}` : ""}`
+        : `Opening ${label}.${firstAsk ? ` ${firstAsk}` : ""}`;
       setMessages(p => [...p,
         { id: uid, role: "user", content: text.trim(), fromVoice },
-        { id: aid, role: "assistant", content: msg, complete: true, navigated: { path: quickPath, label }, toolCalls: ["navigateTo"] },
+        { id: aid, role: "assistant", content: msg, complete: true, navigated: { path: quickPath, label }, toolCalls: firstAsk ? ["navigateTo"] : ["navigateTo"] },
       ]);
       setInput("");
       if (quick.prefill) storeVedaPrefill(quick.prefill);
-      navigate(normalizeNavPath(quickPath));
       if (isGuidedCreatePath(quickPath)) {
         guidedFormPathRef.current = quickPath;
-      } else {
+      } else if (!firstAsk) {
         guidedEmployeeRef.current = null;
         guidedSalesOrderRef.current = null;
+        guidedDocRef.current = null;
         guidedFormPathRef.current = null;
+      } else {
+        guidedFormPathRef.current = quickPath;
       }
+      navigate(normalizeNavPath(quickPath));
       if (quick.prefill) {
         window.setTimeout(() => {
           dispatchFill(quick.prefill);
         }, 200);
       }
-      if (fromVoice) void speak(msg);
+      if (fromVoice) void speak(firstAsk || msg);
+      else if (firstAsk) void speak(firstAsk);
 
-      // Continue into agent guided create (same turn) without re-matching quick-nav
-      if (quickPath.endsWith("/new") || /vedaNew=1/.test(quickPath)) {
-        const isEmployee = /\/employees\//.test(quickPath);
-        const isSalesOrder = /\/sales-orders\//.test(quickPath);
-        // Employee: local guided — ask first field instantly (voice ambient owns live fills)
-        if (isEmployee) {
-          const session = createGuidedEmployeeSession();
-          guidedEmployeeRef.current = session;
-          const q = currentEmployeeQuestion(session);
-          const gid = `asst-guide-${uid}`;
-          setMessages(p => [...p, { id: gid, role: "assistant", content: q, complete: true, toolCalls: [] }]);
-          if (fromVoice) void speak(q);
-          return;
-        }
-        if (isSalesOrder) {
-          const session = createGuidedSalesOrderSession();
-          guidedSalesOrderRef.current = session;
-          if (partyHint) {
-            void applyGuidedSalesOrderAnswer(session, partyHint).then((seeded) => {
-              if (seeded.filled) window.setTimeout(() => queueVedaFormFill(seeded.filled!), 40);
-              const q = currentSoQuestion(session);
-              const gid = `asst-guide-${uid}`;
-              setMessages(p => [...p, { id: gid, role: "assistant", content: q, complete: true, toolCalls: seeded.filled ? ["fillCurrentForm"] : [] }]);
-              if (fromVoice) void speak(q);
-            });
-            return;
-          }
-          const q = currentSoQuestion(session);
-          const gid = `asst-guide-${uid}`;
-          setMessages(p => [...p, { id: gid, role: "assistant", content: q, complete: true, toolCalls: [] }]);
-          if (fromVoice) void speak(q);
-          return;
-        }
+      // Local guided create already asked the first field above
+      if (isEmployee || isSalesOrder || isDocumentCreate) {
+        return;
+      }
+
+      // Directory create (customer/vendor dialog) → LLM guided kickoff
+      if (/vedaNew=1/.test(quickPath)) {
         const known = guidedCreateKickoffHint(quickPath, partyHint);
-        // Do not send the open/create utterance as fillable content — only the kickoff brief
         const kickoff = `[The ${label} form is now open at ${quickPath}. ${known}]`;
         const gid = `asst-guide-${uid}`;
         setMessages(p => [...p, { id: gid, role: "assistant", content: "", toolCalls: [] }]);
@@ -2776,7 +2932,7 @@ export function AgentPanel() {
             (path, prefill, reason) => handleNavigate(path, prefill, reason),
             abortRef.current.signal,
             dispatchFill,
-            (action) => queueVedaFormAction(action),
+            (action) => dispatchVedaFormAction(action),
             handleDocumentUpdated,
             (dt, id, recipients, docNumber) => { void handleVedaEmail(dt, id, recipients, docNumber); },
             quickPath,
@@ -2814,7 +2970,7 @@ export function AgentPanel() {
     const lastAsst = [...messages].reverse().find(m => m.role === "assistant" && m.content)?.content || "";
     // Guided: never send wake/filler into fields — use exact cleaned user words only
     let answerText = text.trim();
-    if (isGuidedCreatePath(agentPath) || guidedEmployeeRef.current || guidedSalesOrderRef.current) {
+    if (isGuidedCreatePath(agentPath) || guidedEmployeeRef.current || guidedSalesOrderRef.current || guidedDocRef.current) {
       const cleaned = sanitizeGuidedAnswer(answerText);
       if (!cleaned) return;
       answerText = cleaned;
@@ -2855,6 +3011,26 @@ export function AgentPanel() {
       if (result.done) {
         queueVedaFormAction("preview");
         guidedSalesOrderRef.current = null;
+      }
+      if (fromVoice) void speak(result.nextAsk);
+      return;
+    }
+
+    // Local document guided session (PQ / PO / invoice / quotation / …)
+    if (guidedDocRef.current && isGuidedDocumentCreatePath(agentPath)) {
+      const session = guidedDocRef.current;
+      setInput("");
+      const result = await applyGuidedDocumentAnswer(session, answerText);
+      if (result.filled) {
+        window.setTimeout(() => dispatchVedaFormFill(result.filled!), 40);
+      }
+      setMessages(p => [...p,
+        { id: uid, role: "user", content: answerText, fromVoice },
+        { id: aid, role: "assistant", content: result.nextAsk, complete: true, toolCalls: result.filled ? ["fillCurrentForm"] : result.done ? ["submitCurrentForm"] : [] },
+      ]);
+      if (result.done) {
+        dispatchVedaFormAction("save");
+        guidedDocRef.current = null;
       }
       if (fromVoice) void speak(result.nextAsk);
       return;

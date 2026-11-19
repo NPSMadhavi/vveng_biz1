@@ -57,7 +57,7 @@ Return ONLY valid JSON with this exact structure, no extra keys, no markdown fen
   try {
     let raw = "";
     if (isVedaGatewayConfigured()) {
-      raw = await vedaChat(prompt);
+      raw = await vedaChat(prompt, { timeoutMs: 180_000 });
     } else {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",

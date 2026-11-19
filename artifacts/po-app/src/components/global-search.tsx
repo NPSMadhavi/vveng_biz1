@@ -470,7 +470,7 @@ export function GlobalSearch() {
   return (
     <div
       ref={wrapRef}
-      className="pt-0 pb-2 bg-background"
+      className="pt-0 pb-2 bg-transparent"
     >
       <div className="relative w-full max-w-lg">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
@@ -484,7 +484,7 @@ export function GlobalSearch() {
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
           placeholder="Search pages & records…"
-          className="flex h-9 w-full rounded-lg border border-border/80 bg-card pl-9 pr-16 text-sm shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="flex h-9 w-full rounded-lg border border-[#dce5f5] bg-white pl-9 pr-16 text-sm shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-[#2B7BE8]/40"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"

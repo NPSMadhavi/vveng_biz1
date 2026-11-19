@@ -7,7 +7,7 @@ import {
 } from "@workspace/db";
 import { eq, and, ilike, or, desc, SQL, gte, ne } from "drizzle-orm";
 import { openai, getAssistantChat } from "@workspace/integrations-openai-ai-server";
-import { ensureGatewayModel, publicAiError, vedaChat } from "../lib/veda-gateway.js";
+import { isVedaGatewayConfigured, publicAiError, vedaChat, vedaSpeak, vedaTranscribe } from "../lib/veda-gateway.js";
 import { speechToText, ensureCompatibleFormat } from "@workspace/integrations-openai-ai-server/audio";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { adjustItemStockInWarehouse, resolveWarehouseId } from "../lib/inventory-service.js";
@@ -1470,7 +1470,26 @@ async function executeTool(
     }
 
     case "fillCurrentForm": {
-      return { _fillForm: true, fields: args.fields, summary: args.summary };
+      const fields = { ...(args.fields && typeof args.fields === "object" ? args.fields : {}) } as Record<string, unknown>;
+      // Models often invent firstName/lastName; employee forms use a single name field.
+      if ((fields.firstName || fields.lastName) && !fields.name) {
+        fields.name = [fields.firstName, fields.lastName].filter(Boolean).map(String).join(" ").trim();
+        delete fields.firstName;
+        delete fields.lastName;
+      }
+      if (fields.fullName && !fields.name) {
+        fields.name = String(fields.fullName);
+        delete fields.fullName;
+      }
+      if (fields.mobile && !fields.phone) {
+        fields.phone = fields.mobile;
+        delete fields.mobile;
+      }
+      if (fields.employeeName && !fields.name) {
+        fields.name = String(fields.employeeName);
+        delete fields.employeeName;
+      }
+      return { _fillForm: true, fields, summary: args.summary };
     }
 
     case "submitCurrentForm": {
@@ -1737,6 +1756,11 @@ async function executeTool(
         "/backups": "/settings/backups",
         "/report-designer": "/report-templates",
         "/report_templates": "/report-templates",
+        "/employee": "/employees",
+        "/employee/new": "/employees/new",
+        "/employees/create": "/employees/new",
+        "/employee/create": "/employees/new",
+        "/payrolls": "/payroll",
       };
       const cleanPath = navPath.split("?")[0].replace(/\/+$/, "") || "/";
       const query = navPath.includes("?") ? navPath.slice(navPath.indexOf("?")) : "";
@@ -2243,12 +2267,247 @@ async function executeTool(
   }
 }
 
-function flattenGatewayPrompt(messages: any[]): string {
-  return messages.map((m) => {
-    if (m.role === "tool") return `Tool result: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")}`;
+function splitGatewayPrompt(messages: any[]): { systemPrompt: string; message: string } {
+  const systemParts: string[] = [];
+  const rest: string[] = [];
+  for (const m of messages) {
     const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
-    return `${m.role}: ${content}`;
-  }).join("\n\n");
+    if (m.role === "system") systemParts.push(content);
+    else if (m.role === "tool") rest.push(`Tool result (${m.name || m.tool_call_id || "tool"}): ${content}`);
+    else if (m.role === "assistant" && m.tool_calls) {
+      rest.push(
+        `assistant: ${JSON.stringify({
+          tool_calls: (m.tool_calls as any[]).map((tc) => ({
+            name: tc.function?.name,
+            arguments: (() => {
+              try {
+                return JSON.parse(tc.function?.arguments || "{}");
+              } catch {
+                return tc.function?.arguments || {};
+              }
+            })(),
+          })),
+        })}`,
+      );
+      if (content && content !== "null") rest.push(`assistant: ${content}`);
+    } else rest.push(`${m.role}: ${content}`);
+  }
+  return {
+    systemPrompt: systemParts.join("\n\n"),
+    message: rest.join("\n\n").trim() || "Hello",
+  };
+}
+
+function toolCatalogForPrompt(tools: any[]): string {
+  return tools
+    .map((t) => {
+      const f = t.function;
+      const props = f.parameters?.properties ? Object.keys(f.parameters.properties).slice(0, 8) : [];
+      return `- ${f.name}(${props.join(", ")})`;
+    })
+    .join("\n");
+}
+
+function looksLikeBizoneAction(text: string): boolean {
+  return /\b(create|open|show|save|email|search|find|navigate|go\s*to|invoice|quotation|purchase|employee|payroll|fill|confirm|void|customer|vendor|stock|journal|preview|download|update|edit|delete|list)\b/i.test(
+    text || "",
+  );
+}
+
+function clipSystemPrompt(text: string, max = 10_000): string {
+  const t = String(text || "").trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}\n\n[System prompt truncated for gateway size.]`;
+}
+
+function gatewayToolProtocol(tools: any[]): string {
+  return `
+
+## Tool protocol (mandatory for this gateway)
+When you need an app action, reply with ONLY JSON (no markdown):
+{"tool_calls":[{"name":"toolName","arguments":{...}}]}
+When speaking to the user, plain text only.
+Create paths: /employees/new, /invoices/new, /quotations/new, /purchase-orders/new, /purchase-quotations/new, /payroll.
+Ask one field at a time with fillCurrentForm; ask "Shall I save this?" before submitCurrentForm.
+
+Tools:
+${toolCatalogForPrompt(tools)}`;
+}
+
+function gatewayQaSystemPrompt(): string {
+  return `You are Veda, the BizOne ERP assistant. Answer clearly and briefly in plain text. Do not return JSON.`;
+}
+
+type GatewayToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
+function parseGatewayAssistantReply(text: string): { toolCalls: GatewayToolCall[]; spoken: string } {
+  let cleaned = String(text || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  if (!cleaned) return { toolCalls: [], spoken: "" };
+
+  const tryParse = (raw: string): GatewayToolCall[] | null => {
+    try {
+      const parsed = JSON.parse(raw);
+      const calls = parsed?.tool_calls || parsed?.toolCalls;
+      if (!Array.isArray(calls) || calls.length === 0) return null;
+      return calls
+        .map((c: any, i: number) => {
+          const name = String(c?.name || c?.function?.name || "").trim();
+          if (!name) return null;
+          const args = c?.arguments ?? c?.function?.arguments ?? {};
+          return {
+            id: String(c?.id || `veda_${Date.now()}_${i}`),
+            type: "function" as const,
+            function: {
+              name,
+              arguments: typeof args === "string" ? args : JSON.stringify(args ?? {}),
+            },
+          };
+        })
+        .filter(Boolean) as GatewayToolCall[];
+    } catch {
+      return null;
+    }
+  };
+
+  const whole = tryParse(cleaned);
+  if (whole) return { toolCalls: whole, spoken: "" };
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const sliced = tryParse(cleaned.slice(start, end + 1));
+    if (sliced) {
+      const spoken = `${cleaned.slice(0, start)}${cleaned.slice(end + 1)}`.trim();
+      return { toolCalls: sliced, spoken };
+    }
+  }
+  return { toolCalls: [], spoken: cleaned };
+}
+
+async function emitExecutedTool(
+  res: any,
+  tc: GatewayToolCall,
+  toolResult: any,
+  chatMessages: any[],
+): Promise<void> {
+  if (toolResult?.denied) {
+    chatMessages.push({
+      role: "tool",
+      tool_call_id: tc.id,
+      name: tc.function.name,
+      content: JSON.stringify({ error: toolResult.error, denied: true }),
+    });
+    return;
+  }
+
+  res.write(`data: ${JSON.stringify({ type: "tool_call", name: tc.function.name })}\n\n`);
+
+  if (toolResult && toolResult._fillForm) {
+    res.write(`data: ${JSON.stringify({
+      type: "fill_form",
+      fields: toolResult.fields,
+      summary: toolResult.summary,
+    })}\n\n`);
+    toolResult = { filled: true, summary: toolResult.summary };
+  }
+
+  if (toolResult && toolResult._openDirectoryForm) {
+    res.write(`data: ${JSON.stringify({
+      type: "open_directory_form",
+      formType: toolResult.type,
+      mode: toolResult.mode,
+      id: toolResult.id,
+      reason: toolResult.reason,
+    })}\n\n`);
+    toolResult = { opened: true, type: toolResult.type, mode: toolResult.mode };
+  }
+
+  if (toolResult && toolResult._formAction) {
+    res.write(`data: ${JSON.stringify({
+      type: "form_action",
+      action: toolResult.action,
+      summary: toolResult.summary,
+    })}\n\n`);
+    toolResult = { triggered: true, action: toolResult.action, summary: toolResult.summary };
+  }
+
+  if (toolResult && toolResult._documentUpdated) {
+    res.write(`data: ${JSON.stringify({
+      type: "document_updated",
+      docType: toolResult.docType,
+      id: toolResult.id,
+      fields: toolResult.fields,
+      document: toolResult.document,
+    })}\n\n`);
+  }
+
+  if (toolResult && toolResult._triggerEmail) {
+    res.write(`data: ${JSON.stringify({
+      type: "trigger_email",
+      docType: toolResult.docType,
+      id: toolResult.id,
+      docNumber: toolResult.docNumber,
+      recipients: toolResult.recipients,
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      type: "navigate",
+      path: toolResult.navigatePath,
+      prefill: null,
+      reason: toolResult.docNumber || `Document ${toolResult.id}`,
+    })}\n\n`);
+    toolResult = {
+      triggered: true,
+      autoSend: true,
+      recipients: toolResult.recipients,
+      message: toolResult.message,
+    };
+  }
+
+  if (toolResult && toolResult._navigate) {
+    res.write(`data: ${JSON.stringify({
+      type: "navigate",
+      path: toolResult.path,
+      prefill: toolResult.prefill || null,
+      reason: toolResult.reason || "",
+    })}\n\n`);
+    toolResult = {
+      navigated: true,
+      path: toolResult.path,
+      success: toolResult.success,
+      summary: toolResult.summary,
+      updatedFields: toolResult.updatedFields,
+      ...(toolResult.invoice || toolResult.quotation || toolResult.purchaseOrder || toolResult.deliveryOrder
+        ? { doc: toolResult.invoice ?? toolResult.quotation ?? toolResult.purchaseOrder ?? toolResult.deliveryOrder }
+        : {}),
+      ...(toolResult.document ? {
+        document: {
+          id: toolResult.document.id,
+          poNumber: toolResult.document.poNumber,
+          invNumber: toolResult.document.invNumber,
+          qtNumber: toolResult.document.qtNumber,
+          doNumber: toolResult.document.doNumber,
+          vendorName: toolResult.document.vendorName,
+          customerName: toolResult.document.customerName,
+          status: toolResult.document.status,
+        },
+      } : {}),
+    };
+  }
+
+  chatMessages.push({
+    role: "tool",
+    tool_call_id: tc.id,
+    name: tc.function.name,
+    content: JSON.stringify(toolResult),
+  });
 }
 
 router.post("/agent/chat", async (req: any, res: any): Promise<void> => {
@@ -2470,170 +2729,101 @@ When the user asks to create a new invoice / quotation / purchase order / delive
 
 Today: ${today}.${memoryBlock}`;
 
-  const chatMessages: any[] = [{ role: "system", content: systemPrompt }, ...messages];
+  const assistant = getAssistantChat();
+  const latestUserText = [...messages].reverse().find((m: any) => m?.role === "user")?.content || "";
+  const gatewayNeedsTools = assistant.gateway && looksLikeBizoneAction(String(latestUserText));
+  const gatewaySystem = assistant.gateway
+    ? clipSystemPrompt(
+        gatewayNeedsTools
+          ? `${systemPrompt}${gatewayToolProtocol(allowedTools)}`
+          : gatewayQaSystemPrompt(),
+      )
+    : systemPrompt;
+  const chatMessages: any[] = [
+    {
+      role: "system",
+      content: gatewaySystem,
+    },
+    ...messages,
+  ];
 
   try {
-    const assistant = getAssistantChat();
-    if (assistant.gateway) assistant.model = await ensureGatewayModel();
+    if (assistant.gateway) {
+      for (let iteration = 0; iteration < 10; iteration++) {
+        const parts = splitGatewayPrompt(chatMessages);
+        const reply = await vedaChat(parts.message, {
+          systemPrompt: clipSystemPrompt(parts.systemPrompt),
+          timeoutMs: gatewayNeedsTools ? 240_000 : 180_000,
+        });
+        const { toolCalls, spoken } = parseGatewayAssistantReply(reply);
+        if (toolCalls.length === 0) {
+          if (spoken) res.write(`data: ${JSON.stringify({ type: "text", content: spoken })}\n\n`);
+          break;
+        }
 
-    for (let iteration = 0; iteration < 10; iteration++) {
-      let stream;
-      try {
-        stream = await assistant.client.chat.completions.create({
+        chatMessages.push({
+          role: "assistant",
+          content: spoken || null,
+          tool_calls: toolCalls,
+        });
+        if (spoken) res.write(`data: ${JSON.stringify({ type: "text", content: spoken })}\n\n`);
+
+        for (const tc of toolCalls) {
+          let toolResult: any;
+          try {
+            const args = JSON.parse(tc.function.arguments || "{}");
+            toolResult = await executeTool(tc.function.name, args, companyId, userId, auth, currentPath);
+          } catch (e: any) {
+            toolResult = { error: e.message };
+          }
+          await emitExecutedTool(res, tc, toolResult, chatMessages);
+        }
+      }
+    } else {
+      for (let iteration = 0; iteration < 10; iteration++) {
+        const stream = await assistant.client.chat.completions.create({
           model: assistant.model,
-          ...(assistant.gateway ? { max_tokens: 4096 } : { max_completion_tokens: 8192 }),
+          max_completion_tokens: 8192,
           messages: chatMessages,
           ...(allowedTools.length > 0 ? { tools: allowedTools as any } : {}),
           stream: true,
         });
-      } catch (gatewayErr: any) {
-        const status = Number(gatewayErr?.status || 0);
-        if (assistant.gateway && (status === 404 || status === 405)) {
-          const text = await vedaChat(flattenGatewayPrompt(chatMessages), { timeoutMs: 120_000 });
-          if (text) res.write(`data: ${JSON.stringify({ type: "text", content: text })}\n\n`);
-          break;
-        }
-        throw gatewayErr;
-      }
 
-      let fullContent = "";
-      const toolCalls: any[] = [];
-      let finishReason: string | null = null;
+        let fullContent = "";
+        const toolCalls: GatewayToolCall[] = [];
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
-        finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
-
-        if (delta?.content) {
-          fullContent += delta.content;
-          res.write(`data: ${JSON.stringify({ type: "text", content: delta.content })}\n\n`);
-        }
-
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (!toolCalls[tc.index]) {
-              toolCalls[tc.index] = { id: "", type: "function", function: { name: "", arguments: "" } };
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta;
+          if (delta?.content) {
+            fullContent += delta.content;
+            res.write(`data: ${JSON.stringify({ type: "text", content: delta.content })}\n\n`);
+          }
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (!toolCalls[tc.index]) {
+                toolCalls[tc.index] = { id: "", type: "function", function: { name: "", arguments: "" } };
+              }
+              if (tc.id) toolCalls[tc.index].id += tc.id;
+              if (tc.function?.name) toolCalls[tc.index].function.name += tc.function.name;
+              if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
             }
-            if (tc.id) toolCalls[tc.index].id += tc.id;
-            if (tc.function?.name) toolCalls[tc.index].function.name += tc.function.name;
-            if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
           }
         }
-      }
 
-      if (toolCalls.length === 0) break;
+        const calls = toolCalls.filter(Boolean);
+        if (calls.length === 0) break;
 
-      chatMessages.push({ role: "assistant", content: fullContent || null, tool_calls: toolCalls });
-
-      for (const tc of toolCalls) {
-        let toolResult: any;
-        try {
-          const args = JSON.parse(tc.function.arguments);
-          toolResult = await executeTool(tc.function.name, args, companyId, userId, auth, currentPath);
-        } catch (e: any) {
-          toolResult = { error: e.message };
+        chatMessages.push({ role: "assistant", content: fullContent || null, tool_calls: calls });
+        for (const tc of calls) {
+          let toolResult: any;
+          try {
+            const args = JSON.parse(tc.function.arguments || "{}");
+            toolResult = await executeTool(tc.function.name, args, companyId, userId, auth, currentPath);
+          } catch (e: any) {
+            toolResult = { error: e.message };
+          }
+          await emitExecutedTool(res, tc, toolResult, chatMessages);
         }
-
-        if (toolResult?.denied) {
-          chatMessages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify({ error: toolResult.error, denied: true }) });
-          continue;
-        }
-
-        res.write(`data: ${JSON.stringify({ type: "tool_call", name: tc.function.name })}\n\n`);
-
-        if (toolResult && toolResult._fillForm) {
-          res.write(`data: ${JSON.stringify({
-            type: "fill_form",
-            fields: toolResult.fields,
-            summary: toolResult.summary,
-          })}\n\n`);
-          toolResult = { filled: true, summary: toolResult.summary };
-        }
-
-        if (toolResult && toolResult._openDirectoryForm) {
-          res.write(`data: ${JSON.stringify({
-            type: "open_directory_form",
-            formType: toolResult.type,
-            mode: toolResult.mode,
-            id: toolResult.id,
-            reason: toolResult.reason,
-          })}\n\n`);
-          toolResult = { opened: true, type: toolResult.type, mode: toolResult.mode };
-        }
-
-        if (toolResult && toolResult._formAction) {
-          res.write(`data: ${JSON.stringify({
-            type: "form_action",
-            action: toolResult.action,
-            summary: toolResult.summary,
-          })}\n\n`);
-          toolResult = { triggered: true, action: toolResult.action, summary: toolResult.summary };
-        }
-
-        if (toolResult && toolResult._documentUpdated) {
-          res.write(`data: ${JSON.stringify({
-            type: "document_updated",
-            docType: toolResult.docType,
-            id: toolResult.id,
-            fields: toolResult.fields,
-            document: toolResult.document,
-          })}\n\n`);
-        }
-
-        if (toolResult && toolResult._triggerEmail) {
-          res.write(`data: ${JSON.stringify({
-            type: "trigger_email",
-            docType: toolResult.docType,
-            id: toolResult.id,
-            docNumber: toolResult.docNumber,
-            recipients: toolResult.recipients,
-          })}\n\n`);
-          res.write(`data: ${JSON.stringify({
-            type: "navigate",
-            path: toolResult.navigatePath,
-            prefill: null,
-            reason: toolResult.docNumber || `Document ${toolResult.id}`,
-          })}\n\n`);
-          toolResult = {
-            triggered: true,
-            autoSend: true,
-            recipients: toolResult.recipients,
-            message: toolResult.message,
-          };
-        }
-
-        if (toolResult && toolResult._navigate) {
-          res.write(`data: ${JSON.stringify({
-            type: "navigate",
-            path: toolResult.path,
-            prefill: toolResult.prefill || null,
-            reason: toolResult.reason || "",
-          })}\n\n`);
-          toolResult = {
-            navigated: true,
-            path: toolResult.path,
-            success: toolResult.success,
-            summary: toolResult.summary,
-            updatedFields: toolResult.updatedFields,
-            ...(toolResult.invoice || toolResult.quotation || toolResult.purchaseOrder || toolResult.deliveryOrder
-              ? { doc: toolResult.invoice ?? toolResult.quotation ?? toolResult.purchaseOrder ?? toolResult.deliveryOrder }
-              : {}),
-            ...(toolResult.document ? {
-              document: {
-                id: toolResult.document.id,
-                poNumber: toolResult.document.poNumber,
-                invNumber: toolResult.document.invNumber,
-                qtNumber: toolResult.document.qtNumber,
-                doNumber: toolResult.document.doNumber,
-                vendorName: toolResult.document.vendorName,
-                customerName: toolResult.document.customerName,
-                status: toolResult.document.status,
-              },
-            } : {}),
-          };
-        }
-
-        chatMessages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(toolResult) });
       }
     }
   } catch (e: any) {
@@ -2652,11 +2842,16 @@ router.post("/agent/transcribe", async (req: any, res: any): Promise<void> => {
   try {
     const buffer = Buffer.from(audio, "base64");
     const { buffer: compatBuffer, format } = await ensureCompatibleFormat(buffer);
+    if (isVedaGatewayConfigured()) {
+      const text = await vedaTranscribe(compatBuffer, `audio.${format}`);
+      res.json({ text });
+      return;
+    }
     const transcript = await speechToText(compatBuffer, format as any);
     res.json({ text: transcript });
   } catch (e: any) {
     req.log?.error({ err: e }, "Transcription failed");
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: isVedaGatewayConfigured() ? publicAiError(e) : e.message });
   }
 });
 
@@ -2667,16 +2862,25 @@ router.post("/agent/speak", async (req: any, res: any): Promise<void> => {
   try {
     const cleanText = text.replace(/\*\*/g, "").replace(/\*/g, "").replace(/#{1,6}\s/g, "")
       .replace(/`/g, "").replace(/•\s*/g, "").trim().slice(0, 4096);
+    if (isVedaGatewayConfigured()) {
+      const spoken = await vedaSpeak(cleanText);
+      res.json({
+        audio: spoken.audio.toString("base64"),
+        mimeType: spoken.mimeType,
+        voice: spoken.voice,
+      });
+      return;
+    }
     const mp3 = await openai.audio.speech.create({
       model: "tts-1",
       voice: "nova",
       input: cleanText,
     } as any);
     const buffer = Buffer.from(await mp3.arrayBuffer());
-    res.json({ audio: buffer.toString("base64") });
+    res.json({ audio: buffer.toString("base64"), mimeType: "audio/mpeg" });
   } catch (e: any) {
     req.log?.error({ err: e }, "TTS failed");
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: isVedaGatewayConfigured() ? publicAiError(e) : e.message });
   }
 });
 

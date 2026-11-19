@@ -18,6 +18,7 @@ import { syncVendorInvoicePurchasePrices, recomputePriceLotsAfterVendorInvoiceRe
 import { applyVoucherAttachment, sendVoucherFile, VOUCHER_UPLOAD_FOLDERS } from "../lib/operations-upload.js";
 import { ensureCompanyDocumentTables } from "../lib/company-database.js";
 import { ensureAccountsSeeded } from "../lib/accounts-seed.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -117,7 +118,7 @@ router.get("/vendor-invoices", async (req, res): Promise<void> => {
   const poId = req.query.poId ? parseInt(req.query.poId as string) : undefined;
 
   let rows = await db.select().from(vendorInvoicesTable)
-    .where(eq(vendorInvoicesTable.companyId, companyId))
+    .where(and(eq(vendorInvoicesTable.companyId, companyId), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`))
     .orderBy(desc(vendorInvoicesTable.createdAt));
 
   if (poId) {
@@ -289,7 +290,7 @@ router.get("/vendor-invoices/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [doc] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
+  const [doc] = await db.select().from(vendorInvoicesTable).where(and(eq(vendorInvoicesTable.id, id), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Vendor invoice not found" }); return; }
 
   const payments = await db.select().from(vendorPaymentsTable)
@@ -356,7 +357,9 @@ router.put("/vendor-invoices/:id", async (req, res): Promise<void> => {
   if (gstInclusive !== undefined) updates.gstInclusive = !!gstInclusive;
   if (exchangeRate !== undefined) updates.exchangeRate = parseFloat(exchangeRate).toFixed(6);
   if (salesPerson !== undefined) updates.salesPerson = salesPerson || null;
-  updates.manpowerDetails = manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null;
+  updates.manpowerDetails = manpowerDetails !== undefined
+    ? (manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null)
+    : existing.manpowerDetails ?? null;
   if (expenseAccountId !== undefined) {
     updates.expenseAccountId = expenseAccountId === null || expenseAccountId === "" || expenseAccountId === "none"
       ? null
@@ -452,8 +455,8 @@ router.delete("/vendor-invoices/:id", async (req, res): Promise<void> => {
 
   const [toDelete] = await db.select().from(vendorInvoicesTable).where(
     companyId
-      ? and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId))
-      : eq(vendorInvoicesTable.id, id),
+      ? and(eq(vendorInvoicesTable.id, id), eq(vendorInvoicesTable.companyId, companyId), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`)
+      : and(eq(vendorInvoicesTable.id, id), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`),
   );
   if (!toDelete) { res.status(404).json({ error: "Not found" }); return; }
   const deletePeriod = await assertPeriodWritable(toDelete.companyId, String(toDelete.piDate || "").slice(0, 10));
@@ -478,9 +481,6 @@ router.delete("/vendor-invoices/:id", async (req, res): Promise<void> => {
     req.log?.warn?.({ err: stockErr }, "Vendor invoice stock reverse failed on delete (continuing)");
   }
 
-  // Drop payments first so FK does not block delete on older tenants.
-  await db.delete(vendorPaymentsTable).where(eq(vendorPaymentsTable.vendorInvoiceId, id)).catch(() => undefined);
-
   const affectedStockIds = [
     ...new Set(
       ((toDelete.items as any[]) || [])
@@ -489,44 +489,8 @@ router.delete("/vendor-invoices/:id", async (req, res): Promise<void> => {
     ),
   ];
 
-  let deleted;
-  try {
-    [deleted] = await db.delete(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id)).returning();
-  } catch (err: any) {
-    const msg = err?.cause?.message || err?.message || "Failed to delete vendor invoice";
-    // Last resort: clear common FK blockers then retry once.
-    if (/foreign key|violates|constraint/i.test(msg)) {
-      try {
-        await db.execute(sql`DELETE FROM vendor_payments WHERE vendor_invoice_id = ${id}`);
-        await db.execute(sql`
-          DELETE FROM journal_lines
-          WHERE journal_entry_id IN (
-            SELECT id FROM journal_entries
-            WHERE company_id = ${toDelete.companyId}
-              AND ref_type = 'vendor_invoice'
-              AND ref_id = ${id}
-          )
-        `).catch(() => undefined);
-        await db.execute(sql`
-          DELETE FROM journal_entries
-          WHERE company_id = ${toDelete.companyId}
-            AND ref_type = 'vendor_invoice'
-            AND ref_id = ${id}
-        `).catch(() => undefined);
-        [deleted] = await db.delete(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id)).returning();
-      } catch (retryErr: any) {
-        res.status(500).json({
-          error: retryErr?.cause?.message || retryErr?.message || msg,
-        });
-        return;
-      }
-    } else {
-      res.status(500).json({ error: msg });
-      return;
-    }
-  }
-
-  if (!deleted) {
+  const ok = await softDeleteById(pool, "vendor_invoices", { id, companyId: toDelete.companyId });
+  if (!ok) {
     res.status(404).json({ error: "Not found" });
     return;
   }
@@ -542,7 +506,7 @@ router.delete("/vendor-invoices/:id", async (req, res): Promise<void> => {
     req.log?.warn?.({ err: priceErr }, "Vendor invoice purchase-price recompute failed on delete");
   }
 
-  logAudit({ req, action: "delete", entityType: "vendor_invoice", entityId: id, entityLabel: deleted?.piNumber });
+  logAudit({ req, action: "delete", entityType: "vendor_invoice", entityId: id, entityLabel: toDelete.piNumber });
   res.json({ success: true });
 });
 

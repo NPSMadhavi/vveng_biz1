@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, debitNotesTable, usersTable, vendorsTable, settingsTable } from "@workspace/db";
-import { eq, desc, inArray, ilike, and } from "drizzle-orm";
+import { db, pool, debitNotesTable, usersTable, vendorsTable, settingsTable } from "@workspace/db";
+import { eq, desc, inArray, ilike, and, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
 import { applyVoucherAttachment, sendVoucherFile, VOUCHER_UPLOAD_FOLDERS } from "../lib/operations-upload.js";
 import { reverseDebitNoteStock, syncDebitNoteStock } from "../lib/debit-note-stock.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -73,8 +74,8 @@ router.get("/debit-notes/stats", async (req, res): Promise<void> => {
   const userId = req.session.userId!;
   const isAdmin = req.session.isAdmin ?? false;
   const all = companyId
-    ? await db.select().from(debitNotesTable).where(eq(debitNotesTable.companyId, companyId))
-    : await db.select().from(debitNotesTable);
+    ? await db.select().from(debitNotesTable).where(and(eq(debitNotesTable.companyId, companyId), sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`))
+    : await db.select().from(debitNotesTable).where(sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`);
   const visible = visibilityFilter(all, userId, isAdmin);
   res.json({
     total: visible.length,
@@ -93,8 +94,8 @@ router.get("/debit-notes", async (req, res): Promise<void> => {
   const isAdmin = req.session.isAdmin ?? false;
 
   const all = companyId
-    ? await db.select().from(debitNotesTable).where(eq(debitNotesTable.companyId, companyId)).orderBy(desc(debitNotesTable.createdAt))
-    : await db.select().from(debitNotesTable).orderBy(desc(debitNotesTable.createdAt));
+    ? await db.select().from(debitNotesTable).where(and(eq(debitNotesTable.companyId, companyId), sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`)).orderBy(desc(debitNotesTable.createdAt))
+    : await db.select().from(debitNotesTable).where(sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`).orderBy(desc(debitNotesTable.createdAt));
 
   const visible = visibilityFilter(all, userId, isAdmin);
   const withNames = await withUsernames(visible);
@@ -185,7 +186,7 @@ router.get("/debit-notes/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [doc] = await db.select().from(debitNotesTable).where(eq(debitNotesTable.id, id));
+  const [doc] = await db.select().from(debitNotesTable).where(and(eq(debitNotesTable.id, id), sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Debit note not found" }); return; }
 
   const userId = req.session.userId!;
@@ -326,11 +327,26 @@ router.delete("/debit-notes/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [existing] = await db.select().from(debitNotesTable).where(eq(debitNotesTable.id, id));
+  const [existing] = await db.select().from(debitNotesTable).where(and(eq(debitNotesTable.id, id), sql`COALESCE(${debitNotesTable.isDeleted}, 0) = 0`));
   if (!existing) { res.status(404).json({ error: "Debit note not found" }); return; }
   if (existing.status === "void") { res.status(400).json({ error: "Cannot delete a voided debit note." }); return; }
 
-  await db.delete(debitNotesTable).where(eq(debitNotesTable.id, id));
+  if (existing.status === "confirmed") {
+    try {
+      await reverseDebitNoteStock({
+        companyId: existing.companyId,
+        debitNoteId: id,
+        dnNumber: existing.dnNumber,
+        userId: req.session.userId!,
+        username: (req.session as any).username,
+      });
+    } catch (stockErr: any) {
+      req.log?.warn?.({ err: stockErr }, "Debit note stock reverse failed on delete");
+    }
+  }
+
+  const ok = await softDeleteById(pool, "debit_notes", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Debit note not found" }); return; }
   logAudit({ req, action: "delete", entityType: "debit_note", entityId: id, entityLabel: existing.dnNumber });
   res.json({ ok: true });
 });

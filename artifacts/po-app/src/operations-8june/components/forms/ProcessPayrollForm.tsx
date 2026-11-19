@@ -676,6 +676,9 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
   const rateEmployerLabel = calculationPreview?.ratesMixed
     ? "—"
     : `${calculationPreview?.employerRate ?? 0}%`;
+  const isHourlyPreview =
+    !isAllEmployees
+    && String(selectedEmployee?.workType || "") === "hourly";
 
   return (
     <>
@@ -891,93 +894,152 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
             )}
             {calculationPreview ? (
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Monthly Salary</span>
-                  <span className="font-medium text-[#111827]">
-                    {formatCurrency(calculationPreview.monthlySalary)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Allowances</span>
-                  <span className="font-medium text-[#111827]">
-                    {formatCurrency(calculationPreview.allowancesTotal)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Bonus</span>
-                  <span className="font-medium text-[#111827]">
-                    {formatCurrency(calculationPreview.bonusTotal)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Other Income / Benefits</span>
-                  <span className="font-medium text-[#111827]">
-                    {formatCurrency(calculationPreview.otherIncomeTotal)}
-                  </span>
-                </div>
-                {calculationPreview.overtimePay > 0 ? (
-                  <div className="flex justify-between">
-                    <span className="text-[#6B7280]">Overtime</span>
-                    <span className="font-medium text-[#111827]">
-                      {formatCurrency(calculationPreview.overtimePay)}
-                    </span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between border-t border-[#E5E7EB] pt-2">
-                  <span className="font-semibold text-[#111827]">Gross Salary</span>
-                  <span className="font-semibold text-[#111827]">
-                    {formatCurrency(calculationPreview.grossPay)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Deductions</span>
-                  <span className="font-medium text-[#DC2626]">
-                    -{formatCurrency(calculationPreview.deductionsTotal)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">CPF Rate (Employee)</span>
-                  <span className="text-[#111827]">{rateEmployeeLabel}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">CPF Amount (Employee)</span>
-                  <span className="font-medium text-[#DC2626]">
-                    -{formatCurrency(calculationPreview.employeeCpf)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">CPF Rate (Employer)</span>
-                  <span className="text-[#111827]">{rateEmployerLabel}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">CPF Amount (Employer)</span>
-                  <span className="font-medium text-[#111827]">
-                    {formatCurrency(calculationPreview.employerCpf)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Total CPF</span>
-                  <span className="text-[#111827]">
-                    {formatCurrency(calculationPreview.totalCpf)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Total Deductions</span>
-                  <span className="font-medium text-[#DC2626]">
-                    -
-                    {formatCurrency(
-                      calculationPreview.deductionsTotal + calculationPreview.employeeCpf
-                    )}
-                  </span>
-                </div>
-                <div className="flex justify-between border-t border-[#E5E7EB] pt-3">
-                  <span className="text-base font-semibold text-[#111827]">
-                    {calculationPreview.mode === "all" ? "Total Net Salary" : "Net Salary"}
-                  </span>
-                  <span className="text-lg font-bold text-[#16A34A]">
-                    {formatCurrency(calculationPreview.netPay)}
-                  </span>
-                </div>
+                {isHourlyPreview ? (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Basic Salary</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.monthlySalary)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-[#E5E7EB] pt-2">
+                      <span className="font-semibold text-[#111827]">Gross Salary</span>
+                      <span className="font-semibold text-[#111827]">
+                        {formatCurrency(calculationPreview.grossPay)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Rate (Employee)</span>
+                      <span className="text-[#111827]">{rateEmployeeLabel}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Amount (Employee)</span>
+                      <span className="font-medium text-[#DC2626]">
+                        -{formatCurrency(calculationPreview.employeeCpf)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Rate (Employer)</span>
+                      <span className="text-[#111827]">{rateEmployerLabel}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Amount (Employer)</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.employerCpf)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Total CPF</span>
+                      <span className="text-[#111827]">
+                        {formatCurrency(calculationPreview.totalCpf)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-[#E5E7EB] pt-3">
+                      <span className="text-base font-semibold text-[#111827]">
+                        {calculationPreview.mode === "all" ? "Total Net Salary" : "Net Salary"}
+                      </span>
+                      <span className="text-lg font-bold text-[#16A34A]">
+                        {formatCurrency(calculationPreview.netPay)}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Basic Salary</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.monthlySalary)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Basic salary for CPF</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.monthlySalary)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Allowances</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.allowancesTotal)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Bonus</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.bonusTotal)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Other Income / Benefits</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.otherIncomeTotal)}
+                      </span>
+                    </div>
+                    {calculationPreview.overtimePay > 0 ? (
+                      <div className="flex justify-between">
+                        <span className="text-[#6B7280]">Overtime</span>
+                        <span className="font-medium text-[#111827]">
+                          {formatCurrency(calculationPreview.overtimePay)}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="flex justify-between border-t border-[#E5E7EB] pt-2">
+                      <span className="font-semibold text-[#111827]">Gross Salary</span>
+                      <span className="font-semibold text-[#111827]">
+                        {formatCurrency(calculationPreview.grossPay)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Deductions</span>
+                      <span className="font-medium text-[#DC2626]">
+                        -{formatCurrency(calculationPreview.deductionsTotal)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Rate (Employee)</span>
+                      <span className="text-[#111827]">{rateEmployeeLabel}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Amount (Employee)</span>
+                      <span className="font-medium text-[#DC2626]">
+                        -{formatCurrency(calculationPreview.employeeCpf)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Rate (Employer)</span>
+                      <span className="text-[#111827]">{rateEmployerLabel}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">CPF Amount (Employer)</span>
+                      <span className="font-medium text-[#111827]">
+                        {formatCurrency(calculationPreview.employerCpf)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Total CPF</span>
+                      <span className="text-[#111827]">
+                        {formatCurrency(calculationPreview.totalCpf)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#6B7280]">Total Deductions</span>
+                      <span className="font-medium text-[#DC2626]">
+                        -
+                        {formatCurrency(
+                          calculationPreview.deductionsTotal + calculationPreview.employeeCpf
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-[#E5E7EB] pt-3">
+                      <span className="text-base font-semibold text-[#111827]">
+                        {calculationPreview.mode === "all" ? "Total Net Salary" : "Net Salary"}
+                      </span>
+                      <span className="text-lg font-bold text-[#16A34A]">
+                        {formatCurrency(calculationPreview.netPay)}
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
               <p className="py-8 text-center text-sm text-[#6B7280]">

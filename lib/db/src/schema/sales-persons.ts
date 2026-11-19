@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, uniqueIndex, smallint } from "drizzle-orm/pg-core";
 import { companiesTable } from "./companies";
 
 export const salesPersonsTable = pgTable(
@@ -13,6 +13,9 @@ export const salesPersonsTable = pgTable(
     phone: text("phone").notNull().default(""),
     country: text("country").notNull().default("Singapore"),
     address: text("address").notNull().default(""),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

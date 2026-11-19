@@ -181,7 +181,11 @@ export default function QuotationEdit() {
   const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
   const updateMutation = useUpdateQuotation();
   const items = form.watch("items");
-  const taxPercent = form.watch("tax") || 0;
+  const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
+
+  useEffect(() => {
+    if (isOverseas) form.setValue("tax", 0);
+  }, [isOverseas]);
 
   const appendLock = useRef(false);
   useEffect(() => {
@@ -282,7 +286,7 @@ export default function QuotationEdit() {
           ? "confirmed"
           : values.status;
     const payload: any = { ...values, status: newStatus, discountAmount: values.discountAmount, items: itemsWithAmount };
-    if (!isManpower) delete payload.manpowerDetails;
+    payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
     updateMutation.mutate({ id, data: payload }, {
       onSuccess: async (saved: any) => {
         if (saved?.status) form.setValue("status", saved.status as any);
@@ -507,7 +511,7 @@ export default function QuotationEdit() {
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
-                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="Quotation Date" />
+                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="Quotation Date" hideHints />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

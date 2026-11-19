@@ -39,7 +39,7 @@ router.post("/ai/format-invoice", async (req: any, res: any) => {
   try {
     let raw = "";
     if (isVedaGatewayConfigured()) {
-      raw = (await vedaChat(`${SYSTEM_PROMPT}\n\n---\n\nItems JSON:\n${JSON.stringify(items)}`)).trim();
+      raw = (await vedaChat(`Items JSON:\n${JSON.stringify(items)}`, { systemPrompt: SYSTEM_PROMPT, timeoutMs: 180_000 })).trim();
     } else {
       const completion = await openai.chat.completions.create({
         model: "gpt-5",

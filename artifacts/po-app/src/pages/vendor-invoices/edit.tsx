@@ -417,7 +417,7 @@ export default function VendorInvoiceEdit() {
           authorisedSignature: authorisedSignature || null,
           discountAmount,
           salesPerson: salesPerson || null,
-          manpowerDetails: isManpower ? { workLocation } : (pi as any)?.manpowerDetails || null,
+          manpowerDetails: isManpower ? { workLocation } : null,
           ...attachment.payload,
           expenseAccountId: (expenseAccountId && expenseAccountId !== "none") ? parseInt(expenseAccountId) : null,
         }),

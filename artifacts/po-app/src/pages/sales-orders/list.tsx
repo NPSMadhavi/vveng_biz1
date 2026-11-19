@@ -7,7 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { filterDocsByManpowerScope, isManpowerPath } from "@/lib/doc-manpower";
 import { Search, Plus, Eye, Pencil, Trash2, X } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,6 +30,8 @@ import { formatCurrency as formatCurrencySafe } from "@/lib/currencies";
 
 export default function SalesOrderList() {
   const { setLocation, href } = useDocNav();
+  const [location] = useLocation();
+  const manpowerScope = isManpowerPath(location);
   const [searchTerm, setSearchTerm] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; soNumber: string } | null>(null);
   const { toast } = useToast();
@@ -42,15 +45,20 @@ export default function SalesOrderList() {
 
   const deleteMutation = useDeleteSalesOrder();
 
+  const scopedOrders = useMemo(
+    () => filterDocsByManpowerScope(salesOrders as any[] | undefined, manpowerScope),
+    [salesOrders, manpowerScope],
+  );
+
   const workingYear = useWorkingYearBounds();
   const getPartyName = (d: { customerName?: string }) => d.customerName || "";
-  const bulk = useBulkPartyEmail({ allDocs: salesOrders ?? [], dateFiltered: salesOrders ?? [], getPartyName });
+  const bulk = useBulkPartyEmail({ allDocs: scopedOrders, dateFiltered: scopedOrders, getPartyName });
 
   const filteredOrders = useMemo(() => {
     const t = searchTerm.toLowerCase().trim();
     const yearScoped = workingYear.active
-      ? (salesOrders ?? []).filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to))
-      : (salesOrders ?? []);
+      ? scopedOrders.filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to))
+      : scopedOrders;
     const all = yearScoped.filter(d => bulk.matchesParty(d));
     if (!t) return all;
     return all.filter(
@@ -59,7 +67,7 @@ export default function SalesOrderList() {
         d.customerName.toLowerCase().includes(t) ||
         ((d as any).qtNumber || "").toLowerCase().includes(t),
     );
-  }, [salesOrders, searchTerm, bulk.partyFilter, bulk.matchesParty, workingYear.active, workingYear.from, workingYear.to]);
+  }, [scopedOrders, searchTerm, bulk.partyFilter, bulk.matchesParty, workingYear.active, workingYear.from, workingYear.to]);
 
   const { page, setPage, totalPages, paginatedItems } = usePagination(filteredOrders);
   const { sendable, allSelected, someSelected } = bulk.selectionState(filteredOrders);

@@ -12,7 +12,7 @@ import {
   salesOrdersTable,
   warehousesTable,
 } from "@workspace/db";
-import { eq, desc, inArray, ilike, and } from "drizzle-orm";
+import { eq, desc, inArray, ilike, and, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
 import { postInvoiceJE, reverseInvoiceJE } from "../lib/invoice-auto-post.js";
@@ -26,6 +26,7 @@ import {
   alignInvoiceItemsToIssuedWarehouse,
 } from "../lib/invoice-stock.js";
 import { resolveWarehouseId } from "../lib/inventory-service.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -278,8 +279,8 @@ router.get("/invoices/stats", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
 
   const all = companyId
-    ? await db.select().from(invoicesTable).where(eq(invoicesTable.companyId, companyId))
-    : await db.select().from(invoicesTable);
+    ? await db.select().from(invoicesTable).where(and(eq(invoicesTable.companyId, companyId), sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`))
+    : await db.select().from(invoicesTable).where(sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`);
   const visible = visibilityFilter(all, userId, isAdmin, isExternal);
   const confirmedInvoices = visible.filter(x => x.status === "confirmed");
   res.json({
@@ -301,8 +302,8 @@ router.get("/invoices", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
 
   const docs = companyId
-    ? await db.select().from(invoicesTable).where(eq(invoicesTable.companyId, companyId)).orderBy(desc(invoicesTable.createdAt))
-    : await db.select().from(invoicesTable).orderBy(desc(invoicesTable.createdAt));
+    ? await db.select().from(invoicesTable).where(and(eq(invoicesTable.companyId, companyId), sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`)).orderBy(desc(invoicesTable.createdAt))
+    : await db.select().from(invoicesTable).where(sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`).orderBy(desc(invoicesTable.createdAt));
 
   const visible = visibilityFilter(docs, userId, isAdmin, isExternal).map(parseDoc);
 
@@ -531,7 +532,7 @@ router.get("/invoices/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [doc] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, id));
+  const [doc] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, id), sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Invoice not found" }); return; }
 
   const userId = req.session.userId!;
@@ -594,7 +595,9 @@ router.put("/invoices/:id", async (req, res): Promise<void> => {
 
   const [existing] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, id));
   if (!existing) { res.status(404).json({ error: "Invoice not found" }); return; }
-  updateData.manpowerDetails = manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null;
+  updateData.manpowerDetails = manpowerDetails !== undefined
+    ? (manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null)
+    : existing.manpowerDetails ?? null;
   const existingDate = String(existing.issueDate || "").slice(0, 10);
   const nextIssue = String(issueDate || existing.issueDate || "").slice(0, 10);
   const periodCheck = await assertPeriodWritable(existing.companyId, existingDate);
@@ -952,7 +955,7 @@ router.delete("/invoices/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
   const [existing] = await db.select({ id: invoicesTable.id, status: invoicesTable.status, invNumber: invoicesTable.invNumber, companyId: invoicesTable.companyId, issueDate: invoicesTable.issueDate })
-    .from(invoicesTable).where(eq(invoicesTable.id, id));
+    .from(invoicesTable).where(and(eq(invoicesTable.id, id), sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`));
   if (!existing) { res.status(404).json({ error: "Invoice not found" }); return; }
   const deletePeriod = await assertPeriodWritable(existing.companyId, String(existing.issueDate || "").slice(0, 10));
   if (!deletePeriod.ok) { res.status(deletePeriod.status).json({ error: deletePeriod.error }); return; }
@@ -970,7 +973,8 @@ router.delete("/invoices/:id", async (req, res): Promise<void> => {
     req.log.error({ err: stockErr }, "Failed to restore stock for deleted invoice");
   }
 
-  await db.delete(invoicesTable).where(eq(invoicesTable.id, id));
+  const ok = await softDeleteById(pool, "invoices", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Invoice not found" }); return; }
 
   // Clear reverse links on sales orders so convert can be retried
   try {

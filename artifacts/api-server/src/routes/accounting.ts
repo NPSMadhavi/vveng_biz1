@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, accountsTable, journalEntriesTable, journalLinesTable, companiesTable, invoicesTable, vendorInvoicesTable, vendorsTable, settingsTable, invoicePaymentsTable, vendorPaymentsTable, customerDepositsTable, expensesTable, incomeRecordsTable } from "@workspace/db";
+import { db, pool, accountsTable, journalEntriesTable, journalLinesTable, companiesTable, invoicesTable, vendorInvoicesTable, vendorsTable, settingsTable, invoicePaymentsTable, vendorPaymentsTable, customerDepositsTable, expensesTable, incomeRecordsTable } from "@workspace/db";
 import { eq, and, desc, sql, asc, inArray } from "drizzle-orm";
 import { logAudit } from "../lib/audit.js";
 import { DEFAULT_ACCOUNTS, ensureAccountsSeeded } from "../lib/accounts-seed.js";
@@ -9,11 +9,12 @@ import { backfillAssetDepreciationJEs } from "../lib/asset-depreciation-auto-pos
 import { backfillVendorInvoiceJEs, repointManpowerVendorCostOfServices } from "../lib/vendor-invoice-auto-post.js";
 import { backfillPayrollJEs, toIsoDate } from "../lib/payroll-auto-post.js";
 import { isSingaporeCountry } from "../lib/singapore.js";
-import { assertPeriodWritable } from "../lib/financial-year.js";
+import { assertPeriodWritable, findFyForDate } from "../lib/financial-year.js";
 import { ensureIncomeSchema } from "./income.js";
 import { ensureExpensesSchema } from "./expenses.js";
 import { sanitizeErrorMessage, logServerError } from "../lib/safe-error.js";
 import { logger } from "../lib/logger.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router: IRouter = Router();
 
@@ -178,6 +179,7 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
       eq(journalEntriesTable.companyId, companyId),
       eq(journalEntriesTable.refType, refTypeQuery),
       eq(journalEntriesTable.refId, refIdQuery),
+      sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
     ));
     res.json(await attachJournalSourcePaths(matched));
     return;
@@ -220,7 +222,7 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
 
   const entries = await db.select()
     .from(journalEntriesTable)
-    .where(eq(journalEntriesTable.companyId, companyId))
+    .where(and(eq(journalEntriesTable.companyId, companyId), sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`))
     .orderBy(desc(journalEntriesTable.entryDate), desc(journalEntriesTable.id));
 
   for (const entry of entries) {
@@ -253,7 +255,10 @@ router.get("/journal-entries/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [entry] = await db.select().from(journalEntriesTable).where(eq(journalEntriesTable.id, id));
+  const [entry] = await db.select().from(journalEntriesTable).where(and(
+    eq(journalEntriesTable.id, id),
+    sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+  ));
   if (!entry) { res.status(404).json({ error: "Journal entry not found" }); return; }
 
   if (entry.companyId) {
@@ -353,7 +358,10 @@ router.delete("/journal-entries/:id", async (req, res): Promise<void> => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
-  const [entry] = await db.select().from(journalEntriesTable).where(eq(journalEntriesTable.id, id));
+  const [entry] = await db.select().from(journalEntriesTable).where(and(
+    eq(journalEntriesTable.id, id),
+    sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+  ));
   if (!entry) { res.status(404).json({ error: "Journal entry not found" }); return; }
   if (entry.refType !== "manual") {
     res.status(400).json({ error: "Auto-posted entries cannot be deleted. They are reversed automatically when the source document changes." });
@@ -362,8 +370,8 @@ router.delete("/journal-entries/:id", async (req, res): Promise<void> => {
   const periodCheck = await assertPeriodWritable(req.session.companyId!, entry.entryDate);
   if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
 
-  await db.delete(journalLinesTable).where(eq(journalLinesTable.journalEntryId, id));
-  await db.delete(journalEntriesTable).where(eq(journalEntriesTable.id, id));
+  const ok = await softDeleteById(pool, "journal_entries", { id, companyId: entry.companyId ?? req.session.companyId! });
+  if (!ok) { res.status(404).json({ error: "Journal entry not found" }); return; }
   logAudit({ req, action: "delete", entityType: "journal_entry", entityId: id, entityLabel: entry.description });
   res.json({ success: true });
 });
@@ -535,17 +543,20 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
 
   const revenue         = accounts.filter(a => a.type === "revenue" && a.subType === "sales").map(mapAcct);
   const otherIncome     = accounts.filter(a => a.type === "revenue" && a.subType === "other_income").map(mapAcct);
+  const otherRevenue    = accounts.filter(a => a.type === "revenue" && a.subType !== "sales" && a.subType !== "other_income").map(mapAcct);
   const costOfSales     = accounts.filter(a => a.type === "expense" && a.subType === "cost_of_sales").map(mapAcct);
   const operatingExpenses = accounts.filter(a => a.type === "expense" && a.subType === "operating_expense" && a.code !== "7300").map(mapAcct);
+  const otherExpenses   = accounts.filter(a => a.type === "expense" && a.subType !== "cost_of_sales" && a.subType !== "operating_expense" && a.code !== "7300").map(mapAcct);
   const incomeTaxAcct   = accounts.find(a => a.code === "7300");
 
   const totalRevenue          = revenue.reduce((s, a) => s + a.amount, 0);
-  const totalOtherIncome      = otherIncome.reduce((s, a) => s + a.amount, 0);
+  const totalOtherIncome      = otherIncome.reduce((s, a) => s + a.amount, 0) + otherRevenue.reduce((s, a) => s + a.amount, 0);
   const totalCostOfSales      = costOfSales.reduce((s, a) => s + a.amount, 0);
   const grossProfit           = totalRevenue + totalOtherIncome - totalCostOfSales;
-  const totalOperatingExpenses = operatingExpenses.reduce((s, a) => s + a.amount, 0);
+  const totalOperatingExpenses = operatingExpenses.reduce((s, a) => s + a.amount, 0) + otherExpenses.reduce((s, a) => s + a.amount, 0);
   const operatingProfit       = grossProfit - totalOperatingExpenses;
   const incomeTax             = incomeTaxAcct ? parseFloat(netAmount(incomeTaxAcct).toFixed(2)) : 0;
+  // Matches balance-sheet period earnings: all revenue/expense accounts
   const netProfit             = operatingProfit - incomeTax;
 
   res.json({
@@ -964,18 +975,37 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
 
   await ensureAccountsSeeded(companyId);
 
+  // Include inactive accounts too — dropping them drops one side of JEs and breaks A = L+E.
   const allAccounts = await db.select().from(accountsTable)
-    .where(and(eq(accountsTable.companyId, companyId), eq(accountsTable.isActive, true)))
+    .where(eq(accountsTable.companyId, companyId))
     .orderBy(asc(accountsTable.code));
 
-  const entries = await db.select({ entryId: journalEntriesTable.id })
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted', 'reversed')`,
-      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
-      sql`${journalEntriesTable.entryDate} <= ${asOf}`,
-    ));
+  // Prefer FY-scoped BS when a financial year covers asOf:
+  // opening JE for that year + in-year activity only (prior years already folded into openings).
+  const fy = await findFyForDate(companyId, asOf);
+  const entries = fy
+    ? await db.select({ entryId: journalEntriesTable.id })
+      .from(journalEntriesTable)
+      .where(and(
+        eq(journalEntriesTable.companyId, companyId),
+        sql`${journalEntriesTable.status} IN ('posted', 'reversed')`,
+        sql`(
+          (${journalEntriesTable.refType} = 'fy_opening' AND ${journalEntriesTable.refId} = ${fy.id})
+          OR (
+            COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'
+            AND ${journalEntriesTable.entryDate} >= ${fy.startDate}
+            AND ${journalEntriesTable.entryDate} <= ${asOf}
+          )
+        )`,
+      ))
+    : await db.select({ entryId: journalEntriesTable.id })
+      .from(journalEntriesTable)
+      .where(and(
+        eq(journalEntriesTable.companyId, companyId),
+        sql`${journalEntriesTable.status} IN ('posted', 'reversed')`,
+        sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
+        sql`${journalEntriesTable.entryDate} <= ${asOf}`,
+      ));
 
   const linesByAccount: Record<number, { debit: number; credit: number }> = {};
   if (entries.length > 0) {
@@ -992,26 +1022,63 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   const bal    = (a: typeof allAccounts[0]) => { const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 }; return a.type === "asset" ? t.debit - t.credit : t.credit - t.debit; };
   const mapA   = (a: typeof allAccounts[0]) => ({ code: a.code, name: a.name, subType: a.subType, amount: parseFloat(bal(a).toFixed(2)) });
 
-  const assets      = allAccounts.filter(a => a.type === "asset").map(mapA);
-  const liabilities = allAccounts.filter(a => a.type === "liability").map(mapA);
-  const equity      = allAccounts.filter(a => a.type === "equity").map(mapA);
+  // Orphan journal lines (account deleted/missing) — keep as suspense so A = L + E still holds.
+  const knownAccountIds = new Set(allAccounts.map(a => a.id));
+  let orphanDebit = 0;
+  let orphanCredit = 0;
+  for (const [idStr, t] of Object.entries(linesByAccount)) {
+    if (!knownAccountIds.has(Number(idStr))) {
+      orphanDebit += t.debit;
+      orphanCredit += t.credit;
+    }
+  }
+  const orphanNet = orphanDebit - orphanCredit; // asset-style
 
+  const assets      = allAccounts.filter(a => a.type === "asset").map(mapA);
+  if (Math.abs(orphanNet) > 0.005) {
+    assets.push({
+      code: "SUSP",
+      name: "Suspense (unmapped journal lines)",
+      subType: "current_asset",
+      amount: parseFloat(orphanNet.toFixed(2)),
+    });
+  }
+  const liabilities = allAccounts.filter(a => a.type === "liability").map(mapA);
+  // Equity lines already include carried Retained Earnings (3100) from fy_opening.
+  // Hide Current Year Earnings (3200) account row — YTD P&L is shown from Profit & Loss.
+  const equity = allAccounts
+    .filter(a => a.type === "equity" && a.code !== "3200" && !/current year earnings/i.test(a.name || ""))
+    .map(mapA);
+
+  // Profit/(Loss) for the period — taken from P&L accounts (same identity as Profit & Loss).
+  // NI = Σ revenue(credit−debit) − Σ expense(debit−credit) = Σ (credit−debit) on all P&L accounts.
+  // Prior-year profit is already inside equity 3100 via fy_opening — do not add it again.
+  // Include every revenue/expense account so A = L + E holds under double-entry.
   const retainedEarnings = allAccounts
     .filter(a => a.type === "revenue" || a.type === "expense")
-    .reduce((s, a) => { const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 }; return s + (a.type === "revenue" ? t.credit - t.debit : t.debit - t.credit); }, 0);
+    .reduce((s, a) => {
+      const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 };
+      return s + (t.credit - t.debit);
+    }, 0);
 
   const totalAssets      = assets.reduce((s, a) => s + a.amount, 0);
   const totalLiabilities = liabilities.reduce((s, a) => s + a.amount, 0);
-  const totalEquity      = equity.reduce((s, a) => s + a.amount, 0) + retainedEarnings;
+  const equityAccountsTotal = equity.reduce((s, a) => s + a.amount, 0);
+  // A = L + Equity(brought forward, incl. 3100) + Profit/(Loss) from P&L
+  const totalEquity = equityAccountsTotal + retainedEarnings;
+  const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
 
   res.json({
     asOf,
+    financialYearId: fy?.id ?? null,
+    financialYearLabel: fy?.label ?? null,
     assets, totalAssets: parseFloat(totalAssets.toFixed(2)),
     liabilities, totalLiabilities: parseFloat(totalLiabilities.toFixed(2)),
-    equity, retainedEarnings: parseFloat(retainedEarnings.toFixed(2)),
+    equity,
+    retainedEarnings: parseFloat(retainedEarnings.toFixed(2)),
     totalEquity: parseFloat(totalEquity.toFixed(2)),
-    totalLiabilitiesAndEquity: parseFloat((totalLiabilities + totalEquity).toFixed(2)),
-    balanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+    totalLiabilitiesAndEquity: parseFloat(totalLiabilitiesAndEquity.toFixed(2)),
+    balanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.01,
   });
 });
 

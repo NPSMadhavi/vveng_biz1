@@ -45,6 +45,9 @@ const itemSchema = z.object({
   unitPrice: z.coerce.number().min(0).default(0),
   discount: z.coerce.number().min(0).max(100).default(0),
   amount: z.coerce.number().default(0),
+  stockItemId: z.number().positive().optional(),
+  warehouseId: z.number().positive().optional(),
+  isStockItem: z.boolean().default(false),
 });
 
 const schema = z.object({
@@ -90,11 +93,14 @@ function mapInvoiceItemsToCn(items: any[]): FormValues["items"] {
         unitPrice: 0,
         discount: 0,
         amount: 0,
+        isStockItem: false,
       };
     }
     const qty = Number(it.qty) || 0;
     const unitPrice = Number(it.unitPrice) || 0;
     const discount = Number(it.discount) || 0;
+    const stockItemId = Number(it.stockItemId);
+    const warehouseId = Number(it.warehouseId);
     return {
       type: "item" as const,
       sectionLabel: "",
@@ -104,11 +110,14 @@ function mapInvoiceItemsToCn(items: any[]): FormValues["items"] {
       unitPrice,
       discount,
       amount: calcAmount(qty, unitPrice, discount),
+      isStockItem: !!it.isStockItem || (Number.isFinite(stockItemId) && stockItemId > 0),
+      stockItemId: Number.isFinite(stockItemId) && stockItemId > 0 ? stockItemId : undefined,
+      warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : undefined,
     };
   });
   return mapped.length > 0
     ? mapped
-    : [{ type: "item", sectionLabel: "", partNumber: "", description: "", qty: 1, unitPrice: 0, discount: 0, amount: 0 }];
+    : [{ type: "item", sectionLabel: "", partNumber: "", description: "", qty: 1, unitPrice: 0, discount: 0, amount: 0, isStockItem: false }];
 }
 
 export default function CreditNoteEdit() {
@@ -152,16 +161,23 @@ export default function CreditNoteEdit() {
 
   useEffect(() => {
     if (!doc) return;
-    const items = (doc.items ?? []).map((i: any) => ({
-      type: i.type ?? "item",
-      sectionLabel: i.sectionLabel ?? "",
-      partNumber: i.partNumber ?? "",
-      description: i.description ?? "",
-      qty: i.qty ?? 1,
-      unitPrice: i.unitPrice ?? 0,
-      discount: i.discount ?? 0,
-      amount: i.amount ?? 0,
-    }));
+    const items = (doc.items ?? []).map((i: any) => {
+      const stockItemId = Number(i.stockItemId);
+      const warehouseId = Number(i.warehouseId);
+      return {
+        type: i.type ?? "item",
+        sectionLabel: i.sectionLabel ?? "",
+        partNumber: i.partNumber ?? "",
+        description: i.description ?? "",
+        qty: i.qty ?? 1,
+        unitPrice: i.unitPrice ?? 0,
+        discount: i.discount ?? 0,
+        amount: i.amount ?? 0,
+        isStockItem: !!i.isStockItem || (Number.isFinite(stockItemId) && stockItemId > 0),
+        stockItemId: Number.isFinite(stockItemId) && stockItemId > 0 ? stockItemId : undefined,
+        warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : undefined,
+      };
+    });
     form.reset({
       customerName: doc.customerName ?? "",
       customerAddress: doc.customerAddress ?? "",
@@ -176,7 +192,7 @@ export default function CreditNoteEdit() {
       paymentTerms: doc.paymentTerms ?? "",
       notes: doc.notes ?? "",
       isPrivate: doc.isPrivate ?? false,
-      items: items.length > 0 ? items : [{ type: "item", sectionLabel: "", partNumber: "", description: "", qty: 1, unitPrice: 0, discount: 0, amount: 0 }],
+      items: items.length > 0 ? items : [{ type: "item", sectionLabel: "", partNumber: "", description: "", qty: 1, unitPrice: 0, discount: 0, amount: 0, isStockItem: false }],
     });
     lastLoadedRef.current = doc.refInvNumber ?? "";
     setReady(true);
@@ -682,11 +698,14 @@ export default function CreditNoteEdit() {
  open={stockPickerIndex !== null}
  onOpenChange={(open) => { if (!open) setStockPickerIndex(null); }}
  mode="receive"
- onSelect={({ item, qty }: StockItemSelection) => {
+ onSelect={({ item, qty, warehouseId }: StockItemSelection) => {
           if (stockPickerIndex === null) return;
           form.setValue(`items.${stockPickerIndex}.partNumber`, item.code);
           form.setValue(`items.${stockPickerIndex}.description`, item.name);
           form.setValue(`items.${stockPickerIndex}.unitPrice`, Number(item.unitPrice) || 0);
+          form.setValue(`items.${stockPickerIndex}.stockItemId`, item.id);
+          form.setValue(`items.${stockPickerIndex}.isStockItem`, true);
+          if (warehouseId) form.setValue(`items.${stockPickerIndex}.warehouseId`, warehouseId);
           if (qty && qty > 0) form.setValue(`items.${stockPickerIndex}.qty`, qty);
           updateItemAmount(stockPickerIndex);
           setStockPickerIndex(null);

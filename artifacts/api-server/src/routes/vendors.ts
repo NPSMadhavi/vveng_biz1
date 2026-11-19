@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, pool, vendorsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 const router = Router();
 
@@ -18,7 +19,10 @@ router.get("/vendors", async (req, res) => {
   try {
     await ensureUsageType();
     const vendors = await db.select().from(vendorsTable)
-      .where(eq(vendorsTable.companyId, companyId))
+      .where(and(
+        eq(vendorsTable.companyId, companyId),
+        sql`COALESCE(${vendorsTable.isDeleted}, 0) = 0`,
+      ))
       .orderBy(desc(vendorsTable.createdAt), desc(vendorsTable.id));
     return res.json(vendors);
   } catch {
@@ -95,7 +99,8 @@ router.delete("/vendors/:id", async (req, res) => {
 
   const id = parseInt(req.params.id);
   try {
-    await db.delete(vendorsTable).where(and(eq(vendorsTable.id, id), eq(vendorsTable.companyId, companyId)));
+    const ok = await softDeleteById(pool, "vendors", { id, companyId });
+    if (!ok) return res.status(404).json({ error: "Vendor not found" });
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ error: "Failed to delete vendor" });

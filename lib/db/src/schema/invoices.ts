@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, decimal, jsonb, boolean, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, decimal, jsonb, boolean, unique, smallint } from "drizzle-orm/pg-core";
 
 export const invoicesTable = pgTable("invoices", {
   id: serial("id").primaryKey(),
@@ -37,6 +37,9 @@ export const invoicesTable = pgTable("invoices", {
   customerNote: text("customer_note"),
   authorisedSignature: text("authorised_signature"),
   createdBy: integer("created_by").notNull(),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   companyInvUnique: unique("invoices_company_inv_number_unique").on(t.companyId, t.invNumber),

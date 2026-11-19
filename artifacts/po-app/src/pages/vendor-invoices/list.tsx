@@ -2,6 +2,8 @@ import { useDocNav } from "@/lib/doc-nav";
 import { useEffect, useState, useMemo } from "react";
 import { isoInBounds } from "@/lib/date-range";
 import { useWorkingYearBounds } from "@/components/financial-year-controls";
+import { useLocation } from "wouter";
+import { filterDocsByManpowerScope, isManpowerPath } from "@/lib/doc-manpower";
 
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -42,6 +44,8 @@ type FilterMode = "all" | "q1" | "q2" | "q3" | "q4" | "custom";
 
 export default function VendorInvoiceList() {
   const { setLocation } = useDocNav();
+  const [location] = useLocation();
+  const manpowerScope = isManpowerPath(location);
   const { selectedCompany } = useAuth();
   const [search, setSearch] = useState("");
 
@@ -64,14 +68,19 @@ export default function VendorInvoiceList() {
     },
   });
 
+  const scopedPis = useMemo(
+    () => filterDocsByManpowerScope(pis, manpowerScope),
+    [pis, manpowerScope],
+  );
+
   // Apply date filter
   const filteredByDate = useMemo(() => {
     if (filterMode === "all") {
-      return workingYear.active ? pis.filter((pi) => isoInBounds(pi.piDate, workingYear.from, workingYear.to)) : pis;
+      return workingYear.active ? scopedPis.filter((pi) => isoInBounds(pi.piDate, workingYear.from, workingYear.to)) : scopedPis;
     }
     if (filterMode === "custom") {
-      if (!customFrom && !customTo) return pis;
-      return pis.filter(pi => {
+      if (!customFrom && !customTo) return scopedPis;
+      return scopedPis.filter(pi => {
         if (!pi.piDate) return false;
         const d = pi.piDate.slice(0, 10);
         if (customFrom && d < customFrom) return false;
@@ -81,15 +90,15 @@ export default function VendorInvoiceList() {
     }
     const qIdx = ["q1", "q2", "q3", "q4"].indexOf(filterMode);
     const months = QUARTERS[qIdx].months;
-    return pis.filter(pi => {
+    return scopedPis.filter(pi => {
       if (!pi.piDate) return false;
       const d = new Date(pi.piDate);
       return d.getFullYear() === filterYear && months.includes(d.getMonth());
     });
-  }, [pis, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
+  }, [scopedPis, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: any) => d.vendorName || "";
-  const bulk = useBulkPartyEmail<any>({ allDocs: pis, dateFiltered: filteredByDate, getPartyName });
+  const bulk = useBulkPartyEmail<any>({ allDocs: scopedPis, dateFiltered: filteredByDate, getPartyName });
 
   const filtered = useMemo(() =>
     filteredByDate.filter(pi => {

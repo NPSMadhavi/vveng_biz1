@@ -215,6 +215,25 @@ router.post("/financial-years/:id/close", async (req, res): Promise<void> => {
     return { closed, nextFy };
   });
 
+  // Carry forward balance-sheet opening/closing balances into the next FY immediately on close
+  // (activate remains idempotent and will reuse these rows).
+  try {
+    await generateOpeningBalancesIdempotent({
+      companyId,
+      previousFyId: id,
+      newFyId: result.nextFy.id,
+      userId: req.session.userId!,
+    });
+  } catch (err: any) {
+    req.log?.error?.({ err }, "FY close: opening balance carry-forward failed");
+    res.status(500).json({
+      error: err?.message || "Year closed, but opening balances could not be carried forward.",
+      closed: result.closed,
+      next: result.nextFy,
+    });
+    return;
+  }
+
   logAudit({
     req,
     action: "close",
@@ -225,11 +244,12 @@ router.post("/financial-years/:id/close", async (req, res): Promise<void> => {
       previousStatus: fy.status,
       newStatus: "closed",
       nextYear: result.nextFy.label,
+      openingBalancesGenerated: true,
     },
   });
 
   res.json({
-    message: `${fy.label} closed. ${result.nextFy.label} is inactive until activated.`,
+    message: `${fy.label} closed. Balance sheet opening balances carried forward to ${result.nextFy.label}. Activate that year when ready.`,
     closed: result.closed,
     next: result.nextFy,
   });

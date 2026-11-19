@@ -195,11 +195,11 @@ export async function ensureSuperAdminSchema(pool: pg.Pool = masterPool): Promis
         modules: APP_ALL_MODULES,
       },
       {
-        name: "Trial / Evaluation (30 Days)",
+        name: "Trial / Evaluation (1 Day)",
         code: "sg_trial",
-        description: "Complimentary 30-day full access trial for newly registered Singapore businesses.",
+        description: "Complimentary 1-day full access trial from account creation. Purchase a plan after the trial to continue.",
         duration: "Custom",
-        durationDays: 30,
+        durationDays: 1,
         price: 0.00,
         currency: "SGD",
         maxUsers: 5,
@@ -217,6 +217,27 @@ export async function ensureSuperAdminSchema(pool: pg.Pool = masterPool): Promis
       );
     }
   }
+
+  // Keep trial plan at 1 day even if it was seeded earlier as 30 days.
+  await pool.query(
+    `UPDATE superadmin_plans
+     SET name = 'Trial / Evaluation (1 Day)',
+         description = 'Complimentary 1-day full access trial from account creation. Purchase a plan after the trial to continue.',
+         duration_days = 1,
+         updated_at = NOW()
+     WHERE code = 'sg_trial'`,
+  );
+
+  // Precise trial/subscription end timestamp (24h-accurate for 1-day trial).
+  await pool.query(`
+    ALTER TABLE superadmin_licenses
+      ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    UPDATE superadmin_licenses
+    SET expires_at = (expiry_date::timestamp + INTERVAL '1 day' - INTERVAL '1 second')
+    WHERE expires_at IS NULL AND expiry_date IS NOT NULL
+  `);
 
     // 3. Seed / Ensure Initial Super Admin user
   const envUsername = (process.env.SUPERADMIN_USERNAME || "superadmin").trim().toLowerCase();
@@ -308,21 +329,21 @@ export async function autoAssignSignupLicense(companyId: number, adminUserId?: n
 
     const trialPlan = (await masterPool.query("SELECT * FROM superadmin_plans WHERE code = 'sg_trial' LIMIT 1")).rows[0];
     const planId = trialPlan?.id || null;
-    const planType = trialPlan?.name || "Trial / Evaluation (30 Days)";
-    const durationDays = trialPlan?.duration_days || 30;
+    const planType = trialPlan?.name || "Trial / Evaluation (1 Day)";
+    const durationDays = Number(trialPlan?.duration_days) > 0 ? Number(trialPlan.duration_days) : 1;
     const maxUsers = trialPlan?.max_users || 5;
     const modules = trialPlan?.modules || APP_ALL_MODULES;
 
     const licenseKey = generateLicenseKey("BIZ-SG-NEW");
     const purchaseDate = new Date();
-    const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + durationDays);
+    const expiresAt = new Date(purchaseDate.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const expiryDate = expiresAt.toISOString().slice(0, 10);
 
     const ins = await masterPool.query(
       `INSERT INTO superadmin_licenses (
-        license_key, company_id, plan_id, plan_type, purchase_date, expiry_date,
+        license_key, company_id, plan_id, plan_type, purchase_date, expiry_date, expires_at,
         is_renewable, status, payment_status, max_users, enabled_modules, notes, created_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, TRUE, 'Active', 'Paid', $7, $8, 'Automatic registration 30-day trial license', $9)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, 'Active', 'Trial', $8, $9, 'Automatic registration 1-day trial license', $10)
       RETURNING *`,
       [
         licenseKey,
@@ -330,7 +351,8 @@ export async function autoAssignSignupLicense(companyId: number, adminUserId?: n
         planId,
         planType,
         purchaseDate.toISOString().slice(0, 10),
-        expiryDate.toISOString().slice(0, 10),
+        expiryDate,
+        expiresAt.toISOString(),
         maxUsers,
         JSON.stringify(modules),
         adminUserId || null,
@@ -363,29 +385,53 @@ export async function checkCompanyLicense(companyId: number): Promise<{
   license?: any;
   reason?: string;
   daysRemaining?: number;
+  hoursRemaining?: number;
+  trialExpired?: boolean;
+  requiresPurchase?: boolean;
+  expiresAt?: string | null;
 }> {
   try {
     const res = await masterPool.query(
-      `SELECT * FROM superadmin_licenses WHERE company_id = $1 ORDER BY expiry_date DESC, id DESC LIMIT 1`,
+      `SELECT l.*, p.code AS plan_code, p.name AS plan_name, p.price AS plan_price, p.currency AS plan_currency
+       FROM superadmin_licenses l
+       LEFT JOIN superadmin_plans p ON p.id = l.plan_id
+       WHERE l.company_id = $1
+       ORDER BY COALESCE(l.expires_at, l.expiry_date::timestamptz) DESC, l.id DESC
+       LIMIT 1`,
       [companyId],
     );
     const license = res.rows[0];
     if (!license) {
-      // If no license record exists, treat as allowed (to not break legacy tenants)
-      return { allowed: true };
+      // No license → must purchase (new accounts always get a trial on register).
+      return {
+        allowed: false,
+        reason: "No active subscription found. Please purchase a plan to continue using BizOne.",
+        requiresPurchase: true,
+        trialExpired: true,
+        daysRemaining: 0,
+        hoursRemaining: 0,
+      };
     }
 
-    const currentStatus = computeExpiryStatus(license.expiry_date, license.status);
+    const endsAt = license.expires_at
+      ? new Date(license.expires_at)
+      : new Date(`${String(license.expiry_date).slice(0, 10)}T23:59:59`);
+    const now = new Date();
+    const msRemaining = endsAt.getTime() - now.getTime();
+    const hoursRemaining = Math.ceil(msRemaining / (1000 * 60 * 60));
+    const daysRemaining = Math.ceil(msRemaining / (1000 * 60 * 60 * 24));
+    const isExpiredByTime = msRemaining <= 0;
+    const currentStatus = isExpiredByTime && license.status === "Active"
+      ? "Expired"
+      : computeExpiryStatus(license.expiry_date, license.status);
 
-    // If status changed to expired in computation, update DB record
     if (currentStatus === "Expired" && license.status === "Active") {
-      await masterPool.query("UPDATE superadmin_licenses SET status = 'Expired', updated_at = NOW() WHERE id = $1", [license.id]);
+      await masterPool.query(
+        "UPDATE superadmin_licenses SET status = 'Expired', updated_at = NOW() WHERE id = $1",
+        [license.id],
+      );
       license.status = "Expired";
     }
-
-    const expiryTime = new Date(license.expiry_date).getTime();
-    const nowTime = Date.now();
-    const daysRemaining = Math.ceil((expiryTime - nowTime) / (1000 * 60 * 60 * 24));
 
     if (license.status === "Suspended") {
       return {
@@ -393,6 +439,9 @@ export async function checkCompanyLicense(companyId: number): Promise<{
         license,
         reason: "Your company BizOne account and license have been suspended by the administrator. Please contact BizOne Support.",
         daysRemaining,
+        hoursRemaining,
+        expiresAt: endsAt.toISOString(),
+        requiresPurchase: true,
       };
     }
 
@@ -402,25 +451,129 @@ export async function checkCompanyLicense(companyId: number): Promise<{
         license,
         reason: "Your company BizOne license has been revoked. Please contact BizOne Support.",
         daysRemaining,
+        hoursRemaining,
+        expiresAt: endsAt.toISOString(),
+        requiresPurchase: true,
       };
     }
 
-    if (currentStatus === "Expired") {
-      // Allow 3 days grace period before hard-blocking ERP
-      if (daysRemaining < -3) {
-        return {
-          allowed: false,
-          license,
-          reason: `Your BizOne subscription license expired on ${license.expiry_date}. Please contact your Super Administrator to renew.`,
-          daysRemaining,
-        };
-      }
+    // Trial or paid plan expired → block immediately and require purchase (no grace period).
+    if (license.status === "Expired" || isExpiredByTime) {
+      const wasTrial = String(license.plan_code || "").toLowerCase() === "sg_trial"
+        || /trial/i.test(String(license.plan_type || ""))
+        || String(license.payment_status || "").toLowerCase() === "trial";
+      return {
+        allowed: false,
+        license,
+        reason: wasTrial
+          ? "Your 1-day free trial has ended. Purchase a plan to continue using BizOne."
+          : `Your BizOne subscription expired on ${license.expiry_date}. Purchase or renew a plan to continue.`,
+        daysRemaining: Math.min(0, daysRemaining),
+        hoursRemaining: Math.min(0, hoursRemaining),
+        expiresAt: endsAt.toISOString(),
+        trialExpired: wasTrial,
+        requiresPurchase: true,
+      };
     }
 
-    return { allowed: true, license, daysRemaining };
+    return {
+      allowed: true,
+      license,
+      daysRemaining,
+      hoursRemaining,
+      expiresAt: endsAt.toISOString(),
+      trialExpired: false,
+      requiresPurchase: false,
+    };
   } catch (err: any) {
     logger.warn({ err: err?.message, companyId }, "[superadmin-engine] License verification check bypassed on error");
     return { allowed: true };
   }
+}
+
+/** Paid plans available for tenant self-serve purchase (excludes trial). */
+export async function listPurchasablePlans(): Promise<any[]> {
+  await ensureSuperAdminSchema(masterPool);
+  const res = await masterPool.query(
+    `SELECT id, name, code, description, duration, duration_days, price, currency, max_users, modules
+     FROM superadmin_plans
+     WHERE is_active = TRUE AND code <> 'sg_trial'
+     ORDER BY price ASC, id ASC`,
+  );
+  return res.rows;
+}
+
+/**
+ * Tenant purchases a paid plan after trial.
+ * Activates immediately so the app unlocks; payment_status stays Pending until Super Admin confirms.
+ */
+export async function purchasePlanForCompany(opts: {
+  companyId: number;
+  planCode: string;
+  userId?: number;
+  username?: string;
+}): Promise<{ license: any; plan: any }> {
+  await ensureSuperAdminSchema(masterPool);
+  const planRes = await masterPool.query(
+    `SELECT * FROM superadmin_plans WHERE code = $1 AND is_active = TRUE LIMIT 1`,
+    [opts.planCode],
+  );
+  const plan = planRes.rows[0];
+  if (!plan || plan.code === "sg_trial") {
+    throw new Error("Invalid plan selected");
+  }
+
+  const durationDays = Number(plan.duration_days) > 0 ? Number(plan.duration_days) : 365;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+  const licenseKey = generateLicenseKey("BIZ-SG-BUY");
+
+  // Expire any currently Active licenses for this company.
+  await masterPool.query(
+    `UPDATE superadmin_licenses
+     SET status = 'Expired', updated_at = NOW()
+     WHERE company_id = $1 AND status = 'Active'`,
+    [opts.companyId],
+  );
+
+  const ins = await masterPool.query(
+    `INSERT INTO superadmin_licenses (
+      license_key, company_id, plan_id, plan_type, purchase_date, expiry_date, expires_at,
+      is_renewable, status, payment_status, max_users, enabled_modules, notes, created_by
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7, TRUE, 'Active', 'Pending', $8, $9, $10, $11)
+    RETURNING *`,
+    [
+      licenseKey,
+      opts.companyId,
+      plan.id,
+      plan.name,
+      now.toISOString().slice(0, 10),
+      expiresAt.toISOString().slice(0, 10),
+      expiresAt.toISOString(),
+      plan.max_users,
+      JSON.stringify(plan.modules || APP_ALL_MODULES),
+      `Self-serve purchase of ${plan.name} after trial`,
+      opts.userId || null,
+    ],
+  );
+
+  const license = ins.rows[0];
+  await logSuperAdminAction({
+    userId: opts.userId,
+    username: opts.username || "tenant_purchase",
+    action: "tenant_plan_purchased",
+    entityType: "license",
+    entityId: license.id,
+    details: {
+      companyId: opts.companyId,
+      planCode: plan.code,
+      planName: plan.name,
+      price: plan.price,
+      currency: plan.currency,
+      expiresAt: expiresAt.toISOString(),
+    },
+  });
+
+  return { license, plan };
 }
 

@@ -77,7 +77,7 @@ export function getAssistantChat(): AssistantChat {
       _assistantKey = apiKey;
       _assistantBase = baseURL;
     }
-    const model = (process.env.VEDA_MODEL || "").trim() || "qwen";
+    const model = (process.env.VEDA_LLM_MODEL || process.env.VEDA_MODEL || "").trim() || "qwen";
     return { client: _assistant, model, gateway: true };
   }
   return { client: getClient(), model: "gpt-4o", gateway: false };

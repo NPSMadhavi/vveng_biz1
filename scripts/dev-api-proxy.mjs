@@ -2,6 +2,9 @@ import http from "node:http";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const TRANSIENT = new Set(["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOTFOUND", "EAI_AGAIN"]);
+/** Small JSON auth posts are safe to buffer + retry while the API reloads. */
+const RETRYABLE_WRITE =
+  /^\/api\/(auth\/login|auth\/logout|auth\/register|superadmin\/login|maintenance)\b/i;
 
 /** Wait until the API accepts a TCP connection and returns any HTTP response. */
 export function waitForApi(port, timeoutMs = 90_000) {
@@ -43,19 +46,36 @@ function isTransient(err) {
   return TRANSIENT.has(code) || /ECONNREFUSED|socket hang up/i.test(String(err?.message || ""));
 }
 
+async function readRequestBody(req, maxBytes = 64_000) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw Object.assign(new Error("request body too large to buffer"), { code: "EBODYTOOLarge" });
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks);
+}
+
 /**
- * Forward one request to the API. Safe methods are retried with exponential
- * backoff while the API process is down. Writes are never retried.
+ * Forward one request to the API. Safe methods and small auth POSTs are retried
+ * while the API process is reloading after a rebuild.
  */
 export function proxyApiRequest(req, res, port, options = {}) {
-  const budgetMs = options.budgetMs ?? 20_000;
+  const budgetMs = options.budgetMs ?? 45_000;
   const timeoutMs = options.timeoutMs ?? 180_000;
   const method = String(req.method || "GET").toUpperCase();
   const safe = SAFE_METHODS.has(method);
   const path = req.originalUrl || req.url || "/";
+  const retryWrite = !safe && RETRYABLE_WRITE.test(path.split("?")[0] || path);
   const started = Date.now();
   let delay = 300;
   let attempt = 0;
+  let bufferedBody = null;
+  let bodyReady = null;
 
   const sendUnavailable = () => {
     if (res.headersSent || res.writableEnded) return;
@@ -71,9 +91,26 @@ export function proxyApiRequest(req, res, port, options = {}) {
     res.end(body);
   };
 
-  const once = () =>
-    new Promise((resolve, reject) => {
+  const ensureBody = async () => {
+    if (!retryWrite) return null;
+    if (bufferedBody) return bufferedBody;
+    if (!bodyReady) {
+      bodyReady = readRequestBody(req).then((buf) => {
+        bufferedBody = buf;
+        return buf;
+      });
+    }
+    return bodyReady;
+  };
+
+  const once = async () => {
+    const body = await ensureBody();
+    return new Promise((resolve, reject) => {
       const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+      if (body) {
+        headers["content-length"] = String(body.length);
+        delete headers["transfer-encoding"];
+      }
       const proxyReq = http.request(
         {
           hostname: "127.0.0.1",
@@ -100,9 +137,15 @@ export function proxyApiRequest(req, res, port, options = {}) {
         proxyReq.destroy(Object.assign(new Error("upstream timeout"), { code: "ETIMEDOUT" }));
       });
       proxyReq.on("error", reject);
-      if (safe) proxyReq.end();
-      else req.pipe(proxyReq);
+      if (safe) {
+        proxyReq.end();
+      } else if (body) {
+        proxyReq.end(body);
+      } else {
+        req.pipe(proxyReq);
+      }
     });
+  };
 
   const run = async () => {
     for (;;) {
@@ -111,7 +154,11 @@ export function proxyApiRequest(req, res, port, options = {}) {
         await once();
         return;
       } catch (err) {
-        const canRetry = safe && isTransient(err) && attempt < 10 && Date.now() - started < budgetMs;
+        const canRetry =
+          (safe || retryWrite) &&
+          isTransient(err) &&
+          attempt < 12 &&
+          Date.now() - started < budgetMs;
         if (!canRetry) {
           if (!res.headersSent && !res.writableEnded) sendUnavailable();
           return;

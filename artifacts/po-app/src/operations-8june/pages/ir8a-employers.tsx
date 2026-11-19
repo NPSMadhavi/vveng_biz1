@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import { recordVisibleInWorkingYear } from "@/lib/date-range";
 import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
@@ -119,6 +120,7 @@ function SignatureUpload({
 
 export default function Ir8aEmployersPage() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { selectedCompany } = useAuth();
   const [showForm, setShowForm] = useState(false);
@@ -242,7 +244,29 @@ export default function Ir8aEmployersPage() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Employer's (IR8A)</h1>
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (showForm) {
+                closeForm();
+                return;
+              }
+              if (window.history.length > 1) {
+                window.history.back();
+              } else {
+                setLocation("/payroll/ir8a");
+              }
+            }}
+            aria-label="Back"
+            className="h-9 w-9 text-[#2563EB] hover:bg-[#EFF6FF] border border-[#E5E7EB] rounded-lg shadow-sm"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Employer's (IR8A)</h1>
+        </div>
         {!showForm ? (
           <Button type="button" className="gap-2 bg-[#2563EB] hover:bg-[#1D4ED8]" onClick={openForm}>
             <Plus className="h-4 w-4" /> Create Employee

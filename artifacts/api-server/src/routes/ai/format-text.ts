@@ -34,7 +34,7 @@ router.post("/ai/format-text", async (req: any, res: any) => {
   try {
     let formatted = "";
     if (isVedaGatewayConfigured()) {
-      formatted = (await vedaChat(`${SYSTEM_PROMPT}\n\n---\n\nInput HTML:\n${html}`)).trim();
+      formatted = (await vedaChat(`Input HTML:\n${html}`, { systemPrompt: SYSTEM_PROMPT, timeoutMs: 180_000 })).trim();
     } else {
       const completion = await openai.chat.completions.create({
         model: "gpt-5",

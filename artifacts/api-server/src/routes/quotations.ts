@@ -1,9 +1,10 @@
 import { Router, type IRouter } from "express";
 import { db, pool, quotationsTable, invoicesTable, proformaInvoicesTable, vendorInvoicesTable, usersTable, customersTable } from "@workspace/db";
-import { eq, desc, inArray, ilike, and, lt, isNotNull, notInArray } from "drizzle-orm";
+import { eq, desc, inArray, ilike, and, lt, isNotNull, notInArray, sql } from "drizzle-orm";
 import { nextDocNumber } from "../lib/running-numbers.js";
 import { logAudit } from "../lib/audit.js";
 import { postVendorInvoiceJE } from "../lib/vendor-invoice-auto-post.js";
+import { softDeleteById } from "../lib/soft-delete.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -102,8 +103,8 @@ router.get("/quotations/stats", async (req, res): Promise<void> => {
   await expireOverdueQuotations(companyId);
 
   const all = companyId
-    ? await db.select().from(quotationsTable).where(eq(quotationsTable.companyId, companyId))
-    : await db.select().from(quotationsTable);
+    ? await db.select().from(quotationsTable).where(and(eq(quotationsTable.companyId, companyId), sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`))
+    : await db.select().from(quotationsTable).where(sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`);
   const visible = visibilityFilter(all, userId, isAdmin, isExternal);
   res.json({
     total: visible.length,
@@ -125,8 +126,8 @@ router.get("/quotations", async (req, res): Promise<void> => {
   await expireOverdueQuotations(companyId);
 
   const docs = companyId
-    ? await db.select().from(quotationsTable).where(eq(quotationsTable.companyId, companyId)).orderBy(desc(quotationsTable.createdAt))
-    : await db.select().from(quotationsTable).orderBy(desc(quotationsTable.createdAt));
+    ? await db.select().from(quotationsTable).where(and(eq(quotationsTable.companyId, companyId), sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`)).orderBy(desc(quotationsTable.createdAt))
+    : await db.select().from(quotationsTable).where(sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`).orderBy(desc(quotationsTable.createdAt));
   const visible = visibilityFilter(docs, userId, isAdmin, isExternal).map(parseDoc);
   res.json(await withUsernames(visible));
 });
@@ -190,12 +191,12 @@ router.get("/quotations/:id", async (req, res): Promise<void> => {
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
 
   await ensureManpowerDetails();
-  const [existing] = await db.select().from(quotationsTable).where(eq(quotationsTable.id, id));
+  const [existing] = await db.select().from(quotationsTable).where(and(eq(quotationsTable.id, id), sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`));
   if (!existing) { res.status(404).json({ error: "Quotation not found" }); return; }
 
   await expireOverdueQuotations(existing.companyId);
 
-  const [doc] = await db.select().from(quotationsTable).where(eq(quotationsTable.id, id));
+  const [doc] = await db.select().from(quotationsTable).where(and(eq(quotationsTable.id, id), sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`));
   if (!doc) { res.status(404).json({ error: "Quotation not found" }); return; }
 
   const userId = req.session.userId!;
@@ -251,7 +252,9 @@ router.put("/quotations/:id", async (req, res): Promise<void> => {
     subtotal: subtotal.toFixed(2), discountAmount: docDiscount.toFixed(2),
     tax: taxAmt.toFixed(2), totalAmount: totalAmount.toFixed(2),
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
-    manpowerDetails: manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : existing.manpowerDetails ?? null,
+    manpowerDetails: manpowerDetails !== undefined
+      ? (manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null)
+      : existing.manpowerDetails ?? null,
   };
   if (currency !== undefined) updateData.currency = currency;
   if (isPrivate !== undefined) updateData.isPrivate = isPrivate === true;
@@ -507,8 +510,16 @@ router.delete("/quotations/:id", async (req, res): Promise<void> => {
   const isExternal = req.session.userRole === "external";
   if (!isAdmin) { res.status(403).json({ error: "Only administrators can delete quotations" }); return; }
   const id = parseInt(req.params.id);
-  const [deleted] = await db.delete(quotationsTable).where(eq(quotationsTable.id, id)).returning();
-  logAudit({ req, action: "delete", entityType: "quotation", entityId: id, entityLabel: deleted?.qtNumber });
+  const companyId = req.session.companyId;
+  const [existing] = await db.select().from(quotationsTable).where(and(
+    eq(quotationsTable.id, id),
+    sql`COALESCE(${quotationsTable.isDeleted}, 0) = 0`,
+    ...(companyId ? [eq(quotationsTable.companyId, companyId)] : []),
+  ));
+  if (!existing) { res.status(404).json({ error: "Quotation not found" }); return; }
+  const ok = await softDeleteById(pool, "quotations", { id, companyId: existing.companyId });
+  if (!ok) { res.status(404).json({ error: "Quotation not found" }); return; }
+  logAudit({ req, action: "delete", entityType: "quotation", entityId: id, entityLabel: existing.qtNumber });
   res.json({ success: true });
 });
 

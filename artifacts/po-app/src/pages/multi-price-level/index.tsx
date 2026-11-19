@@ -15,7 +15,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
-import { ArrowLeft, BarChart3, CalendarDays, Check, ChevronRight, Download, FileDown, FileSpreadsheet, FileText, Layers3, Package, Pencil, Plus, Printer, Search, ShieldCheck, Trash2, Upload, UserCheck, UserRound, UsersRound } from "lucide-react";
+import { ArrowLeft, BarChart3, CalendarDays, Check, ChevronDown, ChevronRight, Download, FileDown, FileSpreadsheet, FileText, Layers3, Package, Pencil, Plus, Printer, Search, ShieldCheck, Trash2, Upload, UserCheck, UserRound, UsersRound } from "lucide-react";
 import { useSalesPersons } from "@/hooks/use-sales-persons";
 
 type PriceLevel = { id: string; name: string; description: string; color: string; active: boolean };
@@ -340,16 +340,21 @@ function SavedInvoiceTable({ invoices, onManagement, onDelete, onEdit, onPreview
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2 border-slate-300">
-                <Download className="h-4 w-4" /> Export
+              <Button
+                variant="outline"
+                className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
+              >
+                <Download className="h-4 w-4" />
+                Export
+                <ChevronDown className="h-4 w-4 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={exportToExcel} className="gap-2 cursor-pointer">
-                <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Excel
+            <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+              <DropdownMenuItem onClick={exportToExcel} className="cursor-pointer px-2.5 py-1 text-sm">
+                Excel
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={exportToPdf} className="gap-2 cursor-pointer">
-                <FileText className="h-4 w-4 text-red-600" /> PDF
+              <DropdownMenuItem onClick={exportToPdf} className="cursor-pointer px-2.5 py-1 text-sm">
+                PDF
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

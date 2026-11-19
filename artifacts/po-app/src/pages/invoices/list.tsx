@@ -6,7 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link, useSearch } from "wouter";
+import { Link, useSearch, useLocation } from "wouter";
+import { filterDocsByManpowerScope, isManpowerPath } from "@/lib/doc-manpower";
 import { Search, Plus, ArrowRight, MailCheck, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -65,6 +66,8 @@ const ACTIVE_STATUSES = new Set(["confirmed", "sent", "draft", "partial"]);
 
 export default function InvoiceList() {
   const { setLocation, href } = useDocNav();
+  const [location] = useLocation();
+  const manpowerScope = isManpowerPath(location);
   const searchString = useSearch();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
@@ -89,18 +92,23 @@ export default function InvoiceList() {
     query: { queryKey: getListInvoicesQueryKey() },
   });
 
+  const scopedDocs = useMemo(
+    () => filterDocsByManpowerScope(docs as any[], manpowerScope),
+    [docs, manpowerScope],
+  );
+
   const currentYear = Math.max(new Date().getFullYear(), workingYear.year);
 
   // Apply date filter using issueDate (falls back to createdAt)
   const filteredByDate = useMemo(() => {
     if (filterMode === "all") {
       return workingYear.active
-        ? docs.filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to))
-        : docs;
+        ? scopedDocs.filter((d) => isoInBounds((d as any).issueDate || d.createdAt, workingYear.from, workingYear.to))
+        : scopedDocs;
     }
     if (filterMode === "custom") {
-      if (!customFrom && !customTo) return docs;
-      return docs.filter(d => {
+      if (!customFrom && !customTo) return scopedDocs;
+      return scopedDocs.filter(d => {
         const dateStr = ((d as any).issueDate || d.createdAt || "").slice(0, 10);
         if (!dateStr) return false;
         if (customFrom && dateStr < customFrom) return false;
@@ -110,17 +118,17 @@ export default function InvoiceList() {
     }
     const qIdx = ["q1", "q2", "q3", "q4"].indexOf(filterMode);
     const months = QUARTERS[qIdx].months;
-    return docs.filter(d => {
+    return scopedDocs.filter(d => {
       const dateStr = (d as any).issueDate || d.createdAt;
       if (!dateStr) return false;
       const date = new Date(dateStr);
       return date.getFullYear() === filterYear && months.includes(date.getMonth());
     });
-  }, [docs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
+  }, [scopedDocs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   // Search on top of date filter
-  const getPartyName = (d: (typeof docs)[number]) => d.customerName || "";
-  const bulk = useBulkPartyEmail<(typeof docs)[number]>({ allDocs: docs, dateFiltered: filteredByDate, getPartyName });
+  const getPartyName = (d: (typeof scopedDocs)[number]) => d.customerName || "";
+  const bulk = useBulkPartyEmail<(typeof scopedDocs)[number]>({ allDocs: scopedDocs, dateFiltered: filteredByDate, getPartyName });
 
   const filtered = useMemo(() =>
     filteredByDate.filter(d => {

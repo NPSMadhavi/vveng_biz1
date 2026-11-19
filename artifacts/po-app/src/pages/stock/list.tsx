@@ -679,19 +679,21 @@ export default function StockList() {
             </Select>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button type="button" variant="outline" className="h-10 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 gap-2 border-[#E5E7EB] bg-white px-3 text-sm text-[#374151] hover:bg-[#F9FAFB] shadow-sm"
+                >
                   <Download className="h-4 w-4" />
                   Export
-                  <ChevronDown className="h-4 w-4 opacity-70" />
+                  <ChevronDown className="h-4 w-4 opacity-60" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem className="gap-2" onSelect={exportExcel}>
-                  <FileSpreadsheet className="h-4 w-4" />
+              <DropdownMenuContent align="end" className="w-[var(--radix-dropdown-menu-trigger-width)] !min-w-[var(--radix-dropdown-menu-trigger-width)] p-0.5">
+                <DropdownMenuItem className="cursor-pointer px-2.5 py-1 text-sm" onSelect={exportExcel}>
                   Excel
                 </DropdownMenuItem>
-                <DropdownMenuItem className="gap-2" onSelect={() => void exportPdf()}>
-                  <FileText className="h-4 w-4" />
+                <DropdownMenuItem className="cursor-pointer px-2.5 py-1 text-sm" onSelect={() => void exportPdf()}>
                   PDF
                 </DropdownMenuItem>
               </DropdownMenuContent>

@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { FiEye, FiEyeOff } from "react-icons/fi";
+import {
+  BarChart3,
+  ClipboardCheck,
+  LineChart,
+  Package,
+  ShieldCheck,
+  Users,
+  Zap,
+} from "lucide-react";
 import { useLogin, getGetMeQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/auth-context";
@@ -8,54 +17,34 @@ import { useToast } from "@/hooks/use-toast";
 import { markBrowserSessionLive } from "@/lib/browser-session";
 import {
   AuthMobileShell,
-  AuthSlideDots,
   RequiredMark,
   authMobileInputClass,
   authMobileLabelClass,
   authMobilePasswordInputClass,
 } from "@/components/auth/AuthMobileShell";
 import { ForgotPasswordForm } from "@/components/auth/ForgotPasswordForm";
-import logo from "@assets/bizone_logo_optimized.webp";
-import Advanced from "@assets/Advanced.png";
-import SecureBusiness from "@assets/SecureBusiness.png";
-import Multitenant from "@assets/Multitenant.png";
 import keyTypeUrl from "@/assets/sounds/key-type.wav";
 import signInDoorUrl from "@/assets/sounds/sign-in-door.wav";
-
-const slides = [
-  {
-    title: "Advanced reporting",
-    subtitle: "Real-time analytics and insights for informed decision making",
-    image: Advanced,
-  },
-  {
-    title: "Secure Business Management",
-    subtitle: "Track and manage enterprise assets with role-based access control",
-    image: SecureBusiness,
-  },
-  {
-    title: "Multi - tenant architecture",
-    subtitle: "Support multiple organizations with isolated data with customizable features",
-    image: Multitenant,
-  },
-];
+import loginOfficeBg from "@/assets/login-office-bg.jpg";
+import bizoneLogo from "@assets/bizone_logo_optimized.webp";
 
 const SIGN_IN_SUBTITLE =
-  "Welcome back! Sign in to access your account with your registered username or email address";
+  "Welcome back! Sign in to access your account with your registered username or email address.";
+
+const FEATURES = [
+  { label: "Sales & CRM", Icon: ClipboardCheck },
+  { label: "Inventory Management", Icon: Package },
+  { label: "Reports & Analytics", Icon: BarChart3 },
+  { label: "HR & Accounts", Icon: Users },
+] as const;
+
+const BENEFITS = [
+  { label: "Faster Productivity", Icon: Zap },
+  { label: "Higher Security", Icon: ShieldCheck },
+  { label: "Better Business Insights", Icon: LineChart },
+] as const;
 
 type DoorPhase = "closed" | "opening" | "walking" | "entering" | "closing" | "done";
-
-function playKeyClick() {
-  const audio = new Audio(keyTypeUrl);
-  audio.volume = 0.85;
-  void audio.play().catch(() => {});
-}
-
-function isTypingKey(event: React.KeyboardEvent<HTMLInputElement>) {
-  if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return false;
-  if (event.key === "Backspace" || event.key === "Delete") return true;
-  return event.key.length === 1;
-}
 
 function SignInDoor({ phase, snap = false }: { phase: DoorPhase; snap?: boolean }) {
   const open = phase === "opening" || phase === "walking" || phase === "entering";
@@ -87,6 +76,18 @@ function SignInDoor({ phase, snap = false }: { phase: DoorPhase; snap?: boolean 
   );
 }
 
+function playKeyClick() {
+  const audio = new Audio(keyTypeUrl);
+  audio.volume = 0.85;
+  void audio.play().catch(() => {});
+}
+
+function isTypingKey(event: React.KeyboardEvent<HTMLInputElement>) {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return false;
+  if (event.key === "Backspace" || event.key === "Delete") return true;
+  return event.key.length === 1;
+}
+
 function useAuthPageFont() {
   useEffect(() => {
     document.documentElement.classList.add("auth-page");
@@ -103,7 +104,6 @@ export default function Login() {
   const queryClient = useQueryClient();
   const loginMutation = useLogin();
 
-  const [active, setActive] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [form, setForm] = useState({ email: "", password: "" });
@@ -123,13 +123,6 @@ export default function Login() {
   const doorDone = useRef<Promise<void> | null>(null);
   const doorTimers = useRef<number[]>([]);
   const doorAudio = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setActive((prev) => (prev + 1) % slides.length);
-    }, 4500);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!isLoading && user && !holdRedirect.current) {
@@ -268,113 +261,159 @@ export default function Login() {
     return null;
   }
 
-  const slide = slides[active];
-  const loading = loginMutation.isPending;
+  const loading = loginMutation.isPending || door !== "closed";
   const pageSubtitle = panel === "login" ? SIGN_IN_SUBTITLE : forgotHeading.subtitle;
 
   const fieldErrorClass = "mb-0 mt-1 text-[0.8rem] font-medium text-red-600";
-  const inputErrorRing = "border-red-500 focus:border-red-500 focus:ring-red-200";
+  const desktopInputClass =
+    "w-full h-11 rounded-[10px] border border-gray-200 bg-[#f8fafc] px-3 text-[0.9rem] text-[#101828] outline-none transition placeholder:text-gray-400 focus:border-blue-300 focus:shadow-[0_0_0_3px_rgba(37,99,235,0.12)]";
+  const desktopPasswordClass =
+    "w-full h-11 rounded-[10px] border border-gray-200 bg-[#f8fafc] pl-3 pr-[42px] text-[0.9rem] text-[#101828] outline-none transition placeholder:text-gray-400 focus:border-blue-300 focus:shadow-[0_0_0_3px_rgba(37,99,235,0.12)]";
+  const inputErrorRing = "border-red-500 focus:border-red-500 focus:shadow-[0_0_0_3px_rgba(239,68,68,0.15)]";
 
-  const loginForm = (
-    <form className="flex flex-col gap-5" onSubmit={handleSubmit} data-allow-autofill="true" autoComplete="on">
-      <label className="flex min-w-0 flex-col gap-2">
-        <span className={authMobileLabelClass}>Email Address<RequiredMark /></span>
-        <input
-          type="email"
-          name="email"
-          placeholder="Enter your email address"
-          value={form.email}
-          onChange={handleChange}
-          onKeyDown={(event) => {
-            if (isTypingKey(event)) playKeyClick();
-          }}
-          autoComplete="email"
-          data-allow-autofill="true"
-          aria-invalid={Boolean(fieldErrors.email)}
-          className={`${authMobileInputClass}${fieldErrors.email ? ` ${inputErrorRing}` : ""}`}
-          style={{ fontFamily: "Poppins, sans-serif" }}
-        />
-        {fieldErrors.email ? <p className={fieldErrorClass}>{fieldErrors.email}</p> : null}
-      </label>
+  const loginFormFields = (variant: "mobile" | "desktop") => {
+    const labelClass = variant === "mobile" ? authMobileLabelClass : "text-[0.9rem] font-semibold text-[#101828]";
+    const emailClass =
+      variant === "mobile"
+        ? `${authMobileInputClass}${fieldErrors.email ? ` ${inputErrorRing}` : ""}`
+        : `${desktopInputClass}${fieldErrors.email ? ` ${inputErrorRing}` : ""}`;
+    const passwordClass =
+      variant === "mobile"
+        ? `${authMobilePasswordInputClass}${fieldErrors.password ? ` ${inputErrorRing}` : ""}`
+        : `${desktopPasswordClass}${fieldErrors.password ? ` ${inputErrorRing}` : ""}`;
 
-      <label className="flex min-w-0 flex-col gap-2">
-        <span className={authMobileLabelClass}>Password<RequiredMark /></span>
-        <div className="relative flex items-center">
+    return (
+      <form
+        className={`flex flex-col ${variant === "desktop" ? "gap-3.5" : "gap-5"}`}
+        onSubmit={handleSubmit}
+        data-allow-autofill="true"
+        autoComplete="on"
+      >
+        <label className={`flex min-w-0 flex-col ${variant === "desktop" ? "gap-1.5" : "gap-2"}`}>
+          <span className={labelClass}>
+            Email Address
+            <RequiredMark />
+          </span>
           <input
-            type={showPassword ? "text" : "password"}
-            name="password"
-            placeholder="Type your password"
-            value={form.password}
+            type="email"
+            name="email"
+            placeholder="Enter your email address"
+            value={form.email}
             onChange={handleChange}
             onKeyDown={(event) => {
               if (isTypingKey(event)) playKeyClick();
             }}
-            autoComplete="current-password"
+            autoComplete="email"
             data-allow-autofill="true"
-            aria-invalid={Boolean(fieldErrors.password)}
-            className={`${authMobilePasswordInputClass}${fieldErrors.password ? ` ${inputErrorRing}` : ""}`}
+            aria-invalid={Boolean(fieldErrors.email)}
+            className={emailClass}
             style={{ fontFamily: "Poppins, sans-serif" }}
           />
+          {fieldErrors.email ? <p className={fieldErrorClass}>{fieldErrors.email}</p> : null}
+        </label>
+
+        <label className={`flex min-w-0 flex-col ${variant === "desktop" ? "gap-1.5" : "gap-2"}`}>
+          <span className={labelClass}>
+            Password
+            <RequiredMark />
+          </span>
+          <div className="relative flex items-center">
+            <input
+              type={showPassword ? "text" : "password"}
+              name="password"
+              placeholder="Enter your password"
+              value={form.password}
+              onChange={handleChange}
+              onKeyDown={(event) => {
+                if (isTypingKey(event)) playKeyClick();
+              }}
+              autoComplete="current-password"
+              data-allow-autofill="true"
+              aria-invalid={Boolean(fieldErrors.password)}
+              className={passwordClass}
+              style={{ fontFamily: "Poppins, sans-serif" }}
+            />
+            <button
+              type="button"
+              className="absolute right-3 cursor-pointer border-0 bg-transparent p-1 text-[1.1rem] text-gray-400 hover:text-gray-600"
+              onClick={() => setShowPassword((prev) => !prev)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? <FiEyeOff /> : <FiEye />}
+            </button>
+          </div>
+          {fieldErrors.password ? <p className={fieldErrorClass}>{fieldErrors.password}</p> : null}
+        </label>
+
+        <div className="flex items-center justify-between gap-3">
+          <label className="inline-flex cursor-pointer select-none items-center gap-2 text-[0.88rem] text-[#101828]">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-[15px] w-[15px] accent-blue-600"
+            />
+            <span>Remember me</span>
+          </label>
           <button
             type="button"
-            className="absolute right-3 cursor-pointer border-0 bg-transparent p-1 text-[1.1rem] text-gray-400 hover:text-gray-500"
-            onClick={() => setShowPassword((prev) => !prev)}
-            aria-label={showPassword ? "Hide password" : "Show password"}
+            className="cursor-pointer border-0 bg-transparent p-0 text-[0.88rem] font-semibold text-blue-600 hover:underline"
+            onClick={() => setPanel("forgot")}
           >
-            {showPassword ? <FiEyeOff /> : <FiEye />}
+            Forgot Password?
           </button>
         </div>
-        {fieldErrors.password ? <p className={fieldErrorClass}>{fieldErrors.password}</p> : null}
-      </label>
 
-      <div className="flex items-center justify-between gap-3">
-        <label className="inline-flex cursor-pointer select-none items-center gap-2 text-[0.88rem] text-[#101828]">
-          <input
-            type="checkbox"
-            checked={rememberMe}
-            onChange={(e) => setRememberMe(e.target.checked)}
-            className="h-[15px] w-[15px] accent-blue-600"
-          />
-          <span>Remember me</span>
-        </label>
-        <button
-          type="button"
-          className="cursor-pointer border-0 bg-transparent p-0 text-[0.88rem] font-semibold text-blue-600 hover:underline"
-          onClick={() => setPanel("forgot")}
+        <div>
+          <button
+            type="submit"
+            disabled={loading || door !== "closed"}
+            className="relative flex h-14 w-full cursor-pointer items-center rounded-[10px] border-0 bg-blue-600 pl-4 pr-2 text-[0.95rem] font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-90"
+            style={{ fontFamily: "Poppins, sans-serif" }}
+          >
+            <span className="flex-1 text-center">Sign in</span>
+            <SignInDoor phase={door} snap={doorSnap} />
+          </button>
+          {door === "done" ? (
+            <p className="mb-0 mt-2 text-center text-sm font-medium text-gray-500">Welcome back!</p>
+          ) : door !== "closed" ? (
+            <p className="mb-0 mt-2 text-center text-sm font-medium text-blue-600">Signing you in...</p>
+          ) : null}
+        </div>
+
+        <p
+          className={`mb-0 text-center text-[0.9rem] text-gray-600 ${
+            variant === "desktop" ? "mt-5 shrink-0" : "mt-1"
+          }`}
         >
-          Forgot Password
-        </button>
-      </div>
+          Don&apos;t have an account?{" "}
+          <Link href="/register" className="font-semibold text-blue-600 no-underline hover:underline">
+            Sign Up
+          </Link>
+        </p>
+      </form>
+    );
+  };
 
-      <div>
-        <button
-          type="submit"
-          disabled={loading || door !== "closed"}
-          className="relative flex h-14 w-full cursor-pointer items-center rounded-[10px] border-0 bg-blue-600 pl-4 pr-2 text-[0.95rem] font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-90"
-          style={{ fontFamily: "Poppins, sans-serif" }}
-        >
-          <span className="flex-1 text-center">Sign in</span>
-          <SignInDoor phase={door} snap={doorSnap} />
-        </button>
-        {door === "done" ? (
-          <p className="mb-0 mt-2 text-center text-sm font-medium text-gray-500">Welcome back!</p>
-        ) : door !== "closed" ? (
-          <p className="mb-0 mt-2 text-center text-sm font-medium text-blue-600">Signing you in...</p>
-        ) : null}
-      </div>
-
-      <p className="mb-0 mt-1 text-center text-[0.9rem] text-gray-600">
-        Don&apos;t Have an account?{" "}
-        <Link href="/register" className="font-semibold text-blue-600 no-underline hover:underline">
-          Sign up
-        </Link>
-      </p>
-    </form>
-  );
-
-  const formBody =
+  const formBodyMobile =
     panel === "login" ? (
-      loginForm
+      loginFormFields("mobile")
+    ) : (
+      <ForgotPasswordForm
+        onHeading={setForgotHeadingStable}
+        onBack={() => setPanel("login")}
+        onReset={(email) => {
+          if (email) setForm((prev) => ({ ...prev, email, password: "" }));
+          else setForm((prev) => ({ ...prev, password: "" }));
+          setPanel("login");
+          toast({ title: "Password reset. Sign in with your new 8-digit password." });
+        }}
+      />
+    );
+
+  const formBodyDesktop =
+    panel === "login" ? (
+      loginFormFields("desktop")
     ) : (
       <ForgotPasswordForm
         onHeading={setForgotHeadingStable}
@@ -490,76 +529,157 @@ export default function Login() {
           border-radius: 2px;
           background: #fff;
         }
+
+        @keyframes login-fade-in {
+          from { opacity: 0; transform: scale(0.92); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes login-from-left {
+          from { opacity: 0; transform: translateX(-48px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        /* Start on the laptop screen (center), fly out to the left list */
+        @keyframes login-from-laptop {
+          0% {
+            opacity: 0;
+            transform: translate(210px, 70px) scale(0.2);
+            filter: blur(5px);
+          }
+          35% {
+            opacity: 1;
+            filter: blur(0);
+          }
+          100% {
+            opacity: 1;
+            transform: translate(0, 0) scale(1);
+            filter: blur(0);
+          }
+        }
+        @keyframes login-benefits-in {
+          from { opacity: 0; transform: translateY(14px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .login-anim-logo {
+          opacity: 0;
+          animation: login-fade-in 0.55s ease-out 0.05s forwards;
+        }
+        .login-anim-from-left {
+          opacity: 0;
+          animation: login-from-left 0.6s ease-out forwards;
+        }
+        .login-anim-headline { animation-delay: 0.28s; }
+        .login-anim-sub { animation-delay: 0.48s; }
+        .login-anim-from-laptop {
+          opacity: 0;
+          will-change: transform, opacity, filter;
+          animation: login-from-laptop 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .login-anim-feature-0 { animation-delay: 0.85s; }
+        .login-anim-feature-1 { animation-delay: 1.15s; }
+        .login-anim-feature-2 { animation-delay: 1.45s; }
+        .login-anim-feature-3 { animation-delay: 1.75s; }
+        .login-anim-benefits {
+          opacity: 0;
+          animation: login-benefits-in 0.5s ease-out 2.15s forwards;
+        }
       `}</style>
       <AuthMobileShell
-        title={panel === "login" ? "Sign in" : forgotHeading.title}
+        title={panel === "login" ? "Sign In" : forgotHeading.title}
         subtitle={pageSubtitle}
-        footer={
-          <AuthSlideDots count={slides.length} active={active} onSelect={setActive} />
-        }
       >
-        {formBody}
+        {formBodyMobile}
       </AuthMobileShell>
 
+      {/* Desktop: 80% canvas × 1.25 scale = 125% look at browser 100% */}
       <div
-        className="auth-page hidden h-screen min-[901px]:flex items-center justify-center overflow-hidden px-[100px] py-4 max-[1100px]:px-10"
-        style={{
-          background: "linear-gradient(120deg, #071536 0%, #0d2f7a 42%, #1d4ed8 100%)",
-          fontFamily: "Poppins, sans-serif",
-        }}
+        className="auth-page fixed inset-0 z-10 hidden overflow-hidden min-[901px]:block"
+        style={{ fontFamily: "Poppins, sans-serif" }}
       >
-        <div className="grid h-full w-full max-w-[1240px] grid-cols-2 items-center">
-          <aside className="flex items-center justify-start py-4 pl-0 pr-4">
-            <div className="w-full max-w-[560px] text-left text-white">
-              <div className="w-[min(460px,100%)]">
+        <div
+          className="relative origin-top-left"
+          style={{ width: "80vw", height: "80vh", transform: "scale(1.25)" }}
+        >
+          <div
+            className="pointer-events-none absolute inset-0 bg-cover bg-center bg-no-repeat"
+            style={{ backgroundImage: `url(${loginOfficeBg})` }}
+            aria-hidden
+          />
+
+          {/* Left content — entrance animations */}
+          <div className="relative z-10 flex h-full w-full flex-col pb-8 pl-12 pr-[min(540px,42%)] pt-12 xl:pl-14 xl:pt-14">
+            <aside className="flex min-h-0 flex-1 flex-col">
+              <div className="max-w-[520px]">
                 <img
-                  src={slide.image}
-                  alt={slide.title}
-                  className="mb-5 h-auto w-full animate-[floatY_4.5s_ease-in-out_infinite] object-contain"
+                  src={bizoneLogo}
+                  alt="BizOne"
+                  className="login-anim-logo mb-8 block h-[4.75rem] w-auto object-contain object-left"
                 />
-                <h2 className="m-0 mb-3 text-center text-[clamp(1.45rem,2.1vw,1.9rem)] leading-none tracking-tight whitespace-nowrap">
-                  {slide.title}
-                </h2>
-                <p className="m-0 text-center text-[1.05rem] leading-relaxed text-white/80">
-                  {slide.subtitle}
+
+                <h1 className="login-anim-from-left login-anim-headline m-0 text-[clamp(2.5rem,3.8vw,3.35rem)] font-extrabold leading-[1.12] tracking-tight">
+                  <span className="block whitespace-nowrap text-[#0B1F44]">Smarter Business.</span>
+                  <span className="block whitespace-nowrap text-[#2563EB]">Greater Growth.</span>
+                </h1>
+                <p className="login-anim-from-left login-anim-sub mt-4 max-w-[420px] text-[1.2rem] font-medium leading-[1.55] text-[#64748B]">
+                  Powerful ERP Solution to Manage,
+                  <br />
+                  Automate and Grow Your Business.
                 </p>
-                <div className="mt-6 flex w-full items-center justify-center gap-2.5">
-                  {slides.map((_, index) => (
-                    <button
-                      key={index}
-                      type="button"
-                      aria-label={`Slide ${index + 1}`}
-                      onClick={() => setActive(index)}
-                      className={`h-2.5 w-2.5 cursor-pointer rounded-full border-0 p-0 transition ${
-                        index === active ? "scale-110 bg-white" : "bg-white/40"
+
+                {/* Same place as before — animate in from the laptop, then settle here */}
+                <ul className="mt-8 max-w-[250px] space-y-0 overflow-visible">
+                  {FEATURES.map(({ label, Icon }, index) => (
+                    <li
+                      key={label}
+                      className={`login-anim-from-laptop login-anim-feature-${index} flex items-center gap-3.5 py-[11px] ${
+                        index < FEATURES.length - 1 ? "border-b border-[#CBD5E1]/75" : ""
                       }`}
-                    />
+                    >
+                      <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[10px] border border-[#93C5FD] bg-white/95 text-[#2563EB] shadow-sm">
+                        <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                      </span>
+                      <span className="text-[0.98rem] font-semibold text-[#0B1F44]">{label}</span>
+                    </li>
                   ))}
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          <section className="flex items-center justify-center p-4">
-            <div className={`flex w-full max-w-[520px] flex-col overflow-y-auto rounded-[22px] bg-white px-10 py-9 shadow-[0_24px_60px_rgba(2,12,40,0.28)] ${panel === "login" ? "h-[620px]" : ""}`}>
-              <div className="mb-6">
-                <Link href="/">
-                  <img
-                    src={logo}
-                    alt="BizOne"
-                    className="block h-12 w-auto cursor-pointer object-contain"
-                  />
-                </Link>
+                </ul>
               </div>
 
-              <h1 className="text-Poppins m-0 mb-2 text-[1.85rem] tracking-tight text-[#101828]">
-                {panel === "login" ? "Sign In" : forgotHeading.title}
-              </h1>
-              <p className="m-0 mb-6 text-[0.9rem] leading-relaxed text-gray-500">
-                {pageSubtitle}
-              </p>
+              <div className="login-anim-benefits mt-auto flex flex-nowrap items-center gap-x-4 pb-1 pt-10 whitespace-nowrap">
+                {BENEFITS.map(({ label, Icon }, index) => (
+                  <div key={label} className="flex shrink-0 items-center gap-3">
+                    {index > 0 ? (
+                      <span className="mr-1 h-6 w-px shrink-0 bg-[#94A3B8]/65" aria-hidden />
+                    ) : null}
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#93C5FD] bg-white/95 text-[#2563EB]">
+                        <Icon className="h-3.5 w-3.5" strokeWidth={1.8} />
+                      </span>
+                      <span className="text-[0.82rem] font-semibold text-[#0B1F44]">
+                        <span className="text-[#2563EB]">{label.split(" ")[0]}</span>{" "}
+                        {label.split(" ").slice(1).join(" ")}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          </div>
 
-              {formBody}
+          {/* Auth box — after laptop/cup; original 520×580 size (same for Sign Up) */}
+          <section
+            className="absolute top-1/2 z-20 -translate-y-1/2"
+            style={{ left: "62%", right: "2%" }}
+          >
+            <div className="ml-auto flex w-[520px] max-w-full flex-col rounded-[22px] bg-white px-10 pb-8 pt-9 shadow-[0_24px_60px_rgba(2,12,40,0.28)]">
+              <div className="mb-5 shrink-0 text-center">
+                <h2 className="m-0 text-[1.85rem] font-bold tracking-tight text-[#101828]">
+                  {panel === "login" ? "Sign In" : forgotHeading.title}
+                </h2>
+                <p className="mx-auto mt-2 max-w-[380px] text-[0.9rem] leading-relaxed text-gray-500">
+                  {pageSubtitle}
+                </p>
+              </div>
+              <div className="flex flex-col">{formBodyDesktop}</div>
             </div>
           </section>
         </div>

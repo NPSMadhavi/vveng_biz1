@@ -7,7 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Link, useSearch } from "wouter";
+import { Link, useSearch, useLocation } from "wouter";
+import { filterDocsByManpowerScope, isManpowerPath } from "@/lib/doc-manpower";
 import { Search, Plus, MailCheck, CheckCircle2, MoreHorizontal, Eye, Pencil, FileText, Receipt, Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { usePagination } from "@/hooks/use-pagination";
@@ -55,6 +56,8 @@ function SentToCell({ emailSentTo }: { emailSentTo?: string | null }) {
 
 export default function QuotationList() {
   const { setLocation, href } = useDocNav();
+  const [location] = useLocation();
+  const manpowerScope = isManpowerPath(location);
   const searchString = useSearch();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
@@ -97,8 +100,13 @@ export default function QuotationList() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const scopedDocs = useMemo(
+    () => filterDocsByManpowerScope(docs as any[] | undefined, manpowerScope),
+    [docs, manpowerScope],
+  );
+
   const filteredByDate = useMemo(() => {
-    const all = docs ?? [];
+    const all = scopedDocs;
     if (filterMode === "all") {
       return workingYear.active ? all.filter((d) => isoInBounds(d.issueDate || d.createdAt, workingYear.from, workingYear.to)) : all;
     }
@@ -118,10 +126,10 @@ export default function QuotationList() {
       const dt = new Date(d.createdAt);
       return dt.getFullYear() === filterYear && months.includes(dt.getMonth());
     });
-  }, [docs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
+  }, [scopedDocs, filterMode, filterYear, customFrom, customTo, workingYear.active, workingYear.from, workingYear.to]);
 
   const getPartyName = (d: { customerName?: string }) => d.customerName || "";
-  const bulk = useBulkPartyEmail({ allDocs: docs ?? [], dateFiltered: filteredByDate, getPartyName });
+  const bulk = useBulkPartyEmail({ allDocs: scopedDocs, dateFiltered: filteredByDate, getPartyName });
 
   const filtered = useMemo(() => filteredByDate.filter((d) => {
     if (statusFilter && d.status !== statusFilter) return false;

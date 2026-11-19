@@ -85,12 +85,14 @@ export default function EmployeeEditPage() {
             <Button
               type="button"
               variant="outline"
+              size="icon"
               className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
               onClick={() => setDeleteOpen(true)}
               disabled={deleteEmployeeMutation.isPending}
+              aria-label="Delete employee"
+              title="Delete"
             >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
+              <Trash2 className="h-4 w-4" />
             </Button>
             <div className="flex gap-3">
               <ModalCancelButton onClick={goBack} />

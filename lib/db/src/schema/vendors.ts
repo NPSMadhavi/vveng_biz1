@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, timestamp, integer, smallint } from "drizzle-orm/pg-core";
 import { companiesTable } from "./companies";
 
 export const vendorsTable = pgTable("vendors", {
@@ -16,6 +16,8 @@ export const vendorsTable = pgTable("vendors", {
   gstNo: text("gst_no"),
   usageType: text("usage_type").notNull().default("general"),
   isActive: boolean("is_active").notNull().default(true),
+  /** Soft delete: 0 = visible in app, 1 = hidden (row kept in DB). */
+  isDeleted: smallint("is_deleted").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
