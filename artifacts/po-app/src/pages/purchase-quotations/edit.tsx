@@ -135,7 +135,7 @@ export default function PurchaseQuotationEdit() {
         notes: doc.notes || "",
         currency: doc.currency || "SGD",
         status: doc.status as any,
-        manpowerDetails: { ...emptyManpowerDetails, ...((doc as any).manpowerDetails || {}) },
+        manpowerDetails: { ...emptyManpowerDetails, ...((doc as any).manpowerDetails || {}), source: "supplier" },
         tax: derivedTaxPct,
         discountAmount: Number((doc as any).discountAmount) || 0,
         isPrivate: (doc as any).isPrivate ?? false,
@@ -481,6 +481,7 @@ export default function PurchaseQuotationEdit() {
             {isManpower && (
               <ManpowerRequirementsCard
                 control={form.control}
+                supplierOnly
                 onAddLine={(line) => {
                   const current = form.getValues("items") || [];
                   const onlyBlank = current.length === 1

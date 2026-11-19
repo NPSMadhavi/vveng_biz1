@@ -6,6 +6,7 @@ export type VendorInvoiceLineItem = {
   partNumber: string;
   description: string;
   qty: number;
+  hours?: string;
   unitPrice: number;
   discount: number;
   uom?: string;
@@ -26,16 +27,26 @@ export function getUomOptions() {
   return UOM_OPTIONS;
 }
 
-export function calcViLineAmount(qty: number, unitPrice: number, discount: number, isFoc?: boolean): number {
+export function calcViLineAmount(
+  qty: number,
+  unitPrice: number,
+  discount: number,
+  isFoc?: boolean,
+  hours?: number | string,
+  uom?: string,
+): number {
   if (isFoc) return 0;
-  const base = qty * unitPrice;
+  const hrs = Number(hours) || 0;
+  const hourly = String(uom || "").toLowerCase().startsWith("hour");
+  const factor = hourly && hrs > 0 ? hrs : 1;
+  const base = qty * factor * unitPrice;
   return +(base - (base * discount) / 100).toFixed(2);
 }
 
 export function calcViSubtotal(items: VendorInvoiceLineItem[]): number {
   return +items
     .filter((i) => i.type !== "section")
-    .reduce((s, i) => s + calcViLineAmount(i.qty, i.unitPrice, i.discount, i.isFoc), 0)
+    .reduce((s, i) => s + calcViLineAmount(i.qty, i.unitPrice, i.discount, i.isFoc, i.hours, i.uom), 0)
     .toFixed(2);
 }
 
@@ -56,6 +67,7 @@ export function emptyViLineItem(): VendorInvoiceLineItem {
     partNumber: "",
     description: "",
     qty: 1,
+    hours: "",
     unitPrice: 0,
     discount: 0,
     uom: "",
@@ -96,6 +108,7 @@ export function mapDocItemToViLine(it: any): VendorInvoiceLineItem {
     };
   }
   const qty = Number(it.qty) || 0;
+  const hours = it.hours != null ? String(it.hours) : "";
   const unitPrice = Number(it.unitPrice) || 0;
   const discount = Number(it.discount) || 0;
   const isFoc = !!it.isFoc;
@@ -110,11 +123,12 @@ export function mapDocItemToViLine(it: any): VendorInvoiceLineItem {
     partNumber: String(it.partNumber || it.code || "").trim(),
     description: it.description || stripHtml(it.name || ""),
     qty,
+    hours,
     unitPrice,
     discount,
     uom: it.uom || "",
     isFoc,
-    amount: calcViLineAmount(qty, unitPrice, discount, isFoc),
+    amount: calcViLineAmount(qty, unitPrice, discount, isFoc, hours, it.uom || ""),
     isStockItem: hasStock || !!it.isStockItem,
     stockItemId: hasStock ? stockItemId : undefined,
     warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : undefined,
@@ -142,11 +156,12 @@ export function normalizeViItemsForApi(items: VendorInvoiceLineItem[]) {
       partNumber: String(it.partNumber || "").trim(),
       description: String(it.description || "").trim(),
       qty: Number(it.qty) || 0,
+      hours: it.hours != null ? String(it.hours) : "",
       unitPrice: Number(it.unitPrice) || 0,
       discount: Number(it.discount) || 0,
       uom: it.uom || "",
       isFoc: !!it.isFoc,
-      amount: it.type === "section" ? 0 : calcViLineAmount(it.qty, it.unitPrice, it.discount, it.isFoc),
+      amount: it.type === "section" ? 0 : calcViLineAmount(it.qty, it.unitPrice, it.discount, it.isFoc, it.hours, it.uom),
       isStockItem: hasStock || !!it.isStockItem,
       stockItemId: hasStock ? stockItemId : undefined,
       warehouseId: Number.isFinite(warehouseId) && warehouseId > 0 ? warehouseId : undefined,

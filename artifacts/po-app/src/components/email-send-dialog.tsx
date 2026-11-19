@@ -45,6 +45,9 @@ interface EmailSendDialogProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   hideTrigger?: boolean;
+  timesheetAckToken?: string;
+  /** Disable the Email trigger (e.g. waiting for approval token). */
+  triggerDisabled?: boolean;
 }
 
 interface EmailContact {
@@ -122,6 +125,8 @@ export function EmailSendDialog({
   open: controlledOpen,
   onOpenChange,
   hideTrigger = false,
+  timesheetAckToken,
+  triggerDisabled = false,
 }: EmailSendDialogProps) {
   const { toast } = useToast();
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
@@ -331,6 +336,7 @@ export function EmailSendDialog({
       form.append("body", body);
       form.append("filename", filename);
       if (poId) form.append("poId", String(poId));
+      if (timesheetAckToken) form.append("timesheetAckToken", timesheetAckToken);
       form.append("pdf", base64ToBlob(pdfBase64, "application/pdf"), filename);
       for (const att of generatedExtras) {
         form.append("attachments", base64ToBlob(att.content, att.contentType || "application/pdf"), att.filename);
@@ -361,7 +367,7 @@ export function EmailSendDialog({
     <Dialog open={open} onOpenChange={handleOpen}>
       {!hideTrigger && (
         <DialogTrigger asChild>
-          <Button variant="outline" size={triggerSize as any} className="gap-2">
+          <Button variant="outline" size={triggerSize as any} className="gap-2" disabled={triggerDisabled}>
             <Mail className="h-4 w-4" />
             {triggerLabel ?? (triggerSize === "sm" ? "Email" : "Send Email")}
           </Button>

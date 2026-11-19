@@ -26,6 +26,9 @@ export type Timesheet = {
   submittedBy: string;
   status: TimesheetStatus;
   sentTo: string;
+  approvalToken?: string;
+  billingRate?: string;
+  otBillingRate?: string;
 };
 
 const KEY = "bizone.manpower.timesheets";

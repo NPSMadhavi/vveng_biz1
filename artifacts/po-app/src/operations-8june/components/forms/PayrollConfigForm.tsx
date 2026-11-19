@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -58,6 +58,10 @@ import {
   payrollCancelButtonClass,
   payrollPrimaryButtonClass,
 } from "@/operations-8june/lib/payroll-ui";
+import {
+  deploymentEmployees,
+  loadDeployments,
+} from "@/pages/manpower/deployment-store";
 
 const optionalAmount = z.preprocess((val) => {
   if (val === "" || val === null || val === undefined) return undefined;
@@ -713,6 +717,38 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   const [hourlyRateInput, setHourlyRateInput] = useState("");
   const [normalHours, setNormalHours] = useState("");
   const [actualHours, setActualHours] = useState("");
+  const [deploymentTick, setDeploymentTick] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setDeploymentTick((n) => n + 1);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
+
+  /** Customer-side employee deployments → partyId (customer) ↔ employee DB ids */
+  const deploymentLinks = useMemo(() => {
+    void deploymentTick;
+    const rows = loadDeployments().filter((row) => row.side === "customer");
+    const customerToEmployees = new Map<string, Set<number>>();
+    const employeeToCustomers = new Map<number, Set<string>>();
+    for (const row of rows) {
+      const partyKey = String(row.partyId || "").trim();
+      if (!partyKey) continue;
+      for (const person of deploymentEmployees(row)) {
+        const employeeKey = Number(person.id);
+        if (!Number.isFinite(employeeKey)) continue;
+        if (!customerToEmployees.has(partyKey)) customerToEmployees.set(partyKey, new Set());
+        customerToEmployees.get(partyKey)!.add(employeeKey);
+        if (!employeeToCustomers.has(employeeKey)) employeeToCustomers.set(employeeKey, new Set());
+        employeeToCustomers.get(employeeKey)!.add(partyKey);
+      }
+    }
+    return { customerToEmployees, employeeToCustomers };
+  }, [deploymentTick]);
 
   const [selectedPayrollYear, setSelectedPayrollYear] = useState<number>(new Date().getFullYear());
   const savedMonths = useMemo(
@@ -803,31 +839,37 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   const customersForEmployee = useMemo(() => {
     if (!selectedEmployee || isAllEmployees) return [];
     const employeeId = Number(selectedEmployee.id);
-    return customers.filter((customer) =>
-      Array.isArray(customer.assignedEmployees) &&
-      customer.assignedEmployees.some((employee: { id?: number }) => Number(employee.id) === employeeId),
-    );
-  }, [customers, selectedEmployee, isAllEmployees]);
-  const customerChoices = customersForEmployee.length > 0 ? customersForEmployee : customers;
+    const partyIds = deploymentLinks.employeeToCustomers.get(employeeId);
+    if (!partyIds || partyIds.size === 0) return [];
+    return customers.filter((customer) => partyIds.has(String(customer.id)));
+  }, [customers, selectedEmployee, isAllEmployees, deploymentLinks]);
+  // Only show customers linked via Employee Deployment (or all customers when none linked yet for UX empty state)
+  const customerChoices = useMemo(() => {
+    if (selectedEmployee && !isAllEmployees) {
+      return customersForEmployee;
+    }
+    if (customerId) {
+      return customers.filter((customer) => String(customer.id) === customerId);
+    }
+    // Customers that have at least one deployment
+    const deployedPartyIds = deploymentLinks.customerToEmployees;
+    const deployed = customers.filter((customer) => deployedPartyIds.has(String(customer.id)));
+    return deployed.length > 0 ? deployed : customers;
+  }, [selectedEmployee, isAllEmployees, customersForEmployee, customerId, customers, deploymentLinks]);
   const visibleEmployeeOptions = useMemo(() => {
     if (!customerId) return employeeOptions;
-    const customer = customers.find((item) => String(item.id) === customerId);
-    const ids = new Set(
-      (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
-        .map((employee: { id?: number }) => Number(employee.id))
-        .filter((id: number) => Number.isFinite(id)),
-    );
+    const ids = deploymentLinks.customerToEmployees.get(String(customerId)) || new Set<number>();
     const matched = employeeOptions.filter((employee) => ids.has(Number(employee.id)));
     return [
       {
         id: ALL_EMPLOYEES_ID,
         name: "All Employees",
         employeeId: `${matched.length} assigned`,
-        designation: "Process payroll for everyone on this customer",
+        designation: "Process payroll for everyone deployed to this customer",
       },
       ...matched,
     ];
-  }, [customerId, customers, employeeOptions]);
+  }, [customerId, deploymentLinks, employeeOptions]);
   const perHourCharge = Number(selectedEmployee?.perHourCharge) || Number(hourlyRateInput) || 0;
   const hourlyWorkingDays = isHourlyEmployee && selectedPayrollMonth != null
     ? (Number(workingDaysRaw) || countWeekdays(selectedPayrollYear, selectedPayrollMonth))
@@ -1035,15 +1077,15 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
       setCustomerId((current) =>
         customersForEmployee.some((customer) => String(customer.id) === current) ? current : "",
       );
+      return;
     }
+    // No deployment for this employee — clear customer
+    setCustomerId("");
   }, [selectedEmployee?.id, isAllEmployees, customersForEmployee]);
 
   const handleCustomerChange = (id: string) => {
     setCustomerId(id);
-    const customer = customers.find((item) => String(item.id) === id);
-    const ids = (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
-      .map((employee: { id?: number }) => Number(employee.id))
-      .filter((employeeId: number) => Number.isFinite(employeeId));
+    const ids = [...(deploymentLinks.customerToEmployees.get(String(id)) || new Set<number>())];
     const current = Number(form.getValues("employeeId"));
     if (current === ALL_EMPLOYEES_ID) return;
     if (!current || !ids.includes(current)) {
@@ -1119,11 +1161,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
 
       if (creatingForEveryone) {
         const customerEmployeeIds = selectedCustomer
-          ? new Set(
-              (Array.isArray(selectedCustomer.assignedEmployees) ? selectedCustomer.assignedEmployees : [])
-                .map((employee: { id?: number }) => Number(employee.id))
-                .filter((id: number) => Number.isFinite(id)),
-            )
+          ? (deploymentLinks.customerToEmployees.get(String(selectedCustomer.id)) || new Set<number>())
           : null;
         const targets = activeEmployees.filter((employee) => {
           if (customerEmployeeIds && !customerEmployeeIds.has(Number(employee.id))) return false;
@@ -1534,12 +1572,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       <InfoItem label="Employee Name" value={selectedEmployee.name || "-"} />
                       <InfoItem label="Department" value={selectedEmployee.department || "-"} />
                       <InfoItem label="Designation" value={selectedEmployee.designation || "-"} />
-                      {isHourlyEmployee ? (
-                        <InfoItem
-                          label="Per hour charge"
-                          value={perHourCharge > 0 ? perHourCharge.toFixed(2) : "-"}
-                        />
-                      ) : (
+                      {!isHourlyEmployee ? (
                         <>
                           <InfoItem
                             label="Basic Salary"
@@ -1553,7 +1586,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                             )}
                           />
                         </>
-                      )}
+                      ) : null}
                       <InfoItem label="Nationality" value={formatNationalityDisplay(selectedEmployee)} />
                       <InfoItem label="PR Status" value={formatPrStatusDisplay(selectedEmployee.prStatus)} />
                       <InfoItem

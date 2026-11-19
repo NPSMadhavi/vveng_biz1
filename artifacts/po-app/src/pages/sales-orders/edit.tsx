@@ -1,5 +1,5 @@
 import { useDocNav } from "@/lib/doc-nav";
-import { emptySalesManpower, ManpowerLineItemsTable, ManpowerSalesCustomerFields, ManpowerSalesDateFields, salesManpowerSchema } from "@/components/manpower-quotation-fields";
+import { emptySalesManpower, ManpowerLineItemsTable, ManpowerSalesCustomerFields, ManpowerSalesDateFields, salesManpowerSchema, quotationLineAmount } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -30,6 +30,7 @@ import { useVedaFormActions } from "@/hooks/useVedaFormActions";
 import { Trash2, Save, ArrowLeft, Eye, Lock, Plus, Layers, AlignLeft, AlignCenter, Upload, Copy, Package, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
+import { QuotationRefSelect } from "@/components/quotation-ref-select";
 import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField } from "@/components/issue-date-field";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
@@ -49,6 +50,7 @@ const itemSchema = z.object({
   description: z.string(),
   qty: z.coerce.number().min(0).default(1),
   uom: z.string().default(""),
+  hours: z.string().optional().default(""),
   unitPrice: z.coerce.number().min(0),
   discount: z.coerce.number().min(0).max(100).default(0),
   isFoc: z.boolean().default(false),
@@ -126,7 +128,7 @@ export default function SalesOrderEdit() {
       currency: "SGD", status: "draft", tax: 9,
       discountAmount: 0,
       isPrivate: false,
-      items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
+      items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
     },
   });
   useVedaFormFill(form);
@@ -166,7 +168,7 @@ export default function SalesOrderEdit() {
         manpowerDetails: { ...emptySalesManpower, ...((doc as any).manpowerDetails || {}) },
         items: items.length > 0 ? items.map((i: any) => (
           i.type === "section"
-            ? { type: "section" as const, sectionLabel: i.sectionLabel || "", sectionAlign: i.sectionAlign || "left", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "", selectedSerials: [], selectedSerialIds: [] }
+            ? { type: "section" as const, sectionLabel: i.sectionLabel || "", sectionAlign: i.sectionAlign || "left", partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "", selectedSerials: [], selectedSerialIds: [] }
             : {
                 type: "item" as const,
                 sectionLabel: "",
@@ -174,6 +176,7 @@ export default function SalesOrderEdit() {
                 partNumber: i.partNumber || "",
                 description: i.description || "",
                 qty: Number(i.qty) || 1,
+                hours: i.hours != null ? String(i.hours) : "",
                 uom: i.uom || "",
                 unitPrice: Number(i.unitPrice) || 0,
                 discount: Number(i.discount) || 0,
@@ -185,7 +188,7 @@ export default function SalesOrderEdit() {
                 selectedSerialIds: Array.isArray(i.selectedSerialIds) ? i.selectedSerialIds : [],
                 stockItemId: i.stockItemId ? Number(i.stockItemId) : undefined,
               }
-        )) : [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "", selectedSerials: [], selectedSerialIds: [] }],
+        )) : [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "", selectedSerials: [], selectedSerialIds: [] }],
       });
       // Derive discount percentage from saved flat amount so the % input is
       // restored when the user comes back to edit a SalesOrder with a discount.
@@ -193,7 +196,7 @@ export default function SalesOrderEdit() {
       if (docDiscAmt > 0) {
         const subtot = items
           .filter((i: any) => i.type !== "section")
-          .reduce((s: number, i: any) => s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0) * (1 - (Number(i.discount) || 0) / 100), 0);
+          .reduce((s: number, i: any) => s + quotationLineAmount(i), 0);
         if (subtot > 0) setDiscountPct(parseFloat((docDiscAmt / subtot * 100).toFixed(2)));
       }
       linkedQt.current = { qtId: (doc as any).qtId ?? null, qtNumber: (doc as any).qtNumber ?? null };
@@ -230,7 +233,7 @@ export default function SalesOrderEdit() {
       if (!isEmpty && !appendLock.current) {
         appendLock.current = true;
         const focused = document.activeElement as HTMLElement | null;
-        append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" });
+        append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" });
         requestAnimationFrame(() => { focused?.focus(); appendLock.current = false; });
       }
     });
@@ -240,10 +243,12 @@ export default function SalesOrderEdit() {
   const rawCurrency = form.watch("currency") || "SGD";
   const currency = normalizeCurrency(rawCurrency);
 
-  const subtotal = items.reduce((s, i) => ((i as any).type === "section" || (i as any).isFoc) ? s : s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0) * (1 - (Number(i.discount) || 0) / 100), 0);
+  const subtotal = items.reduce((s, i) => ((i as any).type === "section" || (i as any).isFoc) ? s : s + quotationLineAmount(i), 0);
   const discountAmt = form.watch("discountAmount") || 0;
   const taxableAmount = subtotal - discountAmt;
   const [discountPct, setDiscountPct] = useState(0);
+  const [qtLookupLoading, setQtLookupLoading] = useState(false);
+  const lastLoadedQtRef = useRef<string>("");
   useEffect(() => {
     if (discountPct > 0) form.setValue("discountAmount", parseFloat((subtotal * discountPct / 100).toFixed(2)));
   }, [subtotal]);
@@ -275,7 +280,7 @@ export default function SalesOrderEdit() {
     const itemsWithAmount = filledItems.map(i => {
       if ((i as any).type === "section") return { type: "section", sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left" };
       const disc = Number(i.discount) || 0;
-      return { ...i, discount: disc, isFoc: !!(i as any).isFoc, amount: (i.qty * i.unitPrice * (1 - disc / 100)).toFixed(2) };
+      return { ...i, discount: disc, isFoc: !!(i as any).isFoc, amount: quotationLineAmount({ ...i, discount: disc }).toFixed(2) };
     });
     const isCancelled = values.status === "cancelled";
     const newStatus = isCancelled ? "cancelled" : (openPreview ? "confirmed" : "draft");
@@ -297,7 +302,7 @@ export default function SalesOrderEdit() {
   }
 
   function handlePoExtracted(data: ExtractedPoData) {
-    const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
+    const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
     const mappedItems = data.items
       .filter((it) => it.description?.trim())
       .map((it) => ({
@@ -305,6 +310,7 @@ export default function SalesOrderEdit() {
         partNumber: it.partNumber || "",
         description: it.description,
         qty: Number(it.qty) || 1,
+        hours: it.hours != null ? String(it.hours) : "",
         uom: it.uom || "",
         unitPrice: Number(it.unitPrice) || 0,
       }));
@@ -357,6 +363,82 @@ export default function SalesOrderEdit() {
   });
 
   if (!doc) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+
+  const normalizeDocNo = (value: string) => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+
+  const loadQuotationByRef = async (raw: string) => {
+    const key = normalizeDocNo(raw);
+    if (!key || lastLoadedQtRef.current === key || qtLookupLoading) return;
+    setQtLookupLoading(true);
+    try {
+      const listRes = await fetch("/api/quotations", { credentials: "include" });
+      if (!listRes.ok) throw new Error("Failed to load quotations");
+      const listJson = await listRes.json();
+      const rows = Array.isArray(listJson) ? listJson : [];
+      const match = rows.find((row: any) => normalizeDocNo(row.qtNumber) === key)
+        || rows.find((row: any) => normalizeDocNo(row.qtNumber).endsWith(key));
+      if (!match?.id) {
+        toast({ title: "Quotation not found", description: `No quotation matches \"${raw.trim()}\"`, variant: "destructive" });
+        return;
+      }
+      const detailRes = await fetch(`/api/quotations/${match.id}`, { credentials: "include" });
+      if (!detailRes.ok) throw new Error("Failed to load quotation details");
+      const qt = await detailRes.json();
+      const qtItems = (qt.items as any[]) ?? [];
+      const sub = Number(qt.subtotal) || 0;
+      const disc = Number(qt.discountAmount) || 0;
+      const taxAmt = Number(qt.tax) || 0;
+      const taxable = sub - disc;
+      const taxPct = taxable > 0 && taxAmt > 0 ? Math.round((taxAmt / taxable) * 1000) / 10 : (Number(form.getValues("tax")) || 9);
+      const current = form.getValues();
+      form.reset({
+        ...current,
+        customerName: qt.customerName || current.customerName,
+        customerAddress: qt.customerAddress || current.customerAddress,
+        customerContact: qt.customerContact || current.customerContact,
+        customerContactEmail: qt.customerContactEmail || current.customerContactEmail,
+        deliveryAddress: qt.deliveryAddress || current.deliveryAddress,
+        qtNumber: qt.qtNumber || raw.trim(),
+        deliveryDate: qt.deliveryDate || current.deliveryDate,
+        paymentTerms: qt.paymentTerms || current.paymentTerms,
+        notes: qt.notes || current.notes,
+        currency: qt.currency || current.currency,
+        tax: taxPct,
+        discountAmount: disc,
+        manpowerDetails: {
+          ...(current.manpowerDetails || {}),
+          ...(qt.manpowerDetails || {}),
+        },
+        items: qtItems.length > 0
+          ? qtItems.map((it: any) => ({
+              type: it.type || "item",
+              sectionLabel: it.sectionLabel || "",
+              sectionAlign: it.sectionAlign || "left",
+              partNumber: it.partNumber || "",
+              description: it.description || "",
+              qty: Number(it.qty) || 1,
+              hours: it.hours != null ? String(it.hours) : "",
+              uom: it.uom || "",
+              unitPrice: Number(it.unitPrice) || 0,
+              discount: Number(it.discount) || 0,
+              isFoc: !!it.isFoc,
+              itemImage: it.itemImage || "",
+              selectedSerials: [],
+              selectedSerialIds: [],
+            }))
+          : current.items,
+      });
+      if (disc > 0 && sub > 0) setDiscountPct(parseFloat((disc / sub * 100).toFixed(2)));
+      linkedQt.current = { qtId: Number(qt.id), qtNumber: qt.qtNumber || raw.trim() };
+      lastLoadedQtRef.current = normalizeDocNo(qt.qtNumber || key);
+      if (taxPct === 0) setIsOverseas(true);
+      toast({ title: "Quotation loaded", description: qt.qtNumber });
+    } catch (err: any) {
+      toast({ title: "Could not load quotation", description: err?.message || "Try again", variant: "destructive" });
+    } finally {
+      setQtLookupLoading(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -530,7 +612,21 @@ export default function SalesOrderEdit() {
                   <FormField control={form.control} name="qtNumber" render={({ field }) => (
                     <FormItem>
                       <FormLabel>Quotation Reference Number</FormLabel>
-                      <FormControl><Input {...field} value={field.value || ""} /></FormControl>
+                      <FormControl>
+                        <QuotationRefSelect
+                          value={field.value || ""}
+                          disabled={qtLookupLoading}
+                          placeholder="Select quotation"
+                          onChange={(value) => {
+                            field.onChange(value);
+                            const next = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+                            if (next !== lastLoadedQtRef.current) lastLoadedQtRef.current = "";
+                          }}
+                          onSelect={(qtNumber) => {
+                            void loadQuotationByRef(qtNumber);
+                          }}
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -606,11 +702,11 @@ export default function SalesOrderEdit() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
                   {!isManpower && (
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
                   )}
@@ -628,7 +724,7 @@ export default function SalesOrderEdit() {
  checked={isOverseas}
  onCheckedChange={(v) => {
                         setIsOverseas(v);
-                        form.setValue("tax", v ? 0 : (docSettings?.gstRate ?? 0));
+                        form.setValue("tax", v ? 0 : (Number(docSettings?.gstRate ?? 9) || 9));
                       }}
                     />
                   </div>
@@ -661,8 +757,8 @@ export default function SalesOrderEdit() {
                     {(() => { let _n = 0; return [...fields.map((field, index) => {
                       const itemType = form.watch(`items.${index}.type`);
                       const _itemNo = itemType !== "section" ? ++_n : null;
-                      const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
-                      const blankSection = { type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
+                      const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
+                      const blankSection = { type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
                       const insertBar = (
                         <tr className="group/ins border-0 h-5">
                           <td colSpan={10} className="p-0 overflow-visible">
@@ -787,7 +883,7 @@ export default function SalesOrderEdit() {
                           </tr>
                         </Fragment>
                       );
-                    }), <tr key="trailing-bar" className="group/ins border-0 h-5"><td colSpan={10} className="p-0 overflow-visible"><div className="relative flex items-center justify-center h-5"><div className="absolute inset-x-0 top-1/2 h-px bg-border/40 group-hover/ins:bg-primary/40 transition-colors" /><div className="absolute flex items-center gap-2 opacity-0 group-hover/ins:opacity-100 transition-opacity"><button type="button" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm"><Plus className="h-2.5 w-2.5" /> + line item here</button><button type="button" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm"><Layers className="h-2.5 w-2.5" /> + section here</button></div></div></td></tr>]; })()}
+                    }), <tr key="trailing-bar" className="group/ins border-0 h-5"><td colSpan={10} className="p-0 overflow-visible"><div className="relative flex items-center justify-center h-5"><div className="absolute inset-x-0 top-1/2 h-px bg-border/40 group-hover/ins:bg-primary/40 transition-colors" /><div className="absolute flex items-center gap-2 opacity-0 group-hover/ins:opacity-100 transition-opacity"><button type="button" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm"><Plus className="h-2.5 w-2.5" /> + line item here</button><button type="button" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm"><Layers className="h-2.5 w-2.5" /> + section here</button></div></div></td></tr>]; })()}
                   </tbody>
                 </table>
               </div>
@@ -877,7 +973,7 @@ export default function SalesOrderEdit() {
  open={importOpen}
  onClose={() => setImportOpen(false)}
  onImport={(imported, replace) => {
-          const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
+          const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" };
           const newItems = imported.map((it) => ({ ...blankItem, partNumber: it.partNumber, description: it.description, qty: it.qty, uom: it.uom, unitPrice: it.unitPrice }));
           if (replace) {
             form.setValue("items", newItems);

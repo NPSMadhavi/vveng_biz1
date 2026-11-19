@@ -20,6 +20,7 @@ export interface ImportedQuotItem {
   partNumber: string;
   description: string;
   qty: number;
+  hours?: string;
   uom: string;
   unitPrice: number;
   discount: number;
@@ -133,6 +134,7 @@ export function ImportFromQuotationDialog({ open, onClose, onImport, currentItem
             partNumber: item.partNumber || "",
             description: item.description || "",
             qty: Number(item.qty) || 1,
+            hours: item.hours != null ? String(item.hours) : "",
             uom: item.uom || "",
             unitPrice: Number(item.unitPrice) || 0,
             discount: Number(item.discount) || 0,

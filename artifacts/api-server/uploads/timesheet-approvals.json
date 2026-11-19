@@ -1,0 +1,186 @@
+{
+  "records": [
+    {
+      "token": "e78f386f-06d3-45f7-85a8-02bce622f9ae",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 56,
+          "overtime": 7
+        }
+      ],
+      "totalNormal": 56,
+      "totalOt": 7,
+      "timesheetIds": [
+        "1795090858818",
+        "1795090599341",
+        "1795090296733",
+        "1795089750542",
+        "1795089514826",
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T12:20:58.856Z",
+      "updatedAt": "2026-11-19T12:20:58.882Z"
+    },
+    {
+      "token": "32fdf8da-d253-4c5e-b63e-41dbcf824ea6",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 48,
+          "overtime": 6
+        }
+      ],
+      "totalNormal": 48,
+      "totalOt": 6,
+      "timesheetIds": [
+        "1795090599341",
+        "1795090296733",
+        "1795089750542",
+        "1795089514826",
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T12:16:39.401Z",
+      "updatedAt": "2026-11-19T12:16:39.426Z"
+    },
+    {
+      "token": "5343e52f-76f3-4fa7-9e35-70d825cb2be0",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 40,
+          "overtime": 5
+        }
+      ],
+      "totalNormal": 40,
+      "totalOt": 5,
+      "timesheetIds": [
+        "1795090296733",
+        "1795089750542",
+        "1795089514826",
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T12:11:36.790Z",
+      "updatedAt": "2026-11-19T12:15:42.797Z"
+    },
+    {
+      "token": "85817882-d16d-45b6-90c3-3a29da654b5b",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 32,
+          "overtime": 4
+        }
+      ],
+      "totalNormal": 32,
+      "totalOt": 4,
+      "timesheetIds": [
+        "1795089750542",
+        "1795089514826",
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T12:02:30.581Z",
+      "updatedAt": "2026-11-19T12:02:30.734Z"
+    },
+    {
+      "token": "0cbeb99f-37b3-4a57-bdef-33a7ae218268",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 24,
+          "overtime": 3
+        }
+      ],
+      "totalNormal": 24,
+      "totalOt": 3,
+      "timesheetIds": [
+        "1795089514826",
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T11:58:34.898Z",
+      "updatedAt": "2026-11-19T11:58:34.898Z"
+    },
+    {
+      "token": "3f77a434-d011-44e9-8f26-60e3750cd6ee",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 16,
+          "overtime": 2
+        }
+      ],
+      "totalNormal": 16,
+      "totalOt": 2,
+      "timesheetIds": [
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T11:49:59.796Z",
+      "updatedAt": "2026-11-19T11:49:59.796Z"
+    },
+    {
+      "token": "bf9e0e0a-998e-4c94-aa08-0756534a295c",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu",
+          "normal": 8,
+          "overtime": 1
+        }
+      ],
+      "totalNormal": 8,
+      "totalOt": 1,
+      "timesheetIds": [
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-19T11:46:00.800Z",
+      "updatedAt": "2026-11-19T11:46:00.800Z"
+    }
+  ]
+}

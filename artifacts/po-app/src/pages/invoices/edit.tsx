@@ -1,5 +1,5 @@
 import { useDocNav } from "@/lib/doc-nav";
-import { emptyInvoiceManpower, invoiceManpowerSchema, ManpowerInvoiceWorkLocation, ManpowerLineItemsTable } from "@/components/manpower-quotation-fields";
+import { emptyInvoiceManpower, invoiceManpowerSchema, ManpowerInvoiceWorkLocation, ManpowerLineItemsTable, quotationLineAmount } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -40,6 +40,7 @@ import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField, getToday } from "@/components/issue-date-field";
 import { PdfPreviewModal, SENT_TO_EXTERNAL } from "@/components/pdf-preview-modal";
 import { PORefSelect } from "@/components/po-ref-select";
+import { SalesOrderRefSelect } from "@/components/sales-order-ref-select";
 import { generateInvoice_PDF } from "@/lib/pdf";
 import { generateInvoicePdfSmart } from "@/lib/report-designer/api";
 import { deliveryOrderAttachmentNames, deliveryOrderPdfAttachments, invoiceEmailBody, markDeliveryOrdersSent, useInvoiceDeliveryOrders } from "@/lib/invoice-delivery-order-email";
@@ -57,6 +58,7 @@ const itemSchema = z.object({
   description: z.coerce.string(),
   qty: z.coerce.number().min(0).default(1),
   uom: z.coerce.string().default(""),
+  hours: z.string().optional().default(""),
   unitPrice: z.coerce.number().min(0, "Cannot be negative"),
   discount: z.coerce.number().min(0).max(100).default(0),
   isFoc: z.boolean().default(false),
@@ -84,6 +86,8 @@ const schema = z.object({
   deliveryDate: z.string().optional(),
   paymentTerms: z.string().optional(),
   poRefNo: z.string().optional(),
+  soNumber: z.string().optional(),
+  soId: z.number().optional().nullable(),
   salesPerson: z.string().optional(),
   manpowerDetails: invoiceManpowerSchema.optional(),
   notes: z.string().optional(),
@@ -112,6 +116,8 @@ export default function InvoiceEdit() {
   const [deleting, setDeleting] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [isOverseas, setIsOverseas] = useState(false);
+  const [soLookupLoading, setSoLookupLoading] = useState(false);
+  const lastLoadedSoRef = useRef<string>("");
   const initialized = useRef(false);
   const [directoryCurrency, setDirectoryCurrency] = useState<string>("");
   const [directoryCurrencyName, setDirectoryCurrencyName] = useState<string>("");
@@ -186,13 +192,13 @@ export default function InvoiceEdit() {
     resolver: zodResolver(schema),
     defaultValues: {
       customerName: "", customerAddress: "", customerContact: "", customerContactEmail: "",
-      issueDate: "", deliveryDate: "", paymentTerms: "", poRefNo: "", notes: "",
+      issueDate: "", deliveryDate: "", paymentTerms: "", poRefNo: "", soNumber: "", soId: null, notes: "",
       termsAndConditions: "", deliveryInstructions: "", customerNote: "", authorisedSignature: "",
       currency: "SGD", status: "draft", tax: 9,
       discountAmount: 0,
       isPrivate: false,
       manpowerDetails: { ...emptyInvoiceManpower },
-      items: [{ type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" }],
+      items: [{ type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, hours: "", uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" }],
     },
   });
 
@@ -230,6 +236,8 @@ export default function InvoiceEdit() {
         discountAmount: Number((doc as any).discountAmount) || 0,
         isPrivate: (doc as any).isPrivate ?? false,
         poRefNo: (doc as any).poRefNo || "",
+        soNumber: (doc as any).soNumber || "",
+        soId: (doc as any).soId ?? null,
         salesPerson: (doc as any).salesPerson || "",
         manpowerDetails: {
           ...emptyInvoiceManpower,
@@ -242,6 +250,7 @@ export default function InvoiceEdit() {
           partNumber: i.partNumber || "",
           description: i.description || "",
           qty: Number(i.qty) || 1,
+          hours: i.hours != null ? String(i.hours) : "",
           uom: i.uom || "",
           unitPrice: Number(i.unitPrice) || 0,
           discount: Number(i.discount) || 0,
@@ -256,7 +265,7 @@ export default function InvoiceEdit() {
           selectedSerials: i.selectedSerials ?? [],
           selectedSerialIds: i.selectedSerialIds ?? [],
           itemImage: (i as any).itemImage || "",
-        })) : [{ type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" }],
+        })) : [{ type: "item" as const, sectionLabel: "", partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" }],
       });
       // Derive discount percentage from saved flat amount so the % input is
       // restored when the user comes back to edit an invoice with a discount.
@@ -264,7 +273,7 @@ export default function InvoiceEdit() {
       if (docDiscAmt > 0) {
         const subtot = items
           .filter((i: any) => i.type !== "section" && !i.isFoc)
-          .reduce((s: number, i: any) => s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0) * (1 - (Number(i.discount) || 0) / 100), 0);
+          .reduce((s: number, i: any) => s + quotationLineAmount(i), 0);
         if (subtot > 0) setDiscountPct(parseFloat((docDiscAmt / subtot * 100).toFixed(2)));
       }
       setExchangeRate(
@@ -297,7 +306,99 @@ export default function InvoiceEdit() {
     }
   }, [doc]);
 
-  const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
+  const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
+  const normalizeDocNo = (value: string) => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+
+  const mapSoItems = (soItems: any[]) =>
+    soItems.map((it: any) => ({
+      type: it.type || "item",
+      sectionLabel: it.sectionLabel || "",
+      sectionAlign: it.sectionAlign || "left",
+      partNumber: it.partNumber || "",
+      description: it.description || "",
+      qty: Number(it.qty) || 1,
+      hours: it.hours != null ? String(it.hours) : "",
+      uom: it.uom || "",
+      unitPrice: Number(it.unitPrice) || 0,
+      discount: Number(it.discount) || 0,
+      isFoc: !!it.isFoc,
+      isStockItem: !!it.isStockItem,
+      stockItemId: it.stockItemId ? Number(it.stockItemId) : undefined,
+      warehouseId: it.warehouseId ? Number(it.warehouseId) : undefined,
+      warehouseName: it.warehouseName || "",
+      batchNo: it.batchNo || "",
+      expiryDate: it.expiryDate || "",
+      manufacturingDate: it.manufacturingDate || "",
+      selectedSerials: Array.isArray(it.selectedSerials) ? it.selectedSerials : [],
+      selectedSerialIds: Array.isArray(it.selectedSerialIds) ? it.selectedSerialIds : [],
+      itemImage: it.itemImage || "",
+    }));
+
+  const loadSalesOrderByRef = async (raw: string) => {
+    const key = normalizeDocNo(raw);
+    if (!key || lastLoadedSoRef.current === key || soLookupLoading) return;
+    setSoLookupLoading(true);
+    try {
+      const listRes = await fetch("/api/sales-orders", { credentials: "include" });
+      if (!listRes.ok) throw new Error("Failed to load sales orders");
+      const listJson = await listRes.json();
+      const rows = Array.isArray(listJson) ? listJson : [];
+      const match = rows.find((row: any) => normalizeDocNo(row.soNumber) === key)
+        || rows.find((row: any) => normalizeDocNo(row.soNumber).endsWith(key));
+      if (!match?.id) {
+        toast({ title: "Sales Order not found", description: `No sales order matches \"${raw.trim()}\"`, variant: "destructive" });
+        return;
+      }
+      const detailRes = await fetch(`/api/sales-orders/${match.id}`, { credentials: "include" });
+      if (!detailRes.ok) throw new Error("Failed to load sales order details");
+      const so = await detailRes.json();
+      const soItems = (so.items as any[]) ?? [];
+      const sub = Number(so.subtotal) || 0;
+      const disc = Number(so.discountAmount) || 0;
+      const taxAmt = Number(so.tax) || 0;
+      const taxable = sub - disc;
+      const taxPct = taxable > 0 && taxAmt > 0
+        ? Math.round((taxAmt / taxable) * 1000) / 10
+        : (Number(form.getValues("tax")) || 9);
+      const current = form.getValues();
+      form.reset({
+        ...current,
+        customerName: so.customerName || current.customerName,
+        customerAddress: so.customerAddress || current.customerAddress,
+        customerContact: so.customerContact || current.customerContact,
+        customerContactEmail: so.customerContactEmail || current.customerContactEmail,
+        deliveryAddress: so.deliveryAddress || current.deliveryAddress,
+        deliveryDate: so.deliveryDate || current.deliveryDate,
+        paymentTerms: so.paymentTerms || current.paymentTerms,
+        notes: so.notes || current.notes,
+        termsAndConditions: so.termsAndConditions || current.termsAndConditions,
+        deliveryInstructions: so.deliveryInstructions || current.deliveryInstructions,
+        customerNote: so.customerNote || current.customerNote,
+        authorisedSignature: so.authorisedSignature || current.authorisedSignature,
+        currency: so.currency || current.currency,
+        tax: taxPct,
+        discountAmount: disc,
+        soNumber: so.soNumber || raw.trim(),
+        soId: Number(so.id) || null,
+        poRefNo: so.qtNumber || current.poRefNo,
+        manpowerDetails: {
+          ...(current.manpowerDetails as any || {}),
+          ...(so.manpowerDetails || {}),
+        },
+        items: soItems.length > 0 ? mapSoItems(soItems) : current.items,
+      });
+      if (disc > 0 && sub > 0) setDiscountPct(parseFloat((disc / sub * 100).toFixed(2)));
+      if (taxPct === 0) setIsOverseas(true);
+      else setIsOverseas(false);
+      lastLoadedSoRef.current = normalizeDocNo(so.soNumber || key);
+      toast({ title: "Sales Order loaded", description: so.soNumber });
+    } catch (err: any) {
+      toast({ title: "Could not load sales order", description: err?.message || "Try again", variant: "destructive" });
+    } finally {
+      setSoLookupLoading(false);
+    }
+  };
+
   const updateMutation = useUpdateInvoice();
   const items = form.watch("items");
   const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
@@ -341,7 +442,7 @@ export default function InvoiceEdit() {
       if (!isEmpty && !appendLock.current) {
         appendLock.current = true;
         const focused = document.activeElement as HTMLElement | null;
-        append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" });
+        append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" });
         requestAnimationFrame(() => { focused?.focus(); appendLock.current = false; });
       }
     });
@@ -427,7 +528,7 @@ export default function InvoiceEdit() {
     } catch { /* ignore */ }
   }
 
-  const subtotal = items.reduce((s, i) => ((i as any).type === "section" || (i as any).isFoc) ? s : s + (Number(i.qty) || 0) * (Number(i.unitPrice) || 0) * (1 - (Number(i.discount) || 0) / 100), 0);
+  const subtotal = items.reduce((s, i) => ((i as any).type === "section" || (i as any).isFoc) ? s : s + quotationLineAmount(i), 0);
   const discountAmt = form.watch("discountAmount") || 0;
   const taxableAmount = subtotal - discountAmt;
   const [discountPct, setDiscountPct] = useState(0);
@@ -481,7 +582,7 @@ export default function InvoiceEdit() {
       return;
     }
     const itemsWithAmount = filledItems.map(i => {
-      if ((i as any).type === "section") return { type: "section" as const, sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left", partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
+      if ((i as any).type === "section") return { type: "section" as const, sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left", partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
       const disc = Number(i.discount) || 0;
       const qty = Number(i.qty) || 0;
       const partNumber = plainText(i.partNumber);
@@ -499,7 +600,7 @@ export default function InvoiceEdit() {
         stockItemId: hasStockLink ? stockItemId : undefined,
         warehouseId: hasStockLink ? warehouseId : undefined,
         warehouseName: hasStockLink ? (i as any).warehouseName || undefined : undefined,
-        amount: (qty * i.unitPrice * (1 - disc / 100)).toFixed(2),
+        amount: quotationLineAmount({ ...i, qty, discount: disc }).toFixed(2),
       };
     });
     for (const item of itemsWithAmount) {
@@ -527,6 +628,8 @@ export default function InvoiceEdit() {
       discountAmount: values.discountAmount,
       deliveryAddress: cleanAddress || null,
       poRefNo: values.poRefNo || null,
+      soNumber: values.soNumber?.trim() || null,
+      soId: values.soId ?? null,
       items: itemsWithAmount,
       createDeliveryOrder,
       exchangeRate: currency !== "SGD" ? parseFloat(exchangeRate) || 1 : 1,
@@ -703,68 +806,11 @@ export default function InvoiceEdit() {
                   </FormItem>
                 )} />
                 </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4">
                 <FormField control={form.control} name="customerAddress" render={({ field }) => (
                   <FormItem><FormLabel>Address</FormLabel>
                     <FormControl><Textarea className="resize-none" rows={3} {...field} /></FormControl></FormItem>
                 )} />
-                <FormField control={form.control} name="deliveryAddress" render={({ field }) => {
-                  const addrs = (field.value || "").split("\n\n");
-                  if (addrs.length === 0 || (addrs.length === 1 && addrs[0] === "")) {
-                    addrs[0] = "";
-                  }
-                  return (
-                    <FormItem>
-                      <FormLabel>Ship To Address <span className="text-muted-foreground text-xs font-normal">(optional)</span></FormLabel>
-                      <div className="space-y-2">
-                        {addrs.map((addr, idx) => (
-                          <div key={idx} className="relative group">
-                            <FormControl>
-                              <Textarea
- value={addr}
- onChange={(e) => {
-                                  const newAddrs = [...addrs];
-                                  newAddrs[idx] = e.target.value;
-                                  field.onChange(newAddrs.join("\n\n"));
-                                }}
- placeholder=""
- className="resize-none pr-8 text-sm"
- rows={2}
-                              />
-                            </FormControl>
-                            {addrs.length > 1 && (
-                              <button
- type="button"
- onClick={() => {
-                                  const newAddrs = addrs.filter((_, i) => i !== idx);
-                                  field.onChange(newAddrs.join("\n\n"));
-                                }}
- className="absolute right-2 top-2 text-[#EF4444] opacity-0 group-hover:opacity-100 transition-opacity"
- title="Remove Address"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                        <Button
- type="button"
- variant="outline"
- size="sm"
- className="w-full text-xs gap-1.5 py-1.5 h-auto text-[#2563EB] hover:text-[#1D4ED8]"
- onClick={() => {
-                            const newAddrs = [...addrs, ""];
-                            field.onChange(newAddrs.join("\n\n"));
-                          }}
-                        >
-                          <Plus className="h-3.5 w-3.5" /> Add More Ship-To Address
-                        </Button>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">Auto-filled from customer directory. Appears on the invoice PDF when set.</p>
-                      <FormMessage />
-                    </FormItem>
-                  );
-                }} />
                 </div>
               </CardContent>
             </Card>
@@ -772,7 +818,7 @@ export default function InvoiceEdit() {
             <Card>
               <CardHeader className="pb-4"><CardTitle className="text-lg">Invoice Details</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <FormField control={form.control} name="issueDate" render={({ field }) => (
                   <FormItem>
                     <FormControl>
@@ -798,12 +844,27 @@ export default function InvoiceEdit() {
                 )} />
                 </div>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <div>
-                  <p className="text-sm font-medium mb-1.5">Sales Order</p>
-                  <p className="h-10 flex items-center px-3 rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] text-sm font-mono text-muted-foreground">
-                    {(doc as any)?.soNumber || "—"}
-                  </p>
-                </div>
+                <FormField control={form.control} name="soNumber" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Sales Order</FormLabel>
+                    <FormControl>
+                      <SalesOrderRefSelect
+                        value={field.value || ""}
+                        disabled={soLookupLoading}
+                        placeholder="Select sales order"
+                        onChange={(value) => {
+                          field.onChange(value);
+                          const next = String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+                          if (next !== lastLoadedSoRef.current) lastLoadedSoRef.current = "";
+                        }}
+                        onSelect={(soNumber) => {
+                          void loadSalesOrderByRef(soNumber);
+                        }}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
                 {isManpower ? <ManpowerInvoiceWorkLocation control={form.control} /> : (
                 <FormField control={form.control} name="salesPerson" render={({ field }) => (
                   <FormItem>
@@ -886,11 +947,11 @@ export default function InvoiceEdit() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <CardTitle className="text-lg">Line Items</CardTitle>
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
                     <Plus className="h-3 w-3" /> {isManpower ? "Add Row" : "Add Item"}
                   </Button>
                   {!isManpower && (
-                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5 text-xs h-7" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })}>
                     <Layers className="h-3 w-3" /> Add Section
                   </Button>
                   )}
@@ -907,7 +968,7 @@ export default function InvoiceEdit() {
  checked={isOverseas}
  onCheckedChange={(v) => {
                         setIsOverseas(v);
-                        form.setValue("tax", v ? 0 : (docSettings?.gstRate ?? 0));
+                        form.setValue("tax", v ? 0 : (Number(docSettings?.gstRate ?? 9) || 9));
                       }}
                     />
                   </div>
@@ -941,8 +1002,8 @@ export default function InvoiceEdit() {
                     {(() => { let _n = 0; return fields.map((field, index) => {
                       const itemType = form.watch(`items.${index}.type`);
                       const _itemNo = itemType !== "section" ? ++_n : null;
-                      const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
-                      const blankSection = { type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
+                      const blankItem = { type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
+                      const blankSection = { type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" };
                       const insertBar = (
                         <tr className="group/ins border-0 h-5">
                           <td colSpan={11} className="p-0 overflow-visible">
@@ -1132,10 +1193,10 @@ export default function InvoiceEdit() {
                         <div className="relative flex items-center justify-center h-5">
                           <div className="absolute inset-x-0 top-1/2 h-px bg-border/40 group-hover/ins-tail:bg-primary/40 transition-colors" />
                           <div className="absolute flex items-center gap-2 opacity-0 group-hover/ins-tail:opacity-100 transition-opacity">
-                            <button type="button" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm">
+                            <button type="button" onClick={() => append({ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm">
                               <Plus className="h-2.5 w-2.5" /> + line item here
                             </button>
-                            <button type="button" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm">
+                            <button type="button" onClick={() => append({ type: "section" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, hours: "", uom: "", unitPrice: 0, discount: 0, isFoc: false, isStockItem: false, selectedSerials: [], selectedSerialIds: [], itemImage: "" })} className="flex items-center gap-1 text-[10px] text-primary bg-background border border-primary/30 rounded px-2 leading-5 whitespace-nowrap shadow-sm">
                               <Layers className="h-2.5 w-2.5" /> + section here
                             </button>
                           </div>
@@ -1207,39 +1268,7 @@ export default function InvoiceEdit() {
               )} />
               
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 items-stretch">
-                <FormField control={form.control} name="customerNote" render={({ field }) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Customer Note</FormLabel>
-                    <FormControl>
-                      <Textarea
- value={field.value ?? ""}
- onChange={field.onChange}
-                        
- rows={4}
- className="min-h-[96px] resize-y"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-
-                <FormField control={form.control} name="deliveryInstructions" render={({ field }) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Delivery Instructions</FormLabel>
-                    <FormControl>
-                      <Textarea
- value={field.value ?? ""}
- onChange={field.onChange}
-                        
- rows={4}
- className="min-h-[96px] resize-y"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-
-                <FormField control={form.control} name="termsAndConditions" render={({ field }) => (
+<FormField control={form.control} name="termsAndConditions" render={({ field }) => (
                   <FormItem className="flex flex-col">
                     <FormLabel>Terms & Conditions</FormLabel>
                     <FormControl>
@@ -1383,13 +1412,7 @@ export default function InvoiceEdit() {
               )}
             </div>
             <div className="flex flex-col items-end gap-2">
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-                <Checkbox
- checked={createDeliveryOrder}
- onCheckedChange={(checked) => setCreateDeliveryOrder(checked === true)}
-                />
-                Converted into Delivery Order
-              </label>
+
               <div className="flex justify-end gap-3">
                 <Button type="button" variant="outline" onClick={() => setLocation(withReturnTo(`/invoices/${id}`))}>Cancel</Button>
                 <Button

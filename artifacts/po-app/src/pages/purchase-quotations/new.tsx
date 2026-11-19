@@ -98,7 +98,7 @@ export default function PurchaseQuotationNew() {
       tax: 9,
       discountAmount: 0,
       isPrivate: false,
-      manpowerDetails: { ...emptyManpowerDetails },
+      manpowerDetails: { ...emptyManpowerDetails, source: "supplier" },
       items: [{ type: "item" as const, sectionLabel: "", sectionAlign: "left" as const, partNumber: "", description: "", qty: 1, uom: isManpower ? "Hourly" : "", unitPrice: 0, discount: 0, isFoc: false, itemImage: "" }],
     },
   });
@@ -509,6 +509,7 @@ export default function PurchaseQuotationNew() {
             {isManpower && (
               <ManpowerRequirementsCard
                 control={form.control}
+                supplierOnly
                 onAddLine={(line) => {
                   const current = form.getValues("items") || [];
                   const onlyBlank = current.length === 1

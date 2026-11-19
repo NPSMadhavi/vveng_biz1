@@ -117,12 +117,10 @@ export function DirectoryPickerButton({ type, onSelect, label, className }: Dire
   );
 
   function computeEffectiveGst(entry: { country?: string | null; gstRegistered?: boolean }): number {
-    // Other / overseas country → always 0% GST (zero-rated export)
+    // Overseas / export customer → 0% GST (zero-rated)
     if (isInternationalParty(entry.country, companyCountry)) return 0;
-    // Missing / unmatched country → no local GST
-    if (!isSameCountry(entry.country, companyCountry)) return 0;
-    if (!entry.gstRegistered) return 0;
-    return companyGstRate;
+    // Domestic (same country or country not set) → company GST rate
+    return Number(companyGstRate) || 9;
   }
 
   function toPickedEntry(entry: {

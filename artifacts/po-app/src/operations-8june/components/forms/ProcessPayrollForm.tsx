@@ -47,6 +47,10 @@ import {
 } from "@/components/ui/select";
 import { Calculator, User, BookOpen, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  deploymentEmployees,
+  loadDeployments,
+} from "@/pages/manpower/deployment-store";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 import {
@@ -254,16 +258,46 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       .filter(Boolean) as Array<{ config: any; employee: any }>;
   }, [activeConfigs, employees]);
 
+  const [deploymentTick, setDeploymentTick] = useState(0);
+  useEffect(() => {
+    const refresh = () => setDeploymentTick((n) => n + 1);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
+
+  const deploymentLinks = useMemo(() => {
+    void deploymentTick;
+    const rows = loadDeployments().filter((row) => row.side === "customer");
+    const customerToEmployees = new Map<string, Set<number>>();
+    const employeeToCustomers = new Map<number, Set<string>>();
+    for (const row of rows) {
+      const partyKey = String(row.partyId || "").trim();
+      if (!partyKey) continue;
+      for (const person of deploymentEmployees(row)) {
+        const employeeKey = Number(person.id);
+        if (!Number.isFinite(employeeKey)) continue;
+        if (!customerToEmployees.has(partyKey)) customerToEmployees.set(partyKey, new Set());
+        customerToEmployees.get(partyKey)!.add(employeeKey);
+        if (!employeeToCustomers.has(employeeKey)) employeeToCustomers.set(employeeKey, new Set());
+        employeeToCustomers.get(employeeKey)!.add(partyKey);
+      }
+    }
+    return { customerToEmployees, employeeToCustomers };
+  }, [deploymentTick]);
+
+  useEffect(() => {
+    customerSyncedForEmployee.current = null;
+  }, [deploymentTick]);
+
   const scopedPairs = useMemo(() => {
     if (!customerId) return activeConfigEmployeePairs;
-    const customer = customers.find((item: any) => String(item.id) === customerId);
-    const ids = new Set(
-      (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
-        .map((employee: { id?: number }) => Number(employee.id))
-        .filter((id: number) => Number.isFinite(id)),
-    );
+    const ids = deploymentLinks.customerToEmployees.get(String(customerId)) || new Set<number>();
     return activeConfigEmployeePairs.filter(({ employee }) => ids.has(Number(employee.id)));
-  }, [activeConfigEmployeePairs, customerId, customers]);
+  }, [activeConfigEmployeePairs, customerId, deploymentLinks]);
 
   const scopedConfigs = useMemo(
     () => scopedPairs.map(({ config }) => config),
@@ -272,10 +306,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
 
   const handleCustomerChange = (id: string) => {
     setCustomerId(id);
-    const customer = customers.find((item: any) => String(item.id) === id);
-    const ids = (Array.isArray(customer?.assignedEmployees) ? customer.assignedEmployees : [])
-      .map((employee: { id?: number }) => Number(employee.id))
-      .filter((employeeId: number) => Number.isFinite(employeeId));
+    const ids = [...(deploymentLinks.customerToEmployees.get(String(id)) || new Set<number>())];
     const current = Number(form.getValues("employeeId"));
     if (current === ALL_EMPLOYEES_ID) return;
     if (!id) return;
@@ -335,12 +366,10 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     if (!employeeId || id === ALL_EMPLOYEES_ID || customers.length === 0) return;
     if (customerSyncedForEmployee.current === id) return;
     customerSyncedForEmployee.current = id;
-    const assigned = customers.filter((customer: any) =>
-      Array.isArray(customer.assignedEmployees) &&
-      customer.assignedEmployees.some(
-        (employee: { id?: number }) => Number(employee.id) === id,
-      ),
-    );
+    const partyIds = deploymentLinks.employeeToCustomers.get(id);
+    const assigned = partyIds
+      ? customers.filter((customer: any) => partyIds.has(String(customer.id)))
+      : [];
     if (assigned.length === 1) {
       setCustomerId(String(assigned[0].id));
       return;
@@ -349,8 +378,23 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       setCustomerId((current) =>
         assigned.some((customer: any) => String(customer.id) === current) ? current : "",
       );
+      return;
     }
-  }, [employeeId, customers]);
+    setCustomerId("");
+  }, [employeeId, customers, deploymentLinks]);
+
+  const customerChoices = useMemo(() => {
+    const id = Number(employeeId);
+    if (employeeId && id !== ALL_EMPLOYEES_ID) {
+      const partyIds = deploymentLinks.employeeToCustomers.get(id);
+      if (!partyIds || partyIds.size === 0) return [];
+      return customers.filter((customer: any) => partyIds.has(String(customer.id)));
+    }
+    const deployed = customers.filter((customer: any) =>
+      deploymentLinks.customerToEmployees.has(String(customer.id)),
+    );
+    return deployed.length > 0 ? deployed : customers;
+  }, [employeeId, customers, deploymentLinks]);
 
   const calculationPreview = useMemo((): PreviewView | null => {
     if (isAllEmployees) {
@@ -714,14 +758,14 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                       <Select
                         value={customerId || "__all__"}
                         onValueChange={(value) => handleCustomerChange(value === "__all__" ? "" : value)}
-                        disabled={customers.length === 0}
+                        disabled={customerChoices.length === 0}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder={customers.length === 0 ? "No customers" : "Select customer"} />
+                          <SelectValue placeholder={customerChoices.length === 0 ? "No customers" : "Select customer"} />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="__all__">All customers</SelectItem>
-                          {customers.map((customer: any) => (
+                          {customerChoices.map((customer: any) => (
                             <SelectItem key={customer.id} value={String(customer.id)}>
                               {customer.name}
                             </SelectItem>

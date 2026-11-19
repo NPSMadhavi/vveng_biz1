@@ -17,38 +17,6 @@ export function DocumentAdditionalInfoFields({
 }: DocumentAdditionalInfoFieldsProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
-      <FormField control={control} name="customerNote" render={({ field }) => (
-        <FormItem className="flex flex-col">
-          <FormLabel>Customer Note</FormLabel>
-          <FormControl>
-            <Textarea
-              value={field.value ?? ""}
-              onChange={field.onChange}
-              placeholder=""
-              rows={4}
-              className="min-h-[96px] resize-y"
-            />
-          </FormControl>
-          <FormMessage />
-        </FormItem>
-      )} />
-
-      <FormField control={control} name="deliveryInstructions" render={({ field }) => (
-        <FormItem className="flex flex-col">
-          <FormLabel>Delivery Instructions</FormLabel>
-          <FormControl>
-            <Textarea
-              value={field.value ?? ""}
-              onChange={field.onChange}
-              placeholder=""
-              rows={4}
-              className="min-h-[96px] resize-y"
-            />
-          </FormControl>
-          <FormMessage />
-        </FormItem>
-      )} />
-
       <FormField control={control} name="termsAndConditions" render={({ field }) => (
         <FormItem className="flex flex-col">
           <FormLabel>Terms & Conditions</FormLabel>

@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Trash2, Pencil, Eye, Lock, Mail, Receipt, Truck, Copy } from "lucide-react";
+import { ArrowLeft, Trash2, Pencil, Eye, Lock, Mail, Receipt, Copy } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { generateSalesOrder_PDF } from "@/lib/pdf";
 import { PdfPreviewModal, isSentToExternal } from "@/components/pdf-preview-modal";
@@ -241,16 +241,7 @@ export default function SalesOrderView() {
             {converting === "tax" ? <span className="h-4 w-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" /> : <Receipt className="h-4 w-4" />}
             Convert to Invoice
           </Button>
-          <Button
-            variant="outline"
-            className="gap-2 border-sky-300 text-sky-700 hover:bg-sky-50"
-            onClick={() => handleConvert("do")}
-            disabled={!!converting || !!(doc as any).doId}
-            title={(doc as any).doId ? "Already converted to Delivery Order" : undefined}
-          >
-            {converting === "do" ? <span className="h-4 w-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" /> : <Truck className="h-4 w-4" />}
-            Convert to DO
-          </Button>
+
           <Button
             variant="outline"
             className="gap-2"

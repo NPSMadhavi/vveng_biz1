@@ -4,6 +4,7 @@ import { db, settingsTable, companiesTable, purchaseOrdersTable } from "@workspa
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { resolveSmtpSettings, createMailTransporter } from "../lib/smtp.js";
+import { findApprovalByToken } from "../lib/timesheet-approvals-store.js";
 
 const emailUpload = multer({
   storage: multer.memoryStorage(),
@@ -17,6 +18,89 @@ function uploadedFiles(req: Request): Express.Multer.File[] {
 }
 
 const router = Router();
+
+function hoursTextEmail(value: number) {
+  return String(Math.round((Number(value) || 0) * 100) / 100);
+}
+
+function escEmail(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildTimesheetApprovalEmailHtml(opts: {
+  companyName: string;
+  approveUrl: string;
+  viewUrl: string;
+  partyLabel: string;
+  partyName: string;
+  periodLabel: string;
+  rows: { name: string; normal: number; overtime: number }[];
+  totalNormal: number;
+  totalOt: number;
+  bodyText: string;
+}) {
+  const rowsHtml = (opts.rows || []).map((row) =>
+    `<tr>
+      <td style="padding:10px 8px;border-bottom:1px solid #f1f5f9;color:#111827;">${escEmail(row.name)}</td>
+      <td style="padding:10px 8px;border-bottom:1px solid #f1f5f9;text-align:right;color:#111827;">${hoursTextEmail(row.normal)}</td>
+      <td style="padding:10px 8px;border-bottom:1px solid #f1f5f9;text-align:right;color:#111827;">${hoursTextEmail(row.overtime)}</td>
+    </tr>`
+  ).join("") || `<tr><td colspan="3" style="padding:12px;text-align:center;color:#888;">No hours</td></tr>`;
+
+  const intro = escEmail(opts.bodyText).replace(/\n/g, "<br/>");
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:24px;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+  <div style="max-width:560px;margin:0 auto;">
+    <p style="font-size:14px;line-height:1.6;color:#334155;margin:0 0 16px;">${intro}</p>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
+      <h2 style="margin:0 0 8px;font-size:18px;">${escEmail(opts.partyLabel)} Timesheet Approval</h2>
+      <p style="margin:0 0 16px;font-size:13px;color:#6b7280;">${escEmail(opts.partyLabel)} ki timesheet pampinchi approval teesukovali.</p>
+      <div style="border-bottom:1px solid #e5e7eb;padding-bottom:12px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;font-size:14px;padding:4px 0;">
+          <span style="color:#6b7280;">${escEmail(opts.partyLabel)}</span>
+          <strong>${escEmail(opts.partyName)}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:14px;padding:4px 0;">
+          <span style="color:#6b7280;">Period</span>
+          <strong>${escEmail(opts.periodLabel)}</strong>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:10px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:600;">Employee</th>
+            <th style="text-align:right;padding:10px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:600;">Normal Hrs</th>
+            <th style="text-align:right;padding:10px 8px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:600;">OT Hrs</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div style="margin-top:18px;">
+        <div style="font-size:14px;font-weight:700;">Total Normal Hours</div>
+        <div style="font-size:18px;font-weight:700;margin:4px 0 12px;">${hoursTextEmail(opts.totalNormal)}</div>
+        <div style="font-size:14px;font-weight:700;">Total OT Hours</div>
+        <div style="font-size:18px;font-weight:700;margin:4px 0 16px;">${hoursTextEmail(opts.totalOt)}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <span style="font-size:14px;color:#6b7280;">${escEmail(opts.partyLabel)} Approval</span>
+        <span style="background:#fff7ed;color:#c05600;font-size:12px;font-weight:600;padding:4px 12px;border-radius:999px;">Pending</span>
+      </div>
+      <a href="${escEmail(opts.approveUrl)}" style="display:block;text-align:center;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 20px;border-radius:8px;">Approved</a>
+      <p style="margin:14px 0 0;font-size:12px;color:#94a3b8;text-align:center;">
+        Or open the timesheet: <a href="${escEmail(opts.viewUrl)}" style="color:#2563eb;">${escEmail(opts.viewUrl)}</a>
+      </p>
+    </div>
+    <p style="margin:16px 0 0;font-size:12px;color:#94a3b8;text-align:center;">${escEmail(opts.companyName)}</p>
+  </div>
+</body></html>`;
+}
+
 
 // Convert plain-text body to email-safe HTML paragraphs
 function textToEmailHtml(text: string): string {
@@ -119,6 +203,9 @@ router.post("/send-email", emailUpload.any(), async (req, res): Promise<void> =>
   const poId = poIdRaw !== undefined && poIdRaw !== "" && poIdRaw !== null
     ? parseInt(String(poIdRaw), 10)
     : undefined;
+  const timesheetAckToken = typeof req.body?.timesheetAckToken === "string"
+    ? req.body.timesheetAckToken.trim()
+    : "";
 
   const files = uploadedFiles(req);
   const pdfFile = files.find(f => f.fieldname === "pdf") || files[0];
@@ -182,10 +269,21 @@ router.post("/send-email", emailUpload.any(), async (req, res): Promise<void> =>
       }
     }
 
+    // Timesheet customer/vendor approval link
+    let timesheetAckUrl: string | undefined;
+    if (timesheetAckToken) {
+      const host = req.get("x-forwarded-host") || req.get("host") || "localhost";
+      const proto = req.get("x-forwarded-proto") || "https";
+      timesheetAckUrl = `${proto}://${host}/api/timesheet-ack/${timesheetAckToken}`;
+    }
+
     // Plain-text body only (customers flagged HTML emails as spam)
     let plainBody = body;
     if (ackUrl) {
       plainBody += `\n\nTo acknowledge this Purchase Order, please visit:\n${ackUrl}/order-received`;
+    }
+    if (timesheetAckUrl) {
+      plainBody += `\n\nOpen the attached timesheet PDF and click the Approved button in the document.\nApproval page: ${timesheetAckUrl}/approve`;
     }
     const plainFooter = `\n\n--\n${companyName}`;
 

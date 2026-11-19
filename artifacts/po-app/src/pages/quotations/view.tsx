@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Trash2, Pencil, Eye, Lock, Mail, FileText, Receipt, ShoppingBag, Copy } from "lucide-react";
+import { ArrowLeft, Trash2, Pencil, Eye, Lock, Mail, Receipt, ShoppingBag, Copy } from "lucide-react";
 import { fmtDate } from "@/lib/utils";
 import { generateQuotation_PDF } from "@/lib/pdf";
 import { PdfPreviewModal, isSentToExternal } from "@/components/pdf-preview-modal";
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { formatCurrency as formatCurrencySafe } from "@/lib/currencies";
 import { StickyPageHeader } from "@/components/sticky-page-header";
+import { quotationLineAmount } from "@/components/manpower-quotation-fields";
 
 function isoToReadable(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
@@ -98,33 +99,6 @@ export default function QuotationView() {
 
       toast({ title: "Marked as Converted", description: "Opening new Sales Order…" });
       setLocation(`/sales-orders/new?quotationId=${id}`);
-    } catch (err: any) {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    } finally {
-      setConverting(null);
-    }
-  };
-
-  const handleConvertToPi = async () => {
-    setConverting("pi");
-    try {
-      const res = await fetch(`/api/quotations/${id}/convert`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "proforma" }),
-      });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Failed"); }
-      const result = await res.json();
-
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: getGetQuotationQueryKey(id) }),
-        qc.invalidateQueries({ queryKey: getListQuotationsQueryKey() }),
-        invalidateDocumentList(qc, "proforma-invoices"),
-      ]);
-
-      toast({ title: "Proforma Invoice Created", description: `${result.number} created successfully` });
-      setLocation(`/proforma-invoices/${result.id}`);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
@@ -213,15 +187,22 @@ export default function QuotationView() {
   if (!doc) return <div className="text-center py-20 text-muted-foreground">Quotation not found.</div>;
 
   const items = (doc.items as any[]) || [];
-  const subtotal = Number(doc.subtotal) || 0;
-  const tax = Number(doc.tax) || 0;
-  const total = Number(doc.totalAmount) || 0;
   const discountAmt = Number((doc as any).discountAmount) || 0;
+  const computedSubtotal = items.reduce((s: number, item: any) => (item.type === "section" || item.isFoc) ? s : s + quotationLineAmount(item), 0);
+  const subtotal = computedSubtotal > 0 ? computedSubtotal : (Number(doc.subtotal) || 0);
+  const taxable = Math.max(0, subtotal - discountAmt);
+  const savedTaxable = Math.max(0, (Number(doc.subtotal) || 0) - discountAmt);
+  const taxRate = savedTaxable > 0 && Number(doc.tax) > 0
+    ? Number(doc.tax) / savedTaxable
+    : 0;
+  const tax = taxable * taxRate;
+  const total = taxable + tax;
   const regularQtItems = items.filter((item: any) => item.type !== "section");
   const hasItemDiscount = regularQtItems.some((item: any) => Number(item.discount) > 0);
   const hasQtUom = regularQtItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
+  const hasQtHours = regularQtItems.some((item: any) => item.hours != null && String(item.hours).trim() !== "");
   const hasQtPartNo = regularQtItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
-  const qtColCount = 2 + (hasQtPartNo ? 1 : 0) + (hasQtUom ? 1 : 0) + (hasItemDiscount ? 1 : 0) + 3;
+  const qtColCount = 2 + (hasQtPartNo ? 1 : 0) + (hasQtUom ? 1 : 0) + (hasQtHours ? 1 : 0) + (hasItemDiscount ? 1 : 0) + 3;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-20">
@@ -261,15 +242,7 @@ export default function QuotationView() {
             {converting === "so" ? <span className="h-4 w-4 border-2 border-sky-500 border-t-transparent rounded-full animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
             Convert to SO
           </Button>
-          <Button
-            variant="outline"
-            className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50"
-            onClick={handleConvertToPi}
-            disabled={!!converting}
-          >
-            {converting === "pi" ? <span className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /> : <FileText className="h-4 w-4" />}
-            Convert to PI
-          </Button>
+
           <Button
             variant="outline"
             className="gap-2 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
@@ -389,6 +362,7 @@ export default function QuotationView() {
             <div className="flex justify-between gap-4"><span className="text-muted-foreground">Manpower Source</span><span>{(doc as any).manpowerDetails.source === "supplier" ? "Supplier Manpower" : "Own Employees"}</span></div>
             {(doc as any).manpowerDetails.designation && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Designation</span><span>{(doc as any).manpowerDetails.designation}</span></div>}
             {(doc as any).manpowerDetails.workers && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Number of Workers</span><span>{(doc as any).manpowerDetails.workers}</span></div>}
+{(doc as any).manpowerDetails.hours && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Number of Hours</span><span>{(doc as any).manpowerDetails.hours}</span></div>}
             {(doc as any).manpowerDetails.billingType && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Billing Type</span><span>{(doc as any).manpowerDetails.billingType}</span></div>}
             {(doc as any).manpowerDetails.customerRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Customer Rate (SGD)</span><span>{(doc as any).manpowerDetails.customerRate}</span></div>}
             {(doc as any).manpowerDetails.standardHours && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Standard Hours / Day</span><span>{(doc as any).manpowerDetails.standardHours}</span></div>}
@@ -409,6 +383,7 @@ export default function QuotationView() {
                 {hasQtPartNo && <th className="px-6 py-3 text-left whitespace-nowrap min-w-[140px]">Item / Part No.</th>}
                 <th className="px-6 py-3 text-left">Description</th>
                 <th className="px-6 py-3 text-right whitespace-nowrap">Qty</th>
+                {hasQtHours && <th className="px-6 py-3 text-right whitespace-nowrap">Hours</th>}
                 {hasQtUom && <th className="px-6 py-3 text-center whitespace-nowrap">UOM</th>}
                 <th className="px-6 py-3 text-right whitespace-nowrap">Unit Price</th>
                 {hasItemDiscount && <th className="px-6 py-3 text-right whitespace-nowrap">Disc %</th>}
@@ -426,9 +401,7 @@ export default function QuotationView() {
                 }
                 _n++;
                 const isFocItem = !!(item as any).isFoc;
-                const qtDisplayAmount = isFocItem
-                  ? (Number(item.amount) > 0 ? Number(item.amount) : Number(item.qty) * Number(item.unitPrice) * (1 - (Number(item.discount) || 0) / 100))
-                  : (Number(item.amount) || (Number(item.qty) * Number(item.unitPrice)));
+                const qtDisplayAmount = quotationLineAmount(item);
                 return (
                   <tr key={i} className="hover:bg-muted/30">
                     <td className="px-6 py-3 text-muted-foreground align-top">{_n}</td>
@@ -443,6 +416,7 @@ export default function QuotationView() {
                       </div>
                     </td>
                     <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{item.qty}</td>
+                    {hasQtHours && <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{item.hours || "—"}</td>}
                     {hasQtUom && <td className="px-6 py-3 text-center text-muted-foreground">{item.uom || "—"}</td>}
                     <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{fmt(Number(item.unitPrice) || 0)}</td>
                     {hasItemDiscount && <td className="px-6 py-3 text-right text-muted-foreground">{Number(item.discount) > 0 ? `${item.discount}%` : "—"}</td>}

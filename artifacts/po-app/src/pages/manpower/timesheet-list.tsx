@@ -12,7 +12,7 @@ import { formatDisplayDate, type DeploymentSide } from "./deployment-store";
 import { loadTimesheets, type Timesheet } from "./timesheet-store";
 
 function statusBadge(status: Timesheet["status"]) {
-  if (status === "approved") return <Badge className="bg-emerald-600 hover:bg-emerald-700">Approved</Badge>;
+  if (status === "approved") return <Badge className="bg-emerald-600 hover:bg-emerald-700">Confirmed</Badge>;
   if (status === "rejected") return <Badge variant="destructive">Rejected</Badge>;
   if (status === "submitted") return <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100">Pending</Badge>;
   return <Badge variant="secondary">Draft</Badge>;
@@ -46,7 +46,7 @@ export default function TimesheetList({ side }: { side: DeploymentSide }) {
         </div>
         <div className="flex items-center gap-2">
           <Link href={`${base}/report`}>
-            <Button variant="outline" className="gap-2"><FileBarChart className="h-4 w-4" />Report</Button>
+            <Button className="gap-2 bg-[#2563EB] text-white hover:bg-[#1D4ED8]"><FileBarChart className="h-4 w-4" />Report</Button>
           </Link>
           <Link href={`${base}/new`}>
             <Button className="gap-2"><Plus className="h-4 w-4" />New Timesheet</Button>

@@ -44,6 +44,7 @@ import { isGeneralParty, isManpowerParty } from "@/lib/party-usage";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
+import { QuotationRefSelect } from "@/components/quotation-ref-select";
 import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField } from "@/components/issue-date-field";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
@@ -644,7 +645,13 @@ export default function PurchaseOrderEdit() {
  render={({ field }) => (
                     <FormItem>
                       <FormLabel>Sales Quote Reference No.</FormLabel>
-                      <FormControl><Input placeholder="" {...field} /></FormControl>
+                      <FormControl>
+                        <QuotationRefSelect
+                          value={field.value || ""}
+                          onChange={field.onChange}
+                          placeholder="Select sales quote"
+                        />
+                      </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}

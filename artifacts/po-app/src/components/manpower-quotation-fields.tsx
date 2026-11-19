@@ -283,10 +283,14 @@ export function quotationLineAmount(item: {
   uom?: string;
 }) {
   const hours = Number(item?.hours) || 0;
-  const hourly = String(item?.uom || "").toLowerCase().startsWith("hour");
-  const factor = hourly && hours > 0 ? hours : 1;
+  const uom = String(item?.uom || "").toLowerCase();
+  const hourly = uom.startsWith("hour") || uom === "hr" || uom === "hrs";
+  // Hourly: Amount = workers × hours × rate (auto). Daily/Monthly: workers × rate.
+  const factor = hourly ? (hours > 0 ? hours : 0) : 1;
   const disc = Number(item?.discount) || 0;
-  return (Number(item?.qty) || 0) * factor * (Number(item?.unitPrice) || 0) * (1 - disc / 100);
+  const qty = Number(item?.qty) || 0;
+  const price = Number(item?.unitPrice) || 0;
+  return Math.round(qty * factor * price * (1 - disc / 100) * 100) / 100;
 }
 
 function blankManpowerLine(details: {
@@ -319,13 +323,24 @@ function blankManpowerLine(details: {
 export function ManpowerRequirementsCard({
   control,
   onAddLine,
+  supplierOnly = false,
 }: {
   control: Control<any>;
   onAddLine?: (line: ReturnType<typeof blankManpowerLine>) => void;
+  /** Vendor quotations: only Supplier Manpower (no Own Employees). */
+  supplierOnly?: boolean;
 }) {
-  const source = useWatch({ control, name: "manpowerDetails.source" }) || "own";
-  const showSupplierFields = source === "supplier";
   const { getValues, setValue } = useFormContext();
+  const watchedSource = useWatch({ control, name: "manpowerDetails.source" });
+  const source = supplierOnly ? "supplier" : (watchedSource || "own");
+  const showSupplierFields = source === "supplier";
+
+  useEffect(() => {
+    if (!supplierOnly) return;
+    if (watchedSource !== "supplier") {
+      setValue("manpowerDetails.source", "supplier", { shouldDirty: false });
+    }
+  }, [supplierOnly, watchedSource, setValue]);
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
   const draftNameRef = useRef("");
@@ -393,19 +408,25 @@ export function ManpowerRequirementsCard({
       </CardHeader>
       <CardContent className="space-y-4">
         <FormField control={control} name="manpowerDetails.source" render={({ field }) => (
-          <FormItem>
+          <FormItem className={supplierOnly ? "w-full max-w-[240px]" : undefined}>
             <FormLabel>Manpower Source</FormLabel>
             <FormControl>
-              <RadioGroup value={field.value || "own"} onValueChange={field.onChange} className="flex flex-wrap gap-6">
-                <label className="flex items-center gap-2 text-sm">
-                  <RadioGroupItem value="own" />
-                  Own Employees
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <RadioGroupItem value="supplier" />
+              {supplierOnly ? (
+                <div className="flex h-10 w-full items-center rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 text-sm font-medium text-[#111827]">
                   Supplier Manpower
-                </label>
-              </RadioGroup>
+                </div>
+              ) : (
+                <RadioGroup value={field.value || "own"} onValueChange={field.onChange} className="flex flex-wrap gap-6">
+                  <label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value="own" />
+                    Own Employees
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value="supplier" />
+                    Supplier Manpower
+                  </label>
+                </RadioGroup>
+              )}
             </FormControl>
           </FormItem>
         )} />

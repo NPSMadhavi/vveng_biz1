@@ -128,12 +128,17 @@ export default function QuotationNew() {
     if (!settings || appliedDefaultGst.current) return;
     appliedDefaultGst.current = true;
     // Never overwrite overseas / zero-rated GST with company default
-    if (isOverseas || form.getValues("tax") === 0) return;
+    if (isOverseas) return;
     form.setValue("tax", settings.gstRate ?? 9);
   }, [settings, isOverseas]);
 
   useEffect(() => {
-    if (isOverseas) form.setValue("tax", 0);
+    if (isOverseas) {
+      form.setValue("tax", 0);
+      return;
+    }
+    const current = Number(form.getValues("tax") ?? 0);
+    if (!current) form.setValue("tax", (Number(settings?.gstRate ?? 9) || 9));
   }, [isOverseas]);
 
   // Prefill from AI agent or "Copy to New Quotation"
@@ -748,13 +753,31 @@ export default function QuotationNew() {
  checked={isOverseas}
  onCheckedChange={(v) => {
                         setIsOverseas(v);
-                        form.setValue("tax", v ? 0 : (settings?.gstRate ?? 0));
+                        form.setValue("tax", v ? 0 : (Number(settings?.gstRate ?? 9) || 9));
                       }}
                     />
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm text-muted-foreground">GST:</span>
-                    <span className="text-sm font-medium">{taxPercent}%</span>
+                    {isOverseas ? (
+                      <span className="text-sm font-medium">0% (Overseas)</span>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.1}
+                          className="h-8 w-16 text-sm"
+                          value={Number(form.watch("tax") ?? 0)}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            form.setValue("tax", Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : (Number(settings?.gstRate ?? 9) || 9));
+                          }}
+                        />
+                        <span className="text-sm font-medium">%</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

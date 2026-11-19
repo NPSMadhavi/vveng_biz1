@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef , type ReactNode} from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -259,6 +259,8 @@ interface PdfPreviewModalProps {
   poId?: number;
   docInfo?: EmailDocInfo;
   showEmail?: boolean;
+  timesheetAckToken?: string;
+  footerActions?: ReactNode;
 }
 
 export function PdfPreviewModal({
@@ -280,6 +282,8 @@ export function PdfPreviewModal({
   poId,
   docInfo,
   showEmail = true,
+  timesheetAckToken,
+  footerActions,
 }: PdfPreviewModalProps) {
   const { toast } = useToast();
   const [pdfBase64, setPdfBase64] = useState<string | null>(null);
@@ -477,6 +481,7 @@ export function PdfPreviewModal({
                   triggerSize="sm"
                   onSuccess={(recipients) => onEmailSent?.(recipients)}
                   poId={poId}
+                  timesheetAckToken={timesheetAckToken}
                   docInfo={docInfo}
                 />
               )}
@@ -493,6 +498,11 @@ export function PdfPreviewModal({
               </div>
             )}
           </div>
+          {footerActions ? (
+            <div className="border-t px-6 py-3 flex items-center justify-end gap-2 bg-background">
+              {footerActions}
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
 

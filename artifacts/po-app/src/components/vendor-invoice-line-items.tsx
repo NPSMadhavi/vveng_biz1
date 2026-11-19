@@ -307,8 +307,9 @@ export function VendorInvoiceLineItems({
                   {!manpower && <th className="px-4 py-3 text-left w-36">Item / Part Number</th>}
                   <th className="px-4 py-3 text-left">{manpower ? "Designation" : "Description"}</th>
                   <th className="px-4 py-3 text-right w-20">{manpower ? "Workers" : "Qty"}</th>
+                  {manpower && <th className="px-4 py-3 text-right w-20">Hours</th>}
                   <th className="px-4 py-3 text-center w-28">{manpower ? "Billing" : "UOM"}</th>
-                  <th className="px-4 py-3 text-right w-28">{manpower ? "Customer Rate" : "Unit Price"}</th>
+                  <th className="px-4 py-3 text-right w-28">{manpower ? "Supplier Rate" : "Unit Price"}</th>
                   <th className="px-4 py-3 text-right w-24">Disc %</th>
                   <th className="px-4 py-3 text-right w-28">Amount</th>
                   <th className="px-4 py-3 text-center w-12">FOC</th>
@@ -321,7 +322,7 @@ export function VendorInvoiceLineItems({
                   const rowNodes = items.map((item, idx) => {
                     const insertBar = (
                       <tr key={`ins-${rowKey(item, idx)}`} className="group/ins border-0 h-5">
-                        <td colSpan={10} className="p-0 overflow-visible">
+                        <td colSpan={manpower ? 10 : 10} className="p-0 overflow-visible">
                           <div className="relative flex items-center justify-center h-5">
                             <div className="absolute inset-x-0 top-1/2 h-px bg-border/40 group-hover/ins:bg-primary/40 transition-colors" />
                             <div className="absolute flex items-center gap-2 opacity-0 group-hover/ins:opacity-100 transition-opacity">
@@ -350,7 +351,7 @@ export function VendorInvoiceLineItems({
                         <Fragment key={rowKey(item, idx)}>
                           {insertBar}
                           <tr className="border-b bg-muted/40">
-                            <td colSpan={10} className="px-4 py-2">
+                            <td colSpan={manpower ? 10 : 10} className="px-4 py-2">
                               <div className="flex items-start gap-2">
                                 <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-2" />
                                 <div className="flex-1 min-w-0">
@@ -383,7 +384,7 @@ export function VendorInvoiceLineItems({
                     }
 
                     itemNo++;
-                    const amount = calcViLineAmount(item.qty, item.unitPrice, item.discount, item.isFoc);
+                    const amount = calcViLineAmount(item.qty, item.unitPrice, item.discount, item.isFoc, item.hours, item.uom);
                     return (
                       <Fragment key={rowKey(item, idx)}>
                         {insertBar}
@@ -429,6 +430,20 @@ export function VendorInvoiceLineItems({
                               onChange={(val) => updateItem(idx, { qty: val })}
                             />
                           </td>
+                          {manpower && (
+                          <td className="px-4 py-2">
+                            <Input
+                              inputMode="decimal"
+                              className="h-8 text-sm text-right border-0 bg-transparent focus:bg-background"
+                              placeholder="0"
+                              value={item.hours ?? ""}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                if (value === "" || /^\d*\.?\d*$/.test(value)) updateItem(idx, { hours: value });
+                              }}
+                            />
+                          </td>
+                          )}
                           <td className="px-4 py-2">
                             <select
                               className="h-8 text-sm w-full border-0 bg-transparent focus:outline-none cursor-pointer"
@@ -482,7 +497,7 @@ export function VendorInvoiceLineItems({
                   return [
                     ...rowNodes,
                     <tr key="trailing-bar" className="group/ins border-0 h-5">
-                      <td colSpan={10} className="p-0 overflow-visible">
+                      <td colSpan={manpower ? 10 : 10} className="p-0 overflow-visible">
                         <div className="relative flex items-center justify-center h-5">
                           <div className="absolute inset-x-0 top-1/2 h-px bg-border/40 group-hover/ins:bg-primary/40 transition-colors" />
                           <div className="absolute flex items-center gap-2 opacity-0 group-hover/ins:opacity-100 transition-opacity">

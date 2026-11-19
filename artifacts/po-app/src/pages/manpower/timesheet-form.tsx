@@ -11,8 +11,7 @@ import { SimpleDatePicker } from "@/components/ui/simple-date-picker";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { PdfPreviewModal } from "@/components/pdf-preview-modal";
-import { generateTimesheetPdf } from "./timesheet-pdf";
+import { TimesheetApprovalDialog } from "./timesheet-approval-dialog";
 import { FormPageShell } from "@/operations-8june/components/layout/FormPageShell";
 import {
   ModalCancelButton,
@@ -31,6 +30,12 @@ import {
   updateTimesheet,
   type Timesheet,
 } from "./timesheet-store";
+import { buildApprovalSheet } from "./timesheet-approval";
+import {
+  createTimesheetAck,
+  localStatusFromAck,
+  syncTimesheetAckStatus,
+} from "./timesheet-ack-api";
 
 const DAY_TYPES = ["Normal Working Day", "Rest Day", "Public Holiday", "Leave", "Absent"];
 const labelClass = "text-sm font-medium text-[#111827]";
@@ -136,6 +141,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   const [remarks, setRemarks] = useState(existing?.remarks ?? "");
   const [saved, setSaved] = useState<Timesheet | null>(existing);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [ackToken, setAckToken] = useState(existing?.approvalToken || "");
   const readOnly = Boolean(existing) && !isEdit;
 
   const shownNo = existing?.timesheetNo || timesheetNo || runningNo.value;
@@ -194,6 +200,11 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       submittedBy: user?.username || "Admin",
       status: isEdit && existing?.status ? existing.status : "submitted",
       sentTo: existing?.sentTo ?? "",
+      billingRate: chosen?.billingRate?.trim() || existing?.billingRate || "",
+      otBillingRate: (() => {
+        const base = Number(String(chosen?.billingRate || existing?.billingRate || "").replace(/[^0-9.]/g, ""));
+        return base > 0 ? String(Math.round(base * 1.5 * 100) / 100) : (existing?.otBillingRate || "");
+      })(),
     };
     saveTimesheet(record);
     if (isEdit) {
@@ -215,7 +226,68 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     toast({ title: "Timesheet submitted." });
   }
 
+  
   const current = saved ?? existing;
+
+  async function applyRemoteStatuses(sheet: Timesheet) {
+    const approval = buildApprovalSheet(sheet);
+    const ids = approval.ids.length ? approval.ids : [sheet.id];
+    const byId = await syncTimesheetAckStatus(ids);
+    let nextStatus = sheet.status;
+    let nextToken = sheet.approvalToken || ackToken;
+    for (const id of ids) {
+      const remote = byId[id];
+      if (!remote) continue;
+      nextToken = remote.token || nextToken;
+      const mapped = localStatusFromAck(remote.status);
+      if (mapped === "approved" || mapped === "rejected") {
+        nextStatus = mapped;
+        updateTimesheet(id, { status: mapped, approvalToken: remote.token || nextToken });
+      } else if (remote.token) {
+        updateTimesheet(id, { approvalToken: remote.token });
+      }
+    }
+    if (nextToken) setAckToken(nextToken);
+    if (nextStatus !== sheet.status || nextToken) {
+      setSaved({ ...sheet, status: nextStatus, approvalToken: nextToken || sheet.approvalToken });
+    }
+    return { status: nextStatus, token: nextToken };
+  }
+
+  async function ensureAckPacket(sheet: Timesheet) {
+    const created = await createTimesheetAck(sheet);
+    if (!created) return "";
+    setAckToken(created.token);
+    const approval = buildApprovalSheet(sheet);
+    (approval.ids.length ? approval.ids : [sheet.id]).forEach((id) =>
+      updateTimesheet(id, { approvalToken: created.token }),
+    );
+    setSaved({ ...sheet, approvalToken: created.token });
+    return created.token;
+  }
+
+  useEffect(() => {
+    if (!existing || existing.status === "draft") return;
+    let cancelled = false;
+    (async () => {
+      const result = await applyRemoteStatuses(existing);
+      if (cancelled || !result) return;
+    })();
+    return () => { cancelled = true; };
+  }, [existing?.id]);
+
+  useEffect(() => {
+    if (!previewOpen || !current) return;
+    let cancelled = false;
+    (async () => {
+      await applyRemoteStatuses(current);
+      if (cancelled) return;
+      const token = await ensureAckPacket(current);
+      if (!cancelled && token) setAckToken(token);
+    })();
+    return () => { cancelled = true; };
+  }, [previewOpen, current?.id]);
+
   const approvalLabel = side === "customer" ? "Customer Approval" : "Vendor Approval";
 
   function remove() {
@@ -327,28 +399,27 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
               <Readonly label="Submitted By" value={current?.submittedBy || user?.username || "Admin"} />
               <Readonly
                 label={approvalLabel}
-                value={current?.status === "approved" ? "Approved" : current?.status === "rejected" ? "Rejected" : "Pending"}
+                value={current?.status === "approved" ? "Confirmed" : current?.status === "rejected" ? "Rejected" : "Pending"}
               />
-              <Readonly label="Status" value={current?.status === "approved" ? "Approved" : current?.status === "rejected" ? "Rejected" : current?.status === "submitted" ? "Pending" : "Draft"} />
+              <Readonly label="Status" value={current?.status === "approved" ? "Confirmed" : current?.status === "rejected" ? "Rejected" : current?.status === "submitted" ? "Pending" : "Draft"} />
             </div>
           </section>
         </div>
       </FormPageShell>
 
       {current && (
-        <PdfPreviewModal
+        <TimesheetApprovalDialog
           open={previewOpen}
           onOpenChange={setPreviewOpen}
-          title="Timesheet"
-          generatePdf={(opts) => generateTimesheetPdf(current, selectedCompany?.name || "BizOne", opts)}
-          pdfFilename={`${current.timesheetNo}.pdf`}
-          defaultEmailTo={current.partyEmail}
-          defaultEmailSubject={`${partyNoun} Timesheet Approval`}
-          defaultEmailBody={`Dear ${current.partyName || "Sir/Madam"},\n\nPlease find the timesheet approval.\n\nThank you.`}
-          onEmailSent={(recipients) => {
+          sheet={current}
+          onStatus={(status) => {
+            setSaved({ ...current, status, approvalToken: ackToken || current.approvalToken });
+            toast({ title: status === "approved" ? "Confirmed." : "Rejected." });
+          }}
+          onSent={(recipients) => {
             const sentTo = recipients.join(", ");
-            updateTimesheet(current.id, { sentTo });
-            setSaved({ ...current, sentTo });
+            updateTimesheet(current.id, { sentTo, approvalToken: ackToken || current.approvalToken });
+            setSaved({ ...current, sentTo, approvalToken: ackToken || current.approvalToken });
             toast({ title: `Sent to ${partyNoun.toLowerCase()}.` });
           }}
         />

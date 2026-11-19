@@ -336,7 +336,7 @@ router.post("/invoices", async (req, res): Promise<void> => {
   const {
     customerName, customerAddress, customerContact, customerContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, salesPerson, notes, items, tax,
-    currency, discountAmount, isPrivate, status, poRefNo, exchangeRate, manpowerDetails,
+    currency, discountAmount, isPrivate, status, poRefNo, soId, soNumber, exchangeRate, manpowerDetails,
     createDeliveryOrder,
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
   } = req.body;
@@ -374,6 +374,8 @@ router.post("/invoices", async (req, res): Promise<void> => {
         exchangeRate: parseFloat(exchangeRate ?? "1").toFixed(6) as any,
         isPrivate: isPrivate === true,
         poRefNo: poRefNo || null,
+        soId: soId ? Number(soId) : null,
+        soNumber: soNumber || null,
         subtotal: subtotal.toFixed(2), discountAmount: docDiscount.toFixed(2), tax: taxAmt.toFixed(2),
         totalAmount: totalAmount.toFixed(2), status: createdStatus, createdBy: req.session.userId!,
         termsAndConditions: termsAndConditions || null,
@@ -567,7 +569,7 @@ router.put("/invoices/:id", async (req, res): Promise<void> => {
   const {
     customerName, customerAddress, customerContact, customerContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, salesPerson, notes, items, tax, status,
-    currency, discountAmount, isPrivate, poRefNo, exchangeRate, createDeliveryOrder, manpowerDetails,
+    currency, discountAmount, isPrivate, poRefNo, soId, soNumber, exchangeRate, createDeliveryOrder, manpowerDetails,
     termsAndConditions, deliveryInstructions, customerNote, authorisedSignature,
   } = req.body;
 
@@ -583,6 +585,8 @@ router.put("/invoices/:id", async (req, res): Promise<void> => {
     subtotal: subtotal.toFixed(2), discountAmount: docDiscount.toFixed(2),
     tax: taxAmt.toFixed(2), totalAmount: totalAmount.toFixed(2),
     poRefNo: poRefNo ?? null,
+    soId: soId !== undefined ? (soId ? Number(soId) : null) : undefined,
+    soNumber: soNumber !== undefined ? (soNumber || null) : undefined,
   };
   if (currency !== undefined) updateData.currency = currency;
   if (exchangeRate !== undefined) updateData.exchangeRate = parseFloat(exchangeRate).toFixed(6);

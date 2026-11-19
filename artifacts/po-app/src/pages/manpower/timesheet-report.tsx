@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode  } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -41,7 +41,7 @@ import {
 import { SimpleDatePicker } from "@/components/ui/simple-date-picker";
 import { useAuth } from "@/contexts/auth-context";
 import { loadDeployments, type DeploymentSide } from "./deployment-store";
-import { loadTimesheets, type Timesheet } from "./timesheet-store";
+import { loadTimesheets, updateTimesheet, type Timesheet } from "./timesheet-store";
 
 type EmployeeRow = {
   id: number;
@@ -71,6 +71,11 @@ type ReportRow = {
   normal: number;
   ot: number;
   total: number;
+  rate: number;
+  otRate: number;
+  normalAmount: number;
+  otAmount: number;
+  totalAmount: number;
   status: Timesheet["status"];
   absent: boolean;
   partyName: string;
@@ -144,8 +149,48 @@ function hoursText(value: number) {
   return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function moneyText(value: number) {
+  return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function parseRate(value: unknown) {
+  if (value == null || value === "") return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const cleaned = String(value).replace(/[^0-9.-]/g, "");
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function backfillTimesheetRates(side: DeploymentSide, companyId: number | null) {
+  const deployments = loadDeployments();
+  loadTimesheets()
+    .filter((row) => row.side === side && sameId(row.companyId, companyId))
+    .forEach((row) => {
+      if (parseRate(row.billingRate) > 0) return;
+      const deployment = resolveDeployment(row, deployments);
+      const rate = parseRate(deployment?.billingRate) || parseRate(deployment?.payRate);
+      if (rate <= 0) return;
+      updateTimesheet(row.id, {
+        billingRate: String(rate),
+        otBillingRate: String(Math.round(rate * 1.5 * 100) / 100),
+      });
+    });
+}
+
+function resolveDeployment(row: Timesheet, deployments: ReturnType<typeof loadDeployments>) {
+  return (
+    deployments.find((item) => item.id === row.deploymentId) ||
+    deployments.find((item) =>
+      item.side === row.side &&
+      String(item.deploymentNo || "").trim() === String(row.deploymentNo || "").trim() &&
+      String(item.partyId || "") === String(row.partyId || "")
+    ) ||
+    undefined
+  );
+}
+
 function statusLabel(status: Timesheet["status"]) {
-  if (status === "approved") return "Approved";
+  if (status === "approved") return "Confirmed";
   if (status === "submitted") return "Pending";
   if (status === "rejected") return "Rejected";
   return "Draft";
@@ -204,6 +249,11 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
     queryFn: fetchEmployees,
   });
 
+  useEffect(() => {
+    backfillTimesheetRates(side, companyId);
+    setSheets(loadTimesheets());
+  }, [side, companyId]);
+
   const rows = useMemo(() => {
     const deployments = loadDeployments();
     return sheets
@@ -230,8 +280,11 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
     const people = new Set(filtered.map((row) => row.employeeName).filter((name) => name !== "—"));
     const normal = filtered.reduce((sum, row) => sum + row.normal, 0);
     const ot = filtered.reduce((sum, row) => sum + row.ot, 0);
+    const normalAmount = filtered.reduce((sum, row) => sum + row.normalAmount, 0);
+    const otAmount = filtered.reduce((sum, row) => sum + row.otAmount, 0);
+    const totalAmount = filtered.reduce((sum, row) => sum + row.totalAmount, 0);
     const absent = filtered.filter((row) => row.absent).length;
-    return { people: people.size, normal, ot, absent };
+    return { people: people.size, normal, ot, normalAmount, otAmount, totalAmount, absent };
   }, [filtered]);
 
   const trendData = useMemo(() => buildTrend(filtered, applied, trend), [filtered, applied, trend]);
@@ -253,6 +306,7 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
     }
     setDraft(next);
     setApplied(next);
+    backfillTimesheetRates(side, companyId);
     setSheets(loadTimesheets());
     setPage(1);
     setReportKey((key) => key + 1);
@@ -271,7 +325,7 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
         <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Timesheet Report</h1>
       </div>
       <div className="rounded-xl border bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1.35fr_1fr_1fr_1fr_auto] xl:items-end">
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(7.5rem,9rem)] xl:items-end">
           <FilterField label="Report Type" icon={<Clock className="h-4 w-4" />}>
             <Select value="summary">
               <SelectTrigger className="pl-9">
@@ -328,9 +382,17 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
               </SelectContent>
             </Select>
           </FilterField>
-          <div className="flex gap-2">
-            <Button type="button" className="gap-2 bg-[#2563EB] hover:bg-[#1D4ED8]" onClick={applyFilters}>
-              <Search className="h-4 w-4" /> Generate Report
+          <div className="flex min-w-0 items-end">
+            <Button
+              type="button"
+              className="h-auto min-h-10 w-full gap-1 whitespace-normal bg-[#2563EB] px-2 py-1.5 text-center leading-tight hover:bg-[#1D4ED8]"
+              onClick={applyFilters}
+            >
+              <Search className="h-4 w-4 shrink-0" />
+              <span className="inline-flex flex-col items-center text-xs font-semibold sm:text-sm">
+                <span>Generate</span>
+                <span>Report</span>
+              </span>
             </Button>
           </div>
         </div>
@@ -338,9 +400,9 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard tone="blue" icon={<Users className="h-6 w-6" />} label="Total Employees" value={String(totals.people)} />
-        <StatCard tone="green" icon={<Clock className="h-6 w-6" />} label="Total Working Hours" value={`${hoursText(totals.normal)} hrs`} />
-        <StatCard tone="orange" icon={<CalendarDays className="h-6 w-6" />} label="Total OT hours" value={`${hoursText(totals.ot)} hrs`} />
-        <StatCard tone="purple" icon={<CalendarDays className="h-6 w-6" />} label="Absent Days" value={String(totals.absent)} />
+        <StatCard tone="green" icon={<Clock className="h-6 w-6" />} label="Normal Hours / Amount" value={`${hoursText(totals.normal)} hrs · SGD ${moneyText(totals.normalAmount)}`} />
+        <StatCard tone="orange" icon={<CalendarDays className="h-6 w-6" />} label="OT Hours / Amount" value={`${hoursText(totals.ot)} hrs · SGD ${moneyText(totals.otAmount)}`} />
+        <StatCard tone="purple" icon={<CalendarDays className="h-6 w-6" />} label="Total Hours / Amount" value={`${hoursText(totals.normal + totals.ot)} hrs · SGD ${moneyText(totals.totalAmount)}`} />
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.55fr_1fr]">
@@ -434,10 +496,10 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
           </div>
         </div>
         <div className="overflow-x-auto px-3 pb-2">
-          <table className="w-full min-w-[960px] overflow-hidden rounded-lg text-sm">
+          <table className="w-full min-w-[1360px] overflow-hidden rounded-lg text-sm">
             <thead>
               <tr className="bg-[#102A43] text-left text-white">
-                {["#", "Employee Name", "Designation", "Department", "Date", "Check In", "Check Out", "Normal Hours", "OT Hours", "Total Hours", "Status"].map((heading, index, headings) => (
+                {["#", "Employee Name", "Designation", "Department", "Date", "Check In", "Check Out", "Rate", "Normal Hours", "Normal Amt", "OT Hours", "OT Amt", "Total Hours", "Total Amt", "Status"].map((heading, index, headings) => (
                   <th key={heading} className={`bg-[#102A43] px-3 py-3 text-xs font-semibold ${index === 0 ? "rounded-l-lg" : ""} ${index === headings.length - 1 ? "rounded-r-lg" : ""}`}>{heading}</th>
                 ))}
               </tr>
@@ -445,7 +507,7 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
             <tbody>
               {pageRows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-3 py-10 text-center text-slate-400">No timesheets in this range.</td>
+                  <td colSpan={15} className="px-3 py-10 text-center text-slate-400">No timesheets in this range.</td>
                 </tr>
               ) : pageRows.map((row, index) => (
                 <tr key={row.id} className="border-b last:border-0">
@@ -456,9 +518,13 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
                   <td className="px-3 py-3 text-slate-600">{row.dateLabel}</td>
                   <td className="px-3 py-3 text-slate-600">{row.checkIn}</td>
                   <td className="px-3 py-3 text-slate-600">{row.checkOut}</td>
+                  <td className="px-3 py-3 text-slate-600">{moneyText(row.rate)}</td>
                   <td className="px-3 py-3 text-slate-600">{hoursText(row.normal)}</td>
+                  <td className="px-3 py-3 text-slate-600">{moneyText(row.normalAmount)}</td>
                   <td className="px-3 py-3 text-slate-600">{hoursText(row.ot)}</td>
+                  <td className="px-3 py-3 text-slate-600">{moneyText(row.otAmount)}</td>
                   <td className="px-3 py-3 text-slate-600">{hoursText(row.total)}</td>
+                  <td className="px-3 py-3 font-medium text-slate-800">{moneyText(row.totalAmount)}</td>
                   <td className="px-3 py-3">
                     <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${statusClass(row.status)}`}>
                       {statusLabel(row.status)}
@@ -543,11 +609,16 @@ function TrendTick({ x = 0, y = 0, payload }: { x?: number; y?: number; payload?
 }
 
 function toReportRow(row: Timesheet, deployments: ReturnType<typeof loadDeployments>, employees: EmployeeRow[]): ReportRow {
-  const deployment = deployments.find((item) => item.id === row.deploymentId);
+  const deployment = resolveDeployment(row, deployments);
   const ids = row.employeeId.split(",").map((item) => item.trim()).filter(Boolean);
   const employee = employees.find((item) => ids.includes(String(item.id)) || (item.employeeId && ids.includes(String(item.employeeId))));
   const normal = Number(row.normalHours) || 0;
   const ot = Number(row.overtimeHours) || 0;
+  const rate = parseRate(row.billingRate) || parseRate(deployment?.billingRate) || parseRate(deployment?.payRate);
+  const otRate = parseRate(row.otBillingRate) || (rate > 0 ? rate * 1.5 : 0);
+  const normalAmount = Math.round(normal * rate * 100) / 100;
+  const otAmount = Math.round(ot * otRate * 100) / 100;
+  const totalAmount = Math.round((normalAmount + otAmount) * 100) / 100;
   return {
     id: row.id,
     employeeName: employeeName(row.employeeLabel),
@@ -560,6 +631,11 @@ function toReportRow(row: Timesheet, deployments: ReturnType<typeof loadDeployme
     normal,
     ot,
     total: normal + ot,
+    rate,
+    otRate,
+    normalAmount,
+    otAmount,
+    totalAmount,
     status: row.status,
     absent: String(row.dayType || "").toLowerCase().includes("absent"),
     partyName: row.partyName || "—",
@@ -623,6 +699,7 @@ function exportRows(rows: ReportRow[]) {
     Date: row.dateLabel,
     "Check In": row.checkIn,
     "Check Out": row.checkOut,
+    Rate: moneyText(row.rate),
     "Normal Hours": hoursText(row.normal),
     "OT Hours": hoursText(row.ot),
     "Total Hours": hoursText(row.total),
@@ -644,7 +721,7 @@ function exportPdf(rows: ReportRow[]) {
   const data = exportRows(rows);
   autoTable(doc, {
     startY: 22,
-    head: [Object.keys(data[0] ?? { "#": "", "Employee Name": "", Designation: "", Department: "", Date: "", "Check In": "", "Check Out": "", "Normal Hours": "", "OT Hours": "", "Total Hours": "", Status: "" })],
+    head: [Object.keys(data[0] ?? { "#": "", "Employee Name": "", Designation: "", Department: "", Date: "", "Check In": "", "Check Out": "", Rate: "", "Normal Hours": "", "Normal Amount": "", "OT Hours": "", "OT Amount": "", "Total Hours": "", "Total Amount": "", Status: "" })],
     body: data.map((row) => Object.values(row)),
     styles: { fontSize: 8 },
     headStyles: { fillColor: [22, 50, 79] },
@@ -656,7 +733,7 @@ function printReport(rows: ReportRow[]) {
   const win = window.open("", "_blank", "noopener,noreferrer");
   if (!win) return;
   const body = exportRows(rows).map((row) => `<tr>${Object.values(row).map((value) => `<td>${value}</td>`).join("")}</tr>`).join("");
-  const head = ["#", "Employee Name", "Designation", "Department", "Date", "Check In", "Check Out", "Normal Hours", "OT Hours", "Total Hours", "Status"]
+  const head = ["#", "Employee Name", "Designation", "Department", "Date", "Check In", "Check Out", "Rate", "Normal Hours", "Normal Amount", "OT Hours", "OT Amount", "Total Hours", "Total Amount", "Status"]
     .map((heading) => `<th>${heading}</th>`).join("");
   win.document.write(`<!doctype html><html><head><title>Timesheet Summary</title><style>body{font-family:Arial,sans-serif;padding:24px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:6px 8px;font-size:12px;text-align:left}th{background:#16324F;color:#fff}</style></head><body><h2>Timesheet Summary</h2><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></body></html>`);
   win.document.close();

@@ -47,7 +47,7 @@ export function VendorInvoiceAdditionalInfo({
           <Label>Customer Note</Label>
           <Textarea
             value={customerNote}
-            onChange={(e) => onCustomerNoteChange(e.target.value)}
+            onChange={(e) => onCustomerNoteChange?.(e.target.value)}
             placeholder=""
             rows={4}
             className="min-h-[96px] resize-y"
@@ -57,7 +57,7 @@ export function VendorInvoiceAdditionalInfo({
           <Label>Delivery Instructions</Label>
           <Textarea
             value={deliveryInstructions}
-            onChange={(e) => onDeliveryInstructionsChange(e.target.value)}
+            onChange={(e) => onDeliveryInstructionsChange?.(e.target.value)}
             placeholder=""
             rows={4}
             className="min-h-[96px] resize-y"

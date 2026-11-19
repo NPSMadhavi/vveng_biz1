@@ -532,58 +532,6 @@ export default function CustomersPage() {
                 </Popover>
               </div>
             </div>
-
-            <div className="space-y-2">
-              <Label>Ship To Address <span className="text-muted-foreground text-xs font-normal">(optional)</span></Label>
-              {(() => {
-                const addrs = form.shipToAddress ? form.shipToAddress.split("\n\n") : [""];
-                return (
-                  <div className="space-y-2">
-                    {addrs.map((addr, idx) => (
-                      <div key={idx} className="relative group">
-                        <Textarea
-                          value={addr}
-                          onChange={(e) => {
-                            const newAddrs = [...addrs];
-                            newAddrs[idx] = e.target.value;
-                            setField("shipToAddress", newAddrs.join("\n\n"));
-                          }}
-                          className="resize-none pr-8 text-sm"
-                          rows={2}
-                        />
-                        {addrs.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newAddrs = addrs.filter((_, i) => i !== idx);
-                              setField("shipToAddress", newAddrs.join("\n\n"));
-                            }}
-                            className="absolute right-2 top-2 text-[#EF4444] opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="Remove Address"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="w-full text-xs gap-1.5 py-1.5 h-auto text-[#2563EB] hover:text-[#1D4ED8]"
-                      onClick={() => {
-                        const newAddrs = [...addrs, ""];
-                        setField("shipToAddress", newAddrs.join("\n\n"));
-                      }}
-                    >
-                      <Plus className="h-3.5 w-3.5" /> Add More Ship-To Address
-                    </Button>
-                  </div>
-                );
-              })()}
-              <p className="text-[11px] text-muted-foreground">Shown on invoices when this customer is selected.</p>
-            </div>
-
             <PartyUsageField
               value={form.usageType === "manpower" ? "manpower" : "general"}
               onChange={(usageType) => setField("usageType", usageType)}
@@ -599,20 +547,7 @@ export default function CustomersPage() {
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <Label>Per hour amount</Label>
-              <Input
-                type="text"
-                inputMode="decimal"
-                value={form.perHourAmount || ""}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === "" || /^\d*\.?\d*$/.test(value)) setField("perHourAmount", value);
-                }}
-              />
-            </div>
-
-            {isInternational ? (
+{isInternational ? (
               <div className="border rounded-lg p-4 bg-blue-50 border-blue-200 flex gap-3">
                 <Globe className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
                 <div>

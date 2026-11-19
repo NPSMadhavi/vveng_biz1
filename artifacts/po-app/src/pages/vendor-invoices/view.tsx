@@ -236,6 +236,7 @@ export default function VendorInvoiceView() {
   const balance = pi.totalAmount - pi.paidAmount;
   const progress = pi.totalAmount > 0 ? Math.min(100, (pi.paidAmount / pi.totalAmount) * 100) : 0;
   const lineItems: any[] = Array.isArray(pi.items) ? pi.items : [];
+  const hasViHours = lineItems.some((it: any) => it.type !== "section" && it.hours != null && String(it.hours).trim() !== "");
   const hasLineItems = lineItems.some((it) => it.type !== "section" && (Number(it.amount) > 0 || Number(it.qty) * Number(it.unitPrice) > 0));
   const hasPartNo = lineItems.some((it) => it.partNumber);
   const fmtAmt = (n: number) => new Intl.NumberFormat("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
@@ -394,6 +395,7 @@ export default function VendorInvoiceView() {
                     {hasPartNo && <th className="px-6 py-3 font-medium whitespace-nowrap">Part No.</th>}
                     <th className="px-6 py-3 font-medium">Description</th>
                     <th className="px-6 py-3 font-medium text-center whitespace-nowrap">Qty</th>
+                    {hasViHours && <th className="px-6 py-3 font-medium text-right whitespace-nowrap">Hours</th>}
                     <th className="px-6 py-3 font-medium text-right whitespace-nowrap">Unit Price</th>
                     <th className="px-6 py-3 font-medium text-right whitespace-nowrap">Disc %</th>
                     <th className="px-6 py-3 font-medium text-right whitespace-nowrap">Amount</th>
@@ -402,7 +404,7 @@ export default function VendorInvoiceView() {
                 <tbody className="divide-y border-b">
                   {lineItems.map((item: any, idx: number) => {
                     if (item.type === "section") {
-                      const colSpan = 6 + (hasPartNo ? 1 : 0);
+                      const colSpan = 6 + (hasPartNo ? 1 : 0) + (hasViHours ? 1 : 0);
                       return (
                         <tr key={idx} className="bg-muted/30">
                           <td colSpan={colSpan} className="px-6 py-2 font-semibold text-sm text-foreground">
@@ -413,13 +415,14 @@ export default function VendorInvoiceView() {
                     }
                     let lineNum = 0;
                     lineItems.slice(0, idx + 1).forEach((i: any) => { if (i.type !== "section") lineNum++; });
-                    const lineAmount = Number(item.amount) || calcViLineAmount(Number(item.qty) || 0, Number(item.unitPrice) || 0, Number(item.discount) || 0, item.isFoc);
+                    const lineAmount = calcViLineAmount(Number(item.qty) || 0, Number(item.unitPrice) || 0, Number(item.discount) || 0, item.isFoc, item.hours, item.uom);
                     return (
                       <tr key={idx} className="bg-card">
                         <td className="px-6 py-4 text-center text-muted-foreground align-top">{lineNum}</td>
                         {hasPartNo && <td className="px-6 py-4 text-muted-foreground align-top font-mono text-xs">{item.partNumber || "—"}</td>}
                         <td className="px-6 py-4 text-muted-foreground align-top">{stripHtml(item.description || "") || "—"}</td>
                         <td className="px-6 py-4 text-center font-medium align-top">{item.qty}</td>
+                        {hasViHours && <td className="px-6 py-4 text-right font-medium align-top">{item.hours || "—"}</td>}
                         <td className="px-6 py-4 text-right text-muted-foreground align-top">{fmtAmt(Number(item.unitPrice))}</td>
                         <td className="px-6 py-4 text-right text-muted-foreground align-top">{Number(item.discount) > 0 ? `${item.discount}%` : "—"}</td>
                         <td className="px-6 py-4 text-right font-medium align-top">{fmtAmt(lineAmount)}</td>

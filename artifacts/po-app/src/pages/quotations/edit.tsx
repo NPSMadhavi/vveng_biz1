@@ -185,7 +185,12 @@ export default function QuotationEdit() {
   const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
 
   useEffect(() => {
-    if (isOverseas) form.setValue("tax", 0);
+    if (isOverseas) {
+      form.setValue("tax", 0);
+      return;
+    }
+    const current = Number(form.getValues("tax") ?? 0);
+    if (!current) form.setValue("tax", (Number(docSettings?.gstRate ?? 9) || 9));
   }, [isOverseas]);
 
   const appendLock = useRef(false);
@@ -671,13 +676,31 @@ export default function QuotationEdit() {
  checked={isOverseas}
  onCheckedChange={(v) => {
                         setIsOverseas(v);
-                        form.setValue("tax", v ? 0 : (docSettings?.gstRate ?? 0));
+                        form.setValue("tax", v ? 0 : (Number(docSettings?.gstRate ?? 9) || 9));
                       }}
                     />
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm text-muted-foreground">GST:</span>
-                    <span className="text-sm font-medium">{taxPercent}%</span>
+                    {isOverseas ? (
+                      <span className="text-sm font-medium">0% (Overseas)</span>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={0.1}
+                          className="h-8 w-16 text-sm"
+                          value={Number(form.watch("tax") ?? 0)}
+                          onChange={(e) => {
+                            const n = Number(e.target.value);
+                            form.setValue("tax", Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : (Number(docSettings?.gstRate ?? 9) || 9));
+                          }}
+                        />
+                        <span className="text-sm font-medium">%</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

@@ -561,18 +561,6 @@ export default function InvoiceView() {
             </div>
             {doc.deliveryDate && <div className="flex justify-between"><span className="text-muted-foreground">Delivery Date</span><span>{isoToReadable(doc.deliveryDate)}</span></div>}
             {doc.notes && <div><span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notes</span><div className="mt-1 text-sm prose prose-sm max-w-none [&_p]:my-1 [&_ul]:pl-5 [&_ul]:my-1 [&_ol]:pl-5 [&_ol]:my-1 [&_li]:my-0.5" dangerouslySetInnerHTML={{ __html: (doc as any).notes || "" }} /></div>}
-            {(doc as any).customerNote && (
-              <div className="border-t pt-2 mt-2">
-                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer Note</span>
-                <p className="mt-1 text-sm text-foreground whitespace-pre-line">{(doc as any).customerNote}</p>
-              </div>
-            )}
-            {(doc as any).deliveryInstructions && (
-              <div className="border-t pt-2 mt-2">
-                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Delivery Instructions</span>
-                <p className="mt-1 text-sm text-foreground whitespace-pre-line">{(doc as any).deliveryInstructions}</p>
-              </div>
-            )}
             {(doc as any).termsAndConditions && (
               <div className="border-t pt-2 mt-2">
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Terms & Conditions</span>
