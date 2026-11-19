@@ -214,56 +214,16 @@ export async function postPayrollCreatedJE(
 export async function reversePayrollJE(
   payrollId: number,
   companyId: number,
-  userId: number,
+  _userId: number,
   log?: any,
 ): Promise<void> {
-  const [original] = await db.select()
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.refType, "payroll"),
-      eq(journalEntriesTable.refId, payrollId),
-      eq(journalEntriesTable.status, "posted"),
-    ))
-    .limit(1);
-
-  if (!original) return;
-
-  const originalLines = await db.select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
-
-  try {
-    const [reversal] = await db.insert(journalEntriesTable).values({
-      companyId,
-      entryDate:   new Date().toISOString().split("T")[0],
-      description: `REVERSAL — ${original.description}`,
-      refType:     "payroll",
-      refId:       payrollId,
-      refNumber:   original.refNumber,
-      status:      "posted",
-      reversalOfId: original.id,
-      createdBy:   userId,
-    }).returning();
-
-    if (originalLines.length > 0) {
-      await db.insert(journalLinesTable).values(
-        originalLines.map((l) => ({
-          journalEntryId: reversal.id,
-          accountId:      l.accountId,
-          description:    `REVERSAL: ${l.description ?? ""}`,
-          debit:          l.credit,
-          credit:         l.debit,
-        })),
-      );
-    }
-
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-  } catch (err) {
-    if (log) log.warn({ err, payrollId }, "payroll-auto-post: reversal failed (non-fatal)");
-  }
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  await removeJournalEntriesForRef({
+    companyId,
+    refType: "payroll",
+    refId: payrollId,
+    log,
+  });
 }
 
 // ── Backfill: post JEs for processed payroll records that don't have one yet ───

@@ -253,57 +253,20 @@ export async function reverseAssetDisposalJE(params: {
   assetId: number;
   reversalDate: string;
 }): Promise<{ reversed: boolean; journalEntryId?: number }> {
-  const { companyId, userId, assetId, reversalDate } = params;
-  const original = await findExistingDisposalJE(companyId, assetId);
-  if (!original) return { reversed: false };
+  const { companyId, assetId, reversalDate } = params;
 
   const periodCheck = await assertPeriodWritable(companyId, reversalDate);
   if (!periodCheck.ok) {
     throw new Error(periodCheck.error || "Accounting period is closed for this reversal date.");
   }
 
-  const lines = await db
-    .select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  const removed = await removeJournalEntriesForRef({
+    companyId,
+    refType: "asset_disposal",
+    refId: assetId,
+    alsoRefTypes: ["asset_disposal_reversal"],
+  });
 
-  if (lines.length === 0) {
-    await db
-      .update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-    return { reversed: true };
-  }
-
-  const [reversal] = await db
-    .insert(journalEntriesTable)
-    .values({
-      companyId,
-      entryDate: reversalDate,
-      description: `Reversal of Asset Disposal — ${original.refNumber || `FA-${assetId}`}`,
-      refType: "asset_disposal_reversal",
-      refId: assetId,
-      refNumber: original.refNumber,
-      status: "posted",
-      reversalOfId: original.id,
-      createdBy: userId,
-    })
-    .returning();
-
-  await db.insert(journalLinesTable).values(
-    lines.map((l) => ({
-      journalEntryId: reversal.id,
-      accountId: l.accountId,
-      description: `Reversal — ${l.description || ""}`.trim(),
-      debit: l.credit, // swap
-      credit: l.debit,
-    })),
-  );
-
-  await db
-    .update(journalEntriesTable)
-    .set({ status: "reversed" })
-    .where(eq(journalEntriesTable.id, original.id));
-
-  return { reversed: true, journalEntryId: reversal.id };
+  return { reversed: removed > 0 };
 }

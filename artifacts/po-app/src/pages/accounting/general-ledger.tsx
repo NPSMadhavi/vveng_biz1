@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/contexts/auth-context";
 import { useFollowWorkingYear } from "@/components/financial-year-controls";
-import { Download, Loader2, BookOpen, Search } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Check, Download, Loader2, BookOpen, Pencil, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { generateGeneralLedger_PDF } from "@/lib/pdf";
 
@@ -93,6 +94,8 @@ function matchRank(account: GLAccount, q: string): number {
 
 export default function GeneralLedgerPage() {
   const { selectedCompany } = useAuth();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
   const today = new Date().toISOString().split("T")[0];
   const boot = useState(initialLedgerFilters)[0];
@@ -107,6 +110,9 @@ export default function GeneralLedgerPage() {
   const [search, setSearch] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
   const [cachedAccounts, setCachedAccounts] = useState<GLAccount[]>([]);
+  const [editingOpening, setEditingOpening] = useState(false);
+  const [openingDraft, setOpeningDraft] = useState("");
+  const [savingOpening, setSavingOpening] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery<GLData>({
     queryKey: ["general-ledger", selectedAccountId, from, to],
@@ -121,6 +127,62 @@ export default function GeneralLedgerPage() {
     },
     staleTime: 30_000,
   });
+
+  useEffect(() => {
+    setEditingOpening(false);
+    setOpeningDraft("");
+  }, [selectedAccountId, from, to]);
+
+  const displayOpening = data?.openingBalance ?? 0;
+  const adjustedTransactions = useMemo(() => {
+    if (!data?.transactions) return [] as GLTransaction[];
+    let running = displayOpening;
+    return data.transactions.map((tx) => {
+      running += tx.debit - tx.credit;
+      return { ...tx, balance: Math.round(running * 100) / 100 };
+    });
+  }, [data?.transactions, displayOpening]);
+  const displayClosing = adjustedTransactions.length
+    ? adjustedTransactions[adjustedTransactions.length - 1].balance
+    : displayOpening;
+
+  function startEditOpening() {
+    if (!data) return;
+    setOpeningDraft(data.openingBalance.toFixed(2));
+    setEditingOpening(true);
+  }
+
+  async function saveOpeningBalance() {
+    if (!selectedAccountId || !from) {
+      toast({ title: "Select account and From date first", variant: "destructive" });
+      return;
+    }
+    const parsed = Number(String(openingDraft).replace(/,/g, "").trim());
+    if (!Number.isFinite(parsed)) {
+      toast({ title: "Enter a valid opening balance", variant: "destructive" });
+      return;
+    }
+    setSavingOpening(true);
+    try {
+      const r = await fetch("/api/general-ledger/opening-balance", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId: selectedAccountId, from, amount: parsed }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || "Failed to save opening balance");
+      setEditingOpening(false);
+      await queryClient.invalidateQueries({ queryKey: ["general-ledger", selectedAccountId, from, to] });
+      await queryClient.invalidateQueries({ queryKey: ["balance-sheet"] });
+      await queryClient.invalidateQueries({ queryKey: ["trial-balance"] });
+      toast({ title: "Opening balance updated" });
+    } catch (e) {
+      toast({ title: (e as Error).message, variant: "destructive" });
+    } finally {
+      setSavingOpening(false);
+    }
+  }
 
   // Keep the full Chart of Accounts available for search even when query key changes
   useEffect(() => {
@@ -182,7 +244,7 @@ export default function GeneralLedgerPage() {
     try {
       await generateGeneralLedger_PDF(
         selectedCompany as any, data.account, from || null, to || null,
-        data.openingBalance, data.closingBalance, data.transactions
+        displayOpening, displayClosing, adjustedTransactions
       );
     } finally {
       setPdfLoading(false);
@@ -197,7 +259,7 @@ export default function GeneralLedgerPage() {
         <div>
           <h1 className="text-2xl font-bold text-[#2563EB]">Account Ledger</h1>
         </div>
-        {data?.account && data.transactions.length > 0 && (
+        {data?.account && (adjustedTransactions.length > 0 || Math.abs(displayOpening) > 0.005) && (
           <Button variant="outline" size="sm" onClick={handleDownloadPDF} disabled={pdfLoading}>
             {pdfLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
             Download PDF
@@ -305,14 +367,48 @@ export default function GeneralLedgerPage() {
               <div className="grid grid-cols-2 divide-x divide-border bg-muted/30">
                 <div className="px-5 py-4">
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Opening Balance</p>
-                  <p className={cn("text-sm font-semibold font-mono tabular-nums", data.openingBalance < 0 ? "text-red-600" : "text-foreground")}>
-                    {fmtBal(data.openingBalance)}
-                  </p>
+                  {editingOpening ? (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={openingDraft}
+                        onChange={(e) => setOpeningDraft(e.target.value)}
+                        className="h-8 max-w-[160px] font-mono text-sm"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void saveOpeningBalance();
+                          if (e.key === "Escape") setEditingOpening(false);
+                        }}
+                      />
+                      <Button type="button" size="icon" className="h-8 w-8 shrink-0" onClick={() => void saveOpeningBalance()} disabled={savingOpening}>
+                        {savingOpening ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      </Button>
+                      <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={() => setEditingOpening(false)} disabled={savingOpening}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <p className={cn("text-sm font-semibold font-mono tabular-nums", displayOpening < 0 ? "text-red-600" : "text-foreground")}>
+                        {fmtBal(displayOpening)}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={startEditOpening}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#2B7BE8] hover:bg-[#E8F1FC]"
+                        title="Edit opening balance"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                  <p className="mt-1 text-[10px] text-muted-foreground">Positive = debit · Negative = credit</p>
                 </div>
                 <div className="px-5 py-4">
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Closing Balance</p>
-                  <p className={cn("text-sm font-bold font-mono tabular-nums", data.closingBalance < 0 ? "text-red-600" : "text-foreground")}>
-                    {fmtBal(data.closingBalance)}
+                  <p className={cn("text-sm font-bold font-mono tabular-nums", displayClosing < 0 ? "text-red-600" : "text-foreground")}>
+                    {fmtBal(displayClosing)}
                   </p>
                 </div>
               </div>
@@ -338,12 +434,12 @@ export default function GeneralLedgerPage() {
                       <td className="px-4 py-2.5 text-xs text-muted-foreground italic">Opening Balance</td>
                       <td className="px-4 py-2.5 text-right text-xs text-muted-foreground/50 font-mono tabular-nums">—</td>
                       <td className="px-4 py-2.5 text-right text-xs text-muted-foreground/50 font-mono tabular-nums">—</td>
-                      <td className={cn("px-4 py-2.5 text-right text-xs font-mono tabular-nums font-semibold", data.openingBalance < 0 ? "text-red-600" : "text-foreground")}>
-                        {fmtBal(data.openingBalance)}
+                      <td className={cn("px-4 py-2.5 text-right text-xs font-mono tabular-nums font-semibold", displayOpening < 0 ? "text-red-600" : "text-foreground")}>
+                        {fmtBal(displayOpening)}
                       </td>
                     </tr>
 
-                    {data.transactions.length === 0 && (
+                    {adjustedTransactions.length === 0 && (
                       <tr>
                         <td colSpan={6} className="text-center py-12 text-sm text-muted-foreground">
                           No transactions for this account in this period.
@@ -351,7 +447,7 @@ export default function GeneralLedgerPage() {
                       </tr>
                     )}
 
-                    {data.transactions.map((tx, i) => (
+                    {adjustedTransactions.map((tx, i) => (
                       <tr
                         key={`${tx.journalEntryId}-${i}`}
                         className="border-b border-border hover:bg-muted/20 transition-colors cursor-pointer"
@@ -375,8 +471,8 @@ export default function GeneralLedgerPage() {
                   <tfoot>
                     <tr className="bg-[#1a365d] text-white">
                       <td colSpan={5} className="px-4 py-3 text-xs font-bold uppercase tracking-wider opacity-70">Closing Balance</td>
-                      <td className={cn("text-right px-4 py-3 font-mono text-base font-bold tabular-nums", data.closingBalance < 0 ? "text-red-300" : "text-white")}>
-                        {fmtBal(data.closingBalance)}
+                      <td className={cn("text-right px-4 py-3 font-mono text-base font-bold tabular-nums", displayClosing < 0 ? "text-red-300" : "text-white")}>
+                        {fmtBal(displayClosing)}
                       </td>
                     </tr>
                   </tfoot>

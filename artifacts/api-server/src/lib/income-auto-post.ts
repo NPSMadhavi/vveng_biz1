@@ -119,63 +119,21 @@ export async function postIncomeJE(
   }
 }
 
-// ── Income Voided ─────────────────────────────────────────────────────────────
+// ── Income Voided / Deleted ───────────────────────────────────────────────────
+// Soft-remove JE(s) from all statements — do NOT post a VOID reverse entry.
 
 export async function reverseIncomeJE(
   incomeId: number,
   companyId: number,
-  description: string,
-  userId: number,
+  _description: string,
+  _userId: number,
   log?: any,
 ): Promise<void> {
-  const [original] = await db.select()
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.refType, "income_record"),
-      eq(journalEntriesTable.refId, incomeId),
-    ))
-    .limit(1);
-
-  if (!original || original.status === "reversed") return;
-
-  const [existingReversal] = await db.select({ id: journalEntriesTable.id })
-    .from(journalEntriesTable)
-    .where(eq(journalEntriesTable.reversalOfId, original.id))
-    .limit(1);
-  if (existingReversal) return;
-
-  const originalLines = await db.select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
-
-  try {
-    const [reversal] = await db.insert(journalEntriesTable).values({
-      companyId,
-      entryDate:    new Date().toISOString().split("T")[0],
-      description:  `VOID — ${description}`,
-      refType:      "income_record",
-      refId:        incomeId,
-      refNumber:    `INC-${incomeId}`,
-      status:       "posted",
-      reversalOfId: original.id,
-      createdBy:    userId,
-    }).returning();
-
-    await db.insert(journalLinesTable).values(
-      originalLines.map(l => ({
-        journalEntryId: reversal.id,
-        accountId:      l.accountId,
-        description:    `REVERSAL: ${l.description ?? ""}`,
-        debit:          l.credit,
-        credit:         l.debit,
-      }))
-    );
-
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-  } catch (err) {
-    if (log) log.error({ err, incomeId }, "income-auto-post: reversal failed (non-fatal)");
-  }
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  await removeJournalEntriesForRef({
+    companyId,
+    refType: "income_record",
+    refId: incomeId,
+    log,
+  });
 }

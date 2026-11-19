@@ -10,13 +10,13 @@
  *
  * Payroll payment records credit 2040 Staff Salaries Payable instead of the bank.
  *
- * ON EXPENSE DELETED (if was confirmed) → reverse the JE
+ * ON EXPENSE DELETED (if was confirmed) → soft-remove JE (no VOID reverse)
  *
  * backfillExpenseJEs() → idempotent catch-up for confirmed expenses missing a JE.
  */
 
 import { db, accountsTable, journalEntriesTable, journalLinesTable, expensesTable } from "@workspace/db";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import { ensureAccountsSeeded } from "./accounts-seed.js";
 import { assertPeriodWritable } from "./financial-year.js";
 
@@ -198,64 +198,28 @@ export async function postExpenseJE(
 }
 
 // ── Expense Deleted (was confirmed) ──────────────────────────────────────────
+// Soft-remove JE(s) from all statements — do NOT post a VOID reverse entry.
 
 export async function reverseExpenseJE(
   expenseId: number,
   companyId: number,
-  vendorName: string,
-  userId: number,
+  _vendorName: string,
+  _userId: number,
   log?: any,
 ): Promise<void> {
-  const [original] = await db.select()
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.refType,   "expense"),
-      eq(journalEntriesTable.refId,     expenseId),
-    ))
-    .limit(1);
-
-  if (!original || original.status === "reversed") return;
-
-  // Guard against double-reversal
-  const [alreadyReversed] = await db.select({ id: journalEntriesTable.id })
-    .from(journalEntriesTable)
-    .where(eq(journalEntriesTable.reversalOfId, original.id))
-    .limit(1);
-  if (alreadyReversed) return;
-
-  const originalLines = await db.select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
-
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  await removeJournalEntriesForRef({
+    companyId,
+    refType: "expense",
+    refId: expenseId,
+    log,
+  });
   try {
-    const [reversal] = await db.insert(journalEntriesTable).values({
-      companyId,
-      entryDate:    new Date().toISOString().split("T")[0],
-      description:  `VOID — Expense — ${vendorName}`,
-      refType:      "expense",
-      refId:        expenseId,
-      refNumber:    `EXP-${expenseId}`,
-      status:       "posted",
-      reversalOfId: original.id,
-      createdBy:    userId,
-    }).returning();
-
-    await db.insert(journalLinesTable).values(
-      originalLines.map(l => ({
-        journalEntryId: reversal.id,
-        accountId:      l.accountId,
-        description:    `REVERSAL: ${l.description ?? ""}`,
-        debit:          l.credit,
-        credit:         l.debit,
-      }))
-    );
-
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-  } catch (err) {
-    if (log) log.error({ err, expenseId }, "expense-auto-post: reversal failed (non-fatal)");
+    await db.update(expensesTable)
+      .set({ journalEntryId: null, updatedAt: new Date() })
+      .where(and(eq(expensesTable.id, expenseId), eq(expensesTable.companyId, companyId)));
+  } catch {
+    /* non-fatal */
   }
 }
 
@@ -272,6 +236,7 @@ export async function backfillExpenseJEs(
       eq(expensesTable.companyId, companyId),
       eq(expensesTable.status, "confirmed"),
       isNull(expensesTable.journalEntryId),
+      sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
     ));
 
   let posted = 0;

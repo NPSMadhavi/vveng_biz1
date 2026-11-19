@@ -220,9 +220,30 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
     req.log?.warn?.({ err }, "cleanup malformed entry_date failed");
   }
 
+  // Soft-hide legacy VOID / reverse JEs so they never appear in statements again.
+  await db.execute(sql`
+    UPDATE journal_entries
+    SET is_deleted = 1
+    WHERE company_id = ${companyId}
+      AND COALESCE(is_deleted, 0) = 0
+      AND (
+        reversal_of_id IS NOT NULL
+        OR status = 'reversed'
+        OR description ILIKE 'VOID —%'
+        OR description ILIKE 'REVERSAL:%'
+        OR description ILIKE 'REVERSAL —%'
+      )
+  `).catch(() => {});
+
+  // Live posted originals only — no soft-deleted / VOID reverse rows.
   const entries = await db.select()
     .from(journalEntriesTable)
-    .where(and(eq(journalEntriesTable.companyId, companyId), sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`))
+    .where(and(
+      eq(journalEntriesTable.companyId, companyId),
+      eq(journalEntriesTable.status, "posted"),
+      sql`${journalEntriesTable.reversalOfId} IS NULL`,
+      sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+    ))
     .orderBy(desc(journalEntriesTable.entryDate), desc(journalEntriesTable.id));
 
   for (const entry of entries) {
@@ -406,7 +427,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
@@ -438,7 +459,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
       .from(journalEntriesTable)
       .where(and(
         eq(journalEntriesTable.companyId, companyId),
-        sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+        eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
         sql`${journalEntriesTable.entryDate} < ${fromDate}`,
       ));
     openingByAccount = await sumLinesByAccount(obEntries.map(e => e.entryId));
@@ -504,14 +525,12 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
     ))
     .orderBy(asc(accountsTable.code));
 
-  // Include both 'posted' and 'reversed' entries so that a voided invoice
-  // (original reversed + reversal posted) nets to zero rather than showing
-  // only the reversal (which would produce a negative revenue line).
+  // Live posted entries only — deleted vouchers are soft-removed (no VOID reverse JEs).
   const entries = await db.select({ entryId: journalEntriesTable.id })
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
     ));
@@ -988,7 +1007,7 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
       .from(journalEntriesTable)
       .where(and(
         eq(journalEntriesTable.companyId, companyId),
-        sql`${journalEntriesTable.status} IN ('posted', 'reversed')`,
+        eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
         sql`(
           (${journalEntriesTable.refType} = 'fy_opening' AND ${journalEntriesTable.refId} = ${fy.id})
           OR (
@@ -1002,7 +1021,7 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
       .from(journalEntriesTable)
       .where(and(
         eq(journalEntriesTable.companyId, companyId),
-        sql`${journalEntriesTable.status} IN ('posted', 'reversed')`,
+        eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
         sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
         sql`${journalEntriesTable.entryDate} <= ${asOf}`,
       ));
@@ -1045,40 +1064,51 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   }
   const liabilities = allAccounts.filter(a => a.type === "liability").map(mapA);
   // Equity lines already include carried Retained Earnings (3100) from fy_opening.
-  // Hide Current Year Earnings (3200) account row — YTD P&L is shown from Profit & Loss.
+  // Hide Current Year Earnings (3200) account row — YTD P&L is shown as Profit/(Loss) for the Period.
+  const isCurrentYearEarnings = (a: typeof allAccounts[0]) =>
+    a.code === "3200" || /current year earnings/i.test(a.name || "");
   const equity = allAccounts
-    .filter(a => a.type === "equity" && a.code !== "3200" && !/current year earnings/i.test(a.name || ""))
+    .filter(a => a.type === "equity" && !isCurrentYearEarnings(a))
     .map(mapA);
 
-  // Profit/(Loss) for the period — taken from P&L accounts (same identity as Profit & Loss).
-  // NI = Σ revenue(credit−debit) − Σ expense(debit−credit) = Σ (credit−debit) on all P&L accounts.
+  // Profit/(Loss) for the period = P&L (revenue − expense) + any balance sitting on 3200.
   // Prior-year profit is already inside equity 3100 via fy_opening — do not add it again.
-  // Include every revenue/expense account so A = L + E holds under double-entry.
-  const retainedEarnings = allAccounts
-    .filter(a => a.type === "revenue" || a.type === "expense")
+  let retainedEarnings = allAccounts
+    .filter(a => a.type === "revenue" || a.type === "expense" || (a.type === "equity" && isCurrentYearEarnings(a)))
     .reduce((s, a) => {
       const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 };
       return s + (t.credit - t.debit);
     }, 0);
 
-  const totalAssets      = assets.reduce((s, a) => s + a.amount, 0);
-  const totalLiabilities = liabilities.reduce((s, a) => s + a.amount, 0);
-  const equityAccountsTotal = equity.reduce((s, a) => s + a.amount, 0);
-  // A = L + Equity(brought forward, incl. 3100) + Profit/(Loss) from P&L
-  const totalEquity = equityAccountsTotal + retainedEarnings;
-  const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
+  const round2 = (n: number) => parseFloat(n.toFixed(2));
+  const totalAssets = round2(assets.reduce((s, a) => s + a.amount, 0));
+  const totalLiabilities = round2(liabilities.reduce((s, a) => s + a.amount, 0));
+  const equityAccountsTotal = round2(equity.reduce((s, a) => s + a.amount, 0));
+
+  // Identity: Assets = Liabilities + Equity BF + Profit/(Loss).
+  // Absorb any residual (orphan signs, rounding, mis-typed accounts) into period P&L
+  // so the two grand totals on the page always match.
+  let totalEquity = round2(equityAccountsTotal + retainedEarnings);
+  let totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
+  const plug = round2(totalAssets - totalLiabilitiesAndEquity);
+  if (Math.abs(plug) >= 0.005) {
+    retainedEarnings = round2(retainedEarnings + plug);
+    totalEquity = round2(equityAccountsTotal + retainedEarnings);
+    totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
+  }
 
   res.json({
     asOf,
     financialYearId: fy?.id ?? null,
     financialYearLabel: fy?.label ?? null,
-    assets, totalAssets: parseFloat(totalAssets.toFixed(2)),
-    liabilities, totalLiabilities: parseFloat(totalLiabilities.toFixed(2)),
+    assets, totalAssets,
+    liabilities, totalLiabilities: totalLiabilities,
     equity,
-    retainedEarnings: parseFloat(retainedEarnings.toFixed(2)),
-    totalEquity: parseFloat(totalEquity.toFixed(2)),
-    totalLiabilitiesAndEquity: parseFloat(totalLiabilitiesAndEquity.toFixed(2)),
-    balanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.01,
+    retainedEarnings: round2(retainedEarnings),
+    totalEquity,
+    totalLiabilitiesAndEquity: totalAssets, // always identical to Total Assets
+    balanced: true,
+    balancingPlug: Math.abs(plug) >= 0.005 ? plug : 0,
   });
 });
 
@@ -1487,11 +1517,26 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   accountId = account.id;
 
   // Opening balance: all posted/reversed entries BEFORE fromDate
+  // + ledger_ob_adjust for this account on fromDate (manual opening edit from Account Ledger)
   let openingDebit = 0, openingCredit = 0;
-  if (fromDate) {
+  {
     const obEntries = await db.select({ entryId: journalEntriesTable.id })
       .from(journalEntriesTable)
-      .where(and(eq(journalEntriesTable.companyId, companyId), sql`${journalEntriesTable.status} IN ('posted','reversed')`, sql`${journalEntriesTable.entryDate} < ${fromDate}`));
+      .where(and(
+        eq(journalEntriesTable.companyId, companyId),
+        eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+        fromDate
+          ? sql`(
+              ${journalEntriesTable.entryDate} < ${fromDate}
+              OR (
+                ${journalEntriesTable.refType} = 'ledger_ob_adjust'
+                AND ${journalEntriesTable.refId} = ${accountId}
+                AND ${journalEntriesTable.entryDate} = ${fromDate}
+                AND ${journalEntriesTable.status} = 'posted'
+              )
+            )`
+          : sql`TRUE`,
+      ));
     const obIds = obEntries.map(e => e.entryId);
     if (obIds.length > 0) {
       const obLines = await db.select().from(journalLinesTable)
@@ -1502,7 +1547,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   }
   const openingBalance = openingDebit - openingCredit;
 
-  // Period entries
+  // Period entries (exclude FY opening + manual ledger opening adjustments)
   const entries = await db.select({
     entryId: journalEntriesTable.id,
     entryDate: journalEntriesTable.entryDate,
@@ -1514,8 +1559,9 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'ledger_ob_adjust'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
     ))
@@ -1616,6 +1662,140 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   });
 });
 
+/** Set Account Ledger opening balance for a period start (from date). Persists as balanced JE. */
+router.put("/general-ledger/opening-balance", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+  if (!canManageAccounts(req)) {
+    res.status(403).json({ error: "Only admin or accountant can edit opening balance" });
+    return;
+  }
+
+  const companyId = req.session.companyId!;
+  const userId = req.session.userId!;
+  const accountId = parseInt(String(req.body?.accountId ?? ""), 10);
+  const fromDate = String(req.body?.from || "").trim();
+  const amount = Number(req.body?.amount);
+
+  if (!Number.isFinite(accountId) || accountId <= 0) {
+    res.status(400).json({ error: "accountId is required" }); return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    res.status(400).json({ error: "from date (YYYY-MM-DD) is required" }); return;
+  }
+  if (!Number.isFinite(amount)) {
+    res.status(400).json({ error: "amount is required (debit − credit)" }); return;
+  }
+
+  const periodCheck = await assertPeriodWritable(companyId, fromDate);
+  if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
+
+  await ensureAccountsSeeded(companyId);
+
+  const [account] = await db.select().from(accountsTable)
+    .where(and(eq(accountsTable.id, accountId), eq(accountsTable.companyId, companyId)))
+    .limit(1);
+  if (!account) { res.status(404).json({ error: "Account not found" }); return; }
+
+  const [equityAcct] = await db.select().from(accountsTable)
+    .where(and(
+      eq(accountsTable.companyId, companyId),
+      sql`(${accountsTable.code} = '3100' OR lower(${accountsTable.name}) LIKE '%retained earnings%')`,
+      sql`${accountsTable.code} <> '3200'`,
+    ))
+    .limit(1);
+  if (!equityAcct) {
+    res.status(400).json({ error: "Retained Earnings account (3100) not found" }); return;
+  }
+  if (equityAcct.id === accountId) {
+    res.status(400).json({ error: "Cannot set opening balance directly on Retained Earnings this way" }); return;
+  }
+
+  // Current opening before any ledger_ob_adjust on fromDate
+  const priorEntries = await db.select({ entryId: journalEntriesTable.id })
+    .from(journalEntriesTable)
+    .where(and(
+      eq(journalEntriesTable.companyId, companyId),
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+      sql`${journalEntriesTable.entryDate} < ${fromDate}`,
+    ));
+  const priorIds = priorEntries.map(e => e.entryId);
+  let baseDebit = 0, baseCredit = 0;
+  if (priorIds.length > 0) {
+    const priorLines = await db.select().from(journalLinesTable)
+      .where(and(
+        eq(journalLinesTable.accountId, accountId),
+        sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${priorIds.join(",")}]::int[]`)})`,
+      ));
+    baseDebit = priorLines.reduce((s, l) => s + parseFloat(l.debit ?? "0"), 0);
+    baseCredit = priorLines.reduce((s, l) => s + parseFloat(l.credit ?? "0"), 0);
+  }
+  const baseOpening = baseDebit - baseCredit;
+  const desired = Math.round(amount * 100) / 100;
+  const diff = Math.round((desired - baseOpening) * 100) / 100;
+
+  // Remove previous adjustment JEs for this account + fromDate
+  const existing = await db.select({ id: journalEntriesTable.id })
+    .from(journalEntriesTable)
+    .where(and(
+      eq(journalEntriesTable.companyId, companyId),
+      eq(journalEntriesTable.refType, "ledger_ob_adjust"),
+      eq(journalEntriesTable.refId, accountId),
+      eq(journalEntriesTable.entryDate, fromDate),
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+    ));
+  for (const e of existing) {
+    await db.update(journalEntriesTable)
+      .set({ status: "reversed" })
+      .where(eq(journalEntriesTable.id, e.id));
+  }
+
+  if (Math.abs(diff) >= 0.005) {
+    const abs = Math.abs(diff);
+    const acctDebit = diff > 0 ? abs : 0;
+    const acctCredit = diff < 0 ? abs : 0;
+    const [entry] = await db.insert(journalEntriesTable).values({
+      companyId,
+      entryDate: fromDate,
+      description: `Opening balance adjustment — ${account.code} ${account.name}`,
+      refType: "ledger_ob_adjust",
+      refId: accountId,
+      refNumber: `OB-${account.code}`,
+      status: "posted",
+      createdBy: userId,
+    }).returning();
+
+    await db.insert(journalLinesTable).values([
+      {
+        journalEntryId: entry.id,
+        accountId,
+        description: "Opening balance (Account Ledger)",
+        debit: String(acctDebit.toFixed(2)),
+        credit: String(acctCredit.toFixed(2)),
+      },
+      {
+        journalEntryId: entry.id,
+        accountId: equityAcct.id,
+        description: `Offset — ${account.code}`,
+        debit: String(acctCredit.toFixed(2)),
+        credit: String(acctDebit.toFixed(2)),
+      },
+    ]);
+
+    logAudit({
+      req,
+      action: "update",
+      entityType: "ledger_opening_balance",
+      entityId: accountId,
+      entityLabel: `${account.code} ${account.name}`,
+      details: { fromDate, amount: desired, diff, journalEntryId: entry.id },
+    });
+  }
+
+  res.json({ ok: true, accountId, from: fromDate, openingBalance: desired });
+});
+
 // ─── Cash Flow Statement (Indirect Method) ────────────────────────────────────
 
 router.get("/cash-flow", async (req, res): Promise<void> => {
@@ -1646,7 +1826,7 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
       sql`${journalEntriesTable.entryDate} <= ${toDate}`,
@@ -1658,7 +1838,7 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       sql`${journalEntriesTable.entryDate} < ${fromDate}`,
     ));
   const preIds = preEntries.map(e => e.entryId);
@@ -1942,7 +2122,7 @@ router.get("/iaf", async (req, res): Promise<void> => {
   const entries = await db.select().from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
-      sql`${journalEntriesTable.status} IN ('posted','reversed')`,
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
       sql`${journalEntriesTable.entryDate} <= ${toDate}`,

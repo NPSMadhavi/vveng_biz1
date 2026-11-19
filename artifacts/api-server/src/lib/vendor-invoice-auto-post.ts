@@ -195,66 +195,22 @@ export async function postVendorInvoiceJE(
 export async function reverseVendorInvoiceJE(
   piId: number,
   companyId: number,
-  piNumber: string,
-  vendorName: string,
-  userId: number,
+  _piNumber: string,
+  _vendorName: string,
+  _userId: number,
   log?: any,
 ): Promise<void> {
   try {
-    // Ensure COA/journals exist on older tenants before touching them.
     await ensureAccountsSeeded(companyId);
-
-    const [original] = await db.select()
-      .from(journalEntriesTable)
-      .where(and(
-        eq(journalEntriesTable.companyId, companyId),
-        eq(journalEntriesTable.refType, "vendor_invoice"),
-        eq(journalEntriesTable.refId, piId),
-      ))
-      .limit(1);
-
-    if (!original || original.status === "reversed") return;
-
-    const [existingReversal] = await db.select({ id: journalEntriesTable.id })
-      .from(journalEntriesTable)
-      .where(eq(journalEntriesTable.reversalOfId, original.id))
-      .limit(1);
-    if (existingReversal) return;
-
-    const originalLines = await db.select()
-      .from(journalLinesTable)
-      .where(eq(journalLinesTable.journalEntryId, original.id));
-
-    const [reversal] = await db.insert(journalEntriesTable).values({
+    const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+    await removeJournalEntriesForRef({
       companyId,
-      entryDate:   new Date().toISOString().split("T")[0],
-      description: `VOID — Vendor PI ${piNumber} — ${vendorName}`,
-      refType:     "vendor_invoice",
-      refId:       piId,
-      refNumber:   piNumber,
-      status:      "posted",
-      reversalOfId: original.id,
-      createdBy:   userId,
-    }).returning();
-
-    if (originalLines.length > 0) {
-      await db.insert(journalLinesTable).values(
-        originalLines.map(l => ({
-          journalEntryId: reversal.id,
-          accountId:      l.accountId,
-          description:    `REVERSAL: ${l.description ?? ""}`,
-          debit:          l.credit,
-          credit:         l.debit,
-        })),
-      );
-    }
-
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
+      refType: "vendor_invoice",
+      refId: piId,
+      log,
+    });
   } catch (err) {
-    // Missing journals / accounts on incomplete tenants must not block delete.
-    if (log) log.warn({ err, piNumber }, "vendor-invoice-auto-post: reversal skipped (non-fatal)");
+    if (log) log.warn({ err, piId }, "vendor-invoice-auto-post: remove JE skipped (non-fatal)");
   }
 }
 
@@ -325,67 +281,27 @@ export async function postPaymentJE(
 export async function reversePaymentJE(
   paymentId: number,
   companyId: number,
-  piNumber: string,
-  vendorName: string,
-  userId: number,
+  _piNumber: string,
+  _vendorName: string,
+  _userId: number,
   log?: any,
 ): Promise<void> {
-  const [original] = await db.select()
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.refType, "vendor_payment"),
-      eq(journalEntriesTable.refId, paymentId),
-    ))
-    .limit(1);
-
-  if (!original || original.status === "reversed") return;
-
-  const [existingReversal] = await db.select({ id: journalEntriesTable.id })
-    .from(journalEntriesTable)
-    .where(eq(journalEntriesTable.reversalOfId, original.id))
-    .limit(1);
-  if (existingReversal) return;
-
-  const originalLines = await db.select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
-
-  try {
-    const [reversal] = await db.insert(journalEntriesTable).values({
-      companyId,
-      entryDate:    new Date().toISOString().split("T")[0],
-      description:  `REVERSAL: Payment — Vendor PI ${piNumber}`,
-      refType:      "vendor_payment",
-      refId:        paymentId,
-      refNumber:    piNumber,
-      status:       "posted",
-      reversalOfId: original.id,
-      createdBy:    userId,
-    }).returning();
-
-    await db.insert(journalLinesTable).values(
-      originalLines.map(l => ({
-        journalEntryId: reversal.id,
-        accountId:      l.accountId,
-        description:    `REVERSAL: ${l.description ?? ""}`,
-        debit:          l.credit,
-        credit:         l.debit,
-      }))
-    );
-
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-  } catch (err) {
-    if (log) log.error({ err }, "vendor-invoice-auto-post: payment reversal failed (non-fatal)");
-  }
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  await removeJournalEntriesForRef({
+    companyId,
+    refType: "vendor_payment",
+    refId: paymentId,
+    log,
+  });
 }
 
 /** Post journal entries for vendor invoices that were saved without one. */
 export async function backfillVendorInvoiceJEs(companyId: number, userId: number, log?: any): Promise<number> {
   const rows = await db.select().from(vendorInvoicesTable)
-    .where(eq(vendorInvoicesTable.companyId, companyId));
+    .where(and(
+      eq(vendorInvoicesTable.companyId, companyId),
+      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
+    ));
 
   let posted = 0;
   for (const pi of rows) {
@@ -397,6 +313,7 @@ export async function backfillVendorInvoiceJEs(companyId: number, userId: number
         eq(journalEntriesTable.companyId, companyId),
         eq(journalEntriesTable.refType, "vendor_invoice"),
         eq(journalEntriesTable.refId, pi.id),
+        sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       ))
       .limit(1);
     if (before.length > 0) continue;

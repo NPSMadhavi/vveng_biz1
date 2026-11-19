@@ -320,7 +320,9 @@ async function accountBalancesAsOf(companyId: number, asOf: string) {
     LEFT JOIN journal_lines jl ON jl.account_id = a.id
     LEFT JOIN journal_entries je ON je.id = jl.journal_entry_id
       AND je.company_id = ${companyId}
-      AND je.status IN ('posted', 'reversed')
+      AND je.status = 'posted'
+      AND je.reversal_of_id IS NULL
+      AND COALESCE(je.is_deleted, 0) = 0
       AND je.entry_date <= ${asOf}
       AND COALESCE(je.ref_type, '') <> 'fy_opening'
     WHERE a.company_id = ${companyId} AND a.is_active = true

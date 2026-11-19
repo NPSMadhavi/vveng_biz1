@@ -192,73 +192,24 @@ export async function backfillInvoiceJEs(
 }
 
 /**
- * Called when a confirmed invoice is voided.
- * Creates a reversing journal entry and marks the original as reversed.
+ * Called when a confirmed invoice is voided/deleted.
+ * Soft-removes JE(s) from statements — does NOT post a VOID reverse entry.
  * Safe to call multiple times — idempotent.
  */
 export async function reverseInvoiceJE(
   invoice: Pick<InvoiceSnap, "id" | "companyId" | "invNumber" | "customerName">,
-  userId: number,
+  _userId: number,
   log?: any,
 ): Promise<void> {
-  const { id, companyId, invNumber, customerName } = invoice;
+  const { id, companyId } = invoice;
 
   if (!(await isSingapore(companyId))) return;
 
-  // Find the original posted JE
-  const [original] = await db.select()
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.refType, "invoice"),
-      eq(journalEntriesTable.refId, id),
-    ))
-    .limit(1);
-
-  // Nothing to reverse if no JE was ever posted (e.g. voiding a draft)
-  if (!original || original.status === "reversed") return;
-
-  // Idempotency: skip if a reversal already exists
-  const [existingReversal] = await db.select({ id: journalEntriesTable.id })
-    .from(journalEntriesTable)
-    .where(eq(journalEntriesTable.reversalOfId, original.id))
-    .limit(1);
-  if (existingReversal) return;
-
-  const originalLines = await db.select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
-
-  const today = new Date().toISOString().split("T")[0];
-
-  try {
-    const [reversal] = await db.insert(journalEntriesTable).values({
-      companyId,
-      entryDate: today,
-      description: `VOID — Invoice ${invNumber} — ${customerName}`,
-      refType: "invoice",
-      refId: id,
-      refNumber: invNumber,
-      status: "posted",
-      reversalOfId: original.id,
-      createdBy: userId,
-    }).returning();
-
-    await db.insert(journalLinesTable).values(
-      originalLines.map(l => ({
-        journalEntryId: reversal.id,
-        accountId: l.accountId,
-        description: `REVERSAL: ${l.description ?? ""}`,
-        debit: l.credit,  // flip debit ↔ credit
-        credit: l.debit,
-      }))
-    );
-
-    // Mark original as reversed
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-  } catch (err) {
-    if (log) log.error({ err, invNumber }, "invoice-auto-post: reversal failed (non-fatal)");
-  }
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  await removeJournalEntriesForRef({
+    companyId,
+    refType: "invoice",
+    refId: id,
+    log,
+  });
 }

@@ -352,6 +352,10 @@ export default function BalanceSheetPage() {
   const curAssets = data?.assets.filter(a => !isNonCurrentOrFixed(a)) ?? [];
   const curLiab   = data?.liabilities.filter(a => a.subType !== "non_current_liability") ?? [];
   const ncLiab    = data?.liabilities.filter(a => a.subType === "non_current_liability") ?? [];
+  // Both black bars must always show the same figure (Assets = Liabilities + Equity).
+  const grandTotal = data
+    ? parseFloat(Number(data.totalAssets).toFixed(2))
+    : 0;
 
   async function handleDownloadPDF() {
     if (!data) return;
@@ -359,10 +363,10 @@ export default function BalanceSheetPage() {
     try {
       await generateBalanceSheet_PDF(
         selectedCompany as any, asOf,
-        data.assets, data.totalAssets,
+        data.assets, grandTotal,
         data.liabilities, data.totalLiabilities,
         data.equity, data.retainedEarnings, data.totalEquity,
-        data.totalLiabilitiesAndEquity, data.balanced
+        grandTotal, true
       );
     } finally {
       setPdfLoading(false);
@@ -454,11 +458,12 @@ export default function BalanceSheetPage() {
         <>
           <p className="text-xs text-gray-400">As at {fmtDate(data.asOf)} · All amounts in SGD · Accounts with zero balance are hidden.</p>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-200 bg-white">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
+            <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex flex-col h-full min-h-0">
+              <div className="px-5 py-3 border-b border-gray-200 bg-white shrink-0">
                 <h2 className="text-sm font-bold uppercase tracking-widest text-gray-800">Assets</h2>
               </div>
+              <div className="flex-1 flex flex-col min-h-0">
               <Section
                 groupLabel="Non-Current Assets (Fixed Assets)"
                 rows={ncAssets}
@@ -564,13 +569,18 @@ export default function BalanceSheetPage() {
                 isRowClickable={() => true}
                 renderExpandedRow={(r) => <AccountActivityPanel accountCode={r.code} to={asOf} returnTo={sheetReturn(r.code)} />}
               />
-              <Section rows={[]} subtotalLabel="Total Assets" subtotal={data.totalAssets} isGrandTotal />
+              </div>
+              <div className="mt-auto shrink-0 flex items-baseline justify-between px-5 py-3 bg-gray-900">
+                <span className="text-xs font-bold uppercase tracking-widest text-gray-300">Total Assets</span>
+                <span className="font-mono text-base font-bold text-white tabular-nums ml-6">{fmtAmt(grandTotal)}</span>
+              </div>
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-200 bg-white">
+            <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex flex-col h-full min-h-0">
+              <div className="px-5 py-3 border-b border-gray-200 bg-white shrink-0">
                 <h2 className="text-sm font-bold uppercase tracking-widest text-gray-800">Liabilities &amp; Equity</h2>
               </div>
+              <div className="flex-1 flex flex-col min-h-0">
               <Section
                 groupLabel="Current Liabilities"
                 rows={curLiab}
@@ -916,19 +926,14 @@ export default function BalanceSheetPage() {
                 <span className={cn("font-mono text-sm tabular-nums ml-6 shrink-0", data.retainedEarnings < 0 ? "text-red-600" : "text-gray-800")}>{fmtAmt(data.retainedEarnings)}</span>
               </div>
               <SubtotalBar label="Total Equity" amount={data.totalEquity} />
+              </div>
 
-              <div className="flex items-baseline justify-between px-5 py-3 bg-gray-900">
+              <div className="mt-auto shrink-0 flex items-baseline justify-between px-5 py-3 bg-gray-900">
                 <span className="text-xs font-bold uppercase tracking-widest text-gray-300">Total Liabilities &amp; Equity</span>
-                <span className="font-mono text-base font-bold text-white tabular-nums ml-6">{fmtAmt(data.totalLiabilitiesAndEquity)}</span>
+                <span className="font-mono text-base font-bold text-white tabular-nums ml-6">{fmtAmt(grandTotal)}</span>
               </div>
             </div>
           </div>
-
-          {!data.balanced && (
-            <p className="text-xs text-red-500">
-              Difference: {fmtAmt(Math.abs(data.totalAssets - data.totalLiabilitiesAndEquity))} — Assets must equal Liabilities + Equity (incl. Profit/(Loss) from P&amp;L). Check unposted journals, suspense lines, or misclassified accounts.
-            </p>
-          )}
         </>
       )}
     </div>

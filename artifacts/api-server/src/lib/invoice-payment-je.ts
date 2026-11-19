@@ -102,61 +102,16 @@ export async function postARPaymentJE(
 export async function reverseARPaymentJE(
   paymentId: number,
   companyId: number,
-  invNumber: string,
-  customerName: string,
-  userId: number,
+  _invNumber: string,
+  _customerName: string,
+  _userId: number,
   log?: any,
 ): Promise<void> {
-  const [original] = await db.select()
-    .from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.refType, "invoice_payment"),
-      eq(journalEntriesTable.refId, paymentId),
-    ))
-    .limit(1);
-
-  if (!original || original.status === "reversed") return;
-
-  const [existingReversal] = await db.select({ id: journalEntriesTable.id })
-    .from(journalEntriesTable)
-    .where(eq(journalEntriesTable.reversalOfId, original.id))
-    .limit(1);
-  if (existingReversal) return;
-
-  const originalLines = await db.select()
-    .from(journalLinesTable)
-    .where(eq(journalLinesTable.journalEntryId, original.id));
-
-  const today = new Date().toISOString().split("T")[0];
-
-  try {
-    const [reversal] = await db.insert(journalEntriesTable).values({
-      companyId,
-      entryDate:   today,
-      description: `REVERSAL — Payment — Invoice ${invNumber} — ${customerName}`,
-      refType:     "invoice_payment",
-      refId:       paymentId,
-      refNumber:   invNumber,
-      status:      "posted",
-      reversalOfId: original.id,
-      createdBy:   userId,
-    }).returning();
-
-    await db.insert(journalLinesTable).values(
-      originalLines.map(l => ({
-        journalEntryId: reversal.id,
-        accountId: l.accountId,
-        description: `REVERSAL: ${l.description ?? ""}`,
-        debit: l.credit,
-        credit: l.debit,
-      }))
-    );
-
-    await db.update(journalEntriesTable)
-      .set({ status: "reversed" })
-      .where(eq(journalEntriesTable.id, original.id));
-  } catch (err) {
-    if (log) log.error({ err, invNumber }, "invoice-payment-je: reversal failed (non-fatal)");
-  }
+  const { removeJournalEntriesForRef } = await import("./journal-entry-remove.js");
+  await removeJournalEntriesForRef({
+    companyId,
+    refType: "invoice_payment",
+    refId: paymentId,
+    log,
+  });
 }
