@@ -49,41 +49,15 @@ function textFromGatewayBody(raw: string): string {
   return String(text).trim();
 }
 
-/** User-facing AI failure. Never includes the API key, stack, or prompt. */
+/** Soft user-facing AI failure. Never exposes gateway/API details, stacks, or "ran into an issue". */
 export function publicAiError(err: unknown): string {
   const key = (process.env.VEDA_API_KEY || "").trim();
-  let raw = err instanceof Error ? err.message : String(err || "AI request failed");
+  let raw = err instanceof Error ? err.message : String(err || "");
   if (key) raw = raw.split(key).join("[redacted]");
   raw = raw.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
-  if (/401|incorrect api key|invalid api key|unauthorized/i.test(raw)) {
-    return "The AI gateway rejected the API key.";
-  }
-  if (/model.+not found|unknown model|does not exist/i.test(raw)) {
-    return "The configured Qwen model was not found on the gateway.";
-  }
-  if (/429|rate limit|too many requests/i.test(raw)) {
-    return "The AI gateway is rate limiting requests. Try again shortly.";
-  }
-  if (/timeout|timed out|aborted|This operation was aborted/i.test(raw)) {
-    return "The AI request timed out. The gateway is up, but the reply took too long — try a shorter question.";
-  }
-  if (/empty response/i.test(raw)) {
-    return "The AI gateway returned an empty response.";
-  }
-  if (/ECONNREFUSED|ENOTFOUND|ECONNRESET|fetch failed|Connection error|Unable to connect|not configured|VEDA_API_KEY is not set|VEDA_GATEWAY_URL is not configured/i.test(raw)) {
-    return "The Qwen gateway is not reachable. Start it, then try again.";
-  }
-  if (/^Veda gateway 5\d\d/.test(raw) || /bad gateway|service unavailable/i.test(raw)) {
-    return "The AI gateway is temporarily unavailable.";
-  }
-  if (/^Veda gateway 404/.test(raw)) {
-    return "The AI gateway has no chat endpoint at the configured URL.";
-  }
-  const oneLine = raw.replace(/\s+/g, " ").trim();
-  if (!oneLine || oneLine.length > 180 || /at\s+\S+\s+\(|node_modules/i.test(oneLine)) {
-    return "The AI request failed.";
-  }
-  return oneLine;
+  // Log-friendly detail stays in server logs only — UI always gets a soft clarify line.
+  void raw;
+  return "I didn't quite get that — could you say it again?";
 }
 
 let modelLookup: Promise<string> | null = null;
@@ -210,27 +184,28 @@ export async function vedaChat(
   });
 
   try {
+    // Prefer the Central AI Platform chat endpoint first (fastest on the LAN gateway).
     const platformBody: Record<string, string> = { message: userMessage, model };
     if (systemPrompt) platformBody.system_prompt = systemPrompt;
     let res = await post(`${root}/api/v1/chat`, platformBody);
 
+    // Only fall back when the primary route is missing — avoid extra round-trips on success.
     if (res.status === 404 || res.status === 405) {
       const messages = systemPrompt
         ? [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }]
         : [{ role: "user", content: userMessage }];
-      res = await post(completionsUrl, { model, messages, max_tokens: 4096 });
+      res = await post(completionsUrl, { model, messages, max_tokens: 2048, temperature: 0.2 });
     }
 
     if (res.status === 404 || res.status === 405) {
       res = await post(`${root}/api/chat`, {
         model,
-        messages: [{ role: "user", content: userMessage }],
+        messages: systemPrompt
+          ? [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }]
+          : [{ role: "user", content: userMessage }],
         stream: false,
+        options: { temperature: 0.2, num_predict: 2048 },
       });
-    }
-
-    if (res.status === 404 || res.status === 405) {
-      res = await post(`${root}/chat`, { message: userMessage });
     }
 
     const raw = await res.text();
@@ -248,13 +223,18 @@ export async function vedaChat(
   }
 }
 
-/** Speech to text on the same gateway: POST /api/v1/stt/transcribe, field "file". */
+/** Speech to text on the same gateway: POST /api/v1/stt/transcribe, field "file" (fast-whisper). */
 export async function vedaTranscribe(audio: Buffer, filename = "audio.webm"): Promise<string> {
   const base = gatewayBase();
   if (!base) throw new Error("VEDA_GATEWAY_URL is not configured");
   const root = base.replace(/\/v1$/i, "");
+  const engine = (process.env.VEDA_STT_ENGINE || "fast-whisper").trim();
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(audio)]), filename);
+  if (engine) {
+    form.append("engine", engine);
+    form.append("model", engine);
+  }
   const headers = gatewayHeaders();
   delete headers["Content-Type"];
 
@@ -292,7 +272,8 @@ export async function vedaSpeak(
   if (!clean) throw new Error("Veda gateway returned an empty response");
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 60_000);
+  // Keep TTS short — the browser falls back if the LAN synth is slow.
+  const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 8_000);
   try {
     const res = await fetch(`${root}/api/v1/tts/synthesize`, {
       method: "POST",

@@ -55,6 +55,7 @@ const PREFER_FILE_KEYS = new Set([
   "VEDA_API_KEY",
   "VEDA_LLM_MODEL",
   "VEDA_MODEL",
+  "VEDA_STT_ENGINE",
   "AI_INTEGRATIONS_OPENAI_API_KEY",
   "AI_INTEGRATIONS_OPENAI_BASE_URL",
   "OPENAI_API_KEY",
@@ -119,7 +120,8 @@ export function loadLocalEnv(): void {
         key === "VEDA_GATEWAY_URL" ||
         key === "VEDA_API_KEY" ||
         key === "VEDA_LLM_MODEL" ||
-        key === "VEDA_MODEL";
+        key === "VEDA_MODEL" ||
+        key === "VEDA_STT_ENGINE";
       if (
         fileWins ||
         current === undefined ||
@@ -160,12 +162,14 @@ export function loadLocalEnv(): void {
   );
   const apiKey = pick("VEDA_API_KEY", "BIZONE_API_KEY", "GATEWAY_API_KEY");
   const model = pick("VEDA_LLM_MODEL", "VEDA_MODEL", "QWEN_MODEL", "VEDA_LLM_MODE", "LLM_MODEL");
+  const sttEngine = pick("VEDA_STT_ENGINE", "STT_ENGINE", "WHISPER_ENGINE");
   if (gateway) process.env.VEDA_GATEWAY_URL = gateway.replace(/\/$/, "");
   if (apiKey) process.env.VEDA_API_KEY = apiKey;
   if (model) {
     process.env.VEDA_LLM_MODEL = model;
     process.env.VEDA_MODEL = model;
   }
+  if (sttEngine) process.env.VEDA_STT_ENGINE = sttEngine;
 }
 
 loadLocalEnv();

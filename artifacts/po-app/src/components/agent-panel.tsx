@@ -992,42 +992,64 @@ function speakBrowser(text: string, opts?: { rate?: number; deferMs?: number }):
   });
 }
 
-/** Prefer Ubuntu gateway TTS (/api/agent/speak); fall back to browser speech. */
-async function speakGateway(text: string): Promise<boolean> {
+/** Gateway TTS health — skip slow/down LAN synthesizer so voice stays snappy. */
+let _gatewayTtsCooldownUntil = 0;
+let _gatewayTtsFails = 0;
+let _gatewayAudioEl: HTMLAudioElement | null = null;
+
+/**
+ * Optional gateway TTS with a hard time budget.
+ * Root cause of "chat fast, voice slow": every reply waited on /api/agent/speak
+ * (LAN Piper synthesize + base64 round-trip, often 2–15s, or hung when gateway was down).
+ */
+async function speakGateway(text: string, budgetMs = 1400): Promise<boolean> {
+  if (Date.now() < _gatewayTtsCooldownUntil) return false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), budgetMs);
   try {
     const r = await fetch(`${BASE}/api/agent/speak`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ text }),
+      signal: ctrl.signal,
     });
-    if (!r.ok) return false;
+    if (!r.ok) throw new Error("gateway tts http");
     const data = await r.json().catch(() => ({} as { audio?: string; mimeType?: string }));
-    if (!data?.audio) return false;
+    if (!data?.audio) throw new Error("gateway tts empty");
     const mime = data.mimeType || "audio/wav";
     const src = `data:${mime};base64,${data.audio}`;
     await new Promise<void>((resolve, reject) => {
       const audio = new Audio(src);
+      _gatewayAudioEl = audio;
       _isSpeakingTts = true;
       audio.onended = () => {
         _isSpeakingTts = false;
         _ttsFinishedTimestamp = Date.now();
+        if (_gatewayAudioEl === audio) _gatewayAudioEl = null;
         resolve();
       };
       audio.onerror = () => {
         _isSpeakingTts = false;
+        if (_gatewayAudioEl === audio) _gatewayAudioEl = null;
         reject(new Error("gateway audio failed"));
       };
       void audio.play().catch(reject);
     });
+    _gatewayTtsFails = 0;
     return true;
   } catch {
+    _gatewayTtsFails += 1;
+    // After repeated slow/fail, skip gateway TTS for a while (browser TTS is instant).
+    if (_gatewayTtsFails >= 1) _gatewayTtsCooldownUntil = Date.now() + 60_000;
     _isSpeakingTts = false;
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-/** Fast wake acknowledgment word so user immediately hears Veda is awake and ready. */
+/** Fast wake acknowledgment — browser TTS only (must feel instant). */
 async function speakWakeGreeting(text: string): Promise<void> {
   const clean = String(text || "Ready!").trim();
   if (!clean) return;
@@ -1035,23 +1057,30 @@ async function speakWakeGreeting(text: string): Promise<void> {
   if (typeof window !== "undefined" && window.speechSynthesis?.paused) {
     try { window.speechSynthesis.resume(); } catch {}
   }
-  if (await speakGateway(clean)) return;
-  await speakBrowser(clean, { rate: 1.15, deferMs: 0 });
+  await speakBrowser(clean, { rate: 1.2, deferMs: 0 });
 }
 
+/**
+ * Speak replies with browser TTS first (local, near-instant).
+ * Gateway TTS is only attempted for longer answers when the LAN synth is healthy.
+ */
 async function speak(text: string): Promise<void> {
   const clean = text.replace(/\*\*/g, "").replace(/\*/g, "").replace(/#{1,6}\s/g, "").replace(/`/g, "").replace(/•\s*/g, "").trim().slice(0, 600);
   if (!clean) return;
-  if (await speakGateway(clean)) return;
-  await speakBrowser(clean);
+  // Short voice turns must not wait on LAN TTS — that was the lag after a fast chat reply.
+  if (clean.length <= 160 || Date.now() < _gatewayTtsCooldownUntil) {
+    await speakBrowser(clean, { rate: 1.12, deferMs: 0 });
+    return;
+  }
+  if (await speakGateway(clean, 1600)) return;
+  await speakBrowser(clean, { rate: 1.12, deferMs: 0 });
 }
 
-/** Guided prompts — clear pace (not rushed). */
+/** Guided prompts — always local TTS so field questions start immediately. */
 async function speakGuidedFast(text: string): Promise<void> {
   const clean = String(text || "").trim().slice(0, 80);
   if (!clean) return;
-  if (await speakGateway(clean)) return;
-  await speakBrowser(clean, { rate: 1.0, deferMs: 40 });
+  await speakBrowser(clean, { rate: 1.08, deferMs: 0 });
 }
 
 function cancelSpeech() {
@@ -1061,6 +1090,10 @@ function cancelSpeech() {
   _browserTtsResolve?.();
   _browserTtsResolve = null;
   if (_browserTtsTimeout) { clearTimeout(_browserTtsTimeout); _browserTtsTimeout = null; }
+  if (_gatewayAudioEl) {
+    try { _gatewayAudioEl.pause(); _gatewayAudioEl.src = ""; } catch {}
+    _gatewayAudioEl = null;
+  }
 }
 
 // Chrome allows only ONE SpeechRecognition at a time. All Veda voice paths must
@@ -1350,12 +1383,45 @@ async function guidedAskNext(
   return { answer: cleaned };
 }
 
-function safeAssistantMessage(error: unknown): string {
-  const msg = error instanceof Error ? error.message.trim() : "";
-  if (!msg || msg.length > 240 || /node_modules|at\s+\S+\s+\(/.test(msg)) {
-    return "Something went wrong — please try again.";
+const SOFT_CLARIFY = "I didn't quite get that — could you say it again?";
+
+function looksLikeHardFailure(text: string): boolean {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  return /\bran into (an?\s+)?issue\b|\bsomething went wrong\b|\bai (request |gateway )?(failed|unavailable|rejected|timed?\s*out)\b|\bqwen gateway\b|\bnot reachable\b|\bempty response\b|\bgateway (rejected|unavailable|rate)\b|\bthe ai request failed\b|\bconnection (failed|error)\b|\bplease try again\b|\btranscription failed\b|\bnot configured\b/i.test(t)
+    || /^(error|failed|unable to|cannot connect|sorry[,.]?\s+i (ran|hit|encountered))/i.test(t);
+}
+
+/** Never show technical gateway/LLM failures — clarify, or open a likely form. */
+function planSoftRecovery(userText: string): { message: string; path?: string; label?: string } {
+  const quick = matchQuickNavigate(String(userText || "").trim());
+  if (quick?.path) {
+    const label = PATH_LABELS[quick.path] || quick.path;
+    return {
+      path: quick.path,
+      label,
+      message: `Is this what you meant — ${label}? Tell me what to fill in, or say it again.`,
+    };
   }
-  return msg;
+  return { message: SOFT_CLARIFY };
+}
+
+function softAssistantReply(errorOrText: unknown, userText = ""): string {
+  const raw = typeof errorOrText === "string"
+    ? errorOrText
+    : errorOrText instanceof Error
+      ? errorOrText.message
+      : "";
+  if (raw && !looksLikeHardFailure(raw) && raw.length <= 240 && !/node_modules|at\s+\S+\s+\(/.test(raw)) {
+    // Keep rare non-technical messages (e.g. "Please select a company first")
+    if (/company/i.test(raw)) return "Please select a company first, then say that again.";
+    return raw;
+  }
+  return planSoftRecovery(userText).message;
+}
+
+function safeAssistantMessage(error: unknown, userText = ""): string {
+  return softAssistantReply(error, userText);
 }
 
 // ── SSE stream ────────────────────────────────────────────────────────────────
@@ -1377,7 +1443,7 @@ async function streamChat(
     method: "POST", headers: { "Content-Type": "application/json" },
     credentials: "include", body: JSON.stringify({ messages, memory, currentPath, selectedCompanyId }), signal,
   });
-  if (!r.ok) { const e = await r.json().catch(() => ({ error: "Failed" })); throw new Error(e.error); }
+  if (!r.ok) { await r.json().catch(() => ({})); throw new Error("SOFT_RECOVER"); }
   const reader = r.body!.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -1415,7 +1481,7 @@ async function streamChat(
           (window as any).__vedaOpenEmail = { recipients: ev.recipients, docType: ev.docType, id: ev.id };
           onEmail?.(ev.docType, ev.id, ev.recipients, ev.docNumber);
         }
-        if (ev.type === "error") throw new Error(ev.message);
+        if (ev.type === "error") throw new Error("SOFT_RECOVER");
       } catch (e: any) { if (e.message && !e.message.includes("JSON")) throw e; }
     }
   }
@@ -1432,7 +1498,7 @@ async function transcribe(blob: Blob): Promise<string> {
     credentials: "include", body: JSON.stringify({ audio: btoa(bin) }),
   });
   const data = await r.json().catch(() => ({} as { text?: string; error?: string }));
-  if (!r.ok) throw new Error(data.error || "Transcription failed");
+  if (!r.ok) throw new Error("SOFT_RECOVER");
   return data.text || "";
 }
 
@@ -2572,21 +2638,29 @@ export function AgentPanel() {
           }
 
           if (response || didNavigate) {
-            setMessages(p => p.map(m => m.id === aid ? { ...m, content: response || (didNavigate ? "Done." : ""), complete: true } : m));
-            if (response) {
+            const recovery = looksLikeHardFailure(response) ? planSoftRecovery(command) : null;
+            if (recovery?.path) {
+              unlockVedaModules();
+              navigate(normalizeNavPath(recovery.path));
+            }
+            const display = recovery
+              ? recovery.message
+              : (response || (didNavigate ? "Done." : ""));
+            setMessages(p => p.map(m => m.id === aid ? { ...m, content: display, complete: true } : m));
+            if (display) {
               ambientHistoryRef.current = [
                 ...ambientHistoryRef.current,
                 { role: "user", content: command },
-                { role: "assistant", content: response },
+                { role: "assistant", content: display },
               ].slice(-16);
             }
-            lastSpokenWords = (response || "").toLowerCase().split(/\s+/).filter(w => w.length > 3);
+            lastSpokenWords = (display || "").toLowerCase().split(/\s+/).filter(w => w.length > 3);
             setConvState("speaking");
             const speakLimit = isGuidedCreatePath(agentPath) ? 120 : 600;
-            const speakText = response
-              ? response.slice(0, speakLimit)
+            const speakText = display
+              ? display.slice(0, speakLimit)
               : didNavigate ? "Done." : "";
-            setConvText((response || (didNavigate ? "Done." : "")).slice(0, 240));
+            setConvText((display || (didNavigate ? "Done." : "")).slice(0, 240));
 
             if (speakText) {
               const spoken = await speakAndMaybeCapture(speakText, {
@@ -2616,9 +2690,14 @@ export function AgentPanel() {
           }
         } catch (e: any) {
           if (e.name === "AbortError" || ctrl.signal.aborted) break;
+          const recovery = planSoftRecovery(command);
           const msg = /company/i.test(String(e?.message || ""))
-            ? "Please select a company first, then try again."
-            : safeAssistantMessage(e);
+            ? "Please select a company first, then say that again."
+            : recovery.message;
+          if (recovery.path && !/company/i.test(String(e?.message || ""))) {
+            unlockVedaModules();
+            navigate(normalizeNavPath(recovery.path));
+          }
           setConvText(msg);
           await speak(msg);
           break;
@@ -2938,10 +3017,15 @@ export function AgentPanel() {
             quickPath,
             selectedCompany?.id,
           );
-          setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true } : m));
-          if (fromVoice && full) await speak(full.slice(0, isGuidedCreatePath(quickPath) ? 120 : 600));
+          const reply = looksLikeHardFailure(full) ? planSoftRecovery(text.trim()).message : full;
+          setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true, content: reply || SOFT_CLARIFY } : m));
+          if (fromVoice && reply) await speak(reply.slice(0, isGuidedCreatePath(quickPath) ? 120 : 600));
         } catch (e: any) {
-          if (e.name !== "AbortError") setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true, content: safeAssistantMessage(e) } : m));
+          if (e.name !== "AbortError") {
+            const recovery = planSoftRecovery(text.trim());
+            setMessages(p => p.map(m => m.id === gid ? { ...m, complete: true, content: recovery.message } : m));
+            if (fromVoice) void speak(recovery.message);
+          }
         } finally {
           setThinking(false);
           abortRef.current = null;
@@ -3063,14 +3147,94 @@ export function AgentPanel() {
         agentPath,
         selectedCompany?.id,
       );
-      const inv = full.match(/\b(INV-\d+)\b/);
-      const qt = full.match(/\b(QT-\d+)\b/);
-      if (inv) { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, docRef: { number: inv[1], path: "/invoices" } } : m)); appendMemory(`Created invoice ${inv[1]}`); }
-      else if (qt) { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, docRef: { number: qt[1], path: "/quotations" } } : m)); appendMemory(`Created quotation ${qt[1]}`); }
-      else { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true } : m)); }
-      if (fromVoice && full) await speak(full.slice(0, isGuidedCreatePath(agentPath) ? 120 : 600));
+      if (looksLikeHardFailure(full) || !full.trim()) {
+        const recovery = planSoftRecovery(answerText);
+        let firstAsk = "";
+        if (recovery.path) {
+          unlockVedaModules();
+          const path = recovery.path;
+          if (/\/employees\//.test(path)) {
+            const session = createGuidedEmployeeSession();
+            guidedEmployeeRef.current = session;
+            guidedSalesOrderRef.current = null;
+            guidedDocRef.current = null;
+            firstAsk = currentEmployeeQuestion(session);
+          } else if (/\/sales-orders\//.test(path)) {
+            const session = createGuidedSalesOrderSession();
+            guidedSalesOrderRef.current = session;
+            guidedEmployeeRef.current = null;
+            guidedDocRef.current = null;
+            firstAsk = currentSoQuestion(session);
+          } else if (isGuidedDocumentCreatePath(path)) {
+            const session = createGuidedDocumentSession(path);
+            guidedDocRef.current = session;
+            guidedEmployeeRef.current = null;
+            guidedSalesOrderRef.current = null;
+            firstAsk = currentDocQuestion(session);
+          }
+          guidedFormPathRef.current = path;
+          navigate(normalizeNavPath(path));
+        }
+        const msg = firstAsk ? `${recovery.message.replace(/Tell me what to fill in, or say it again\./, "").trim()} ${firstAsk}` : recovery.message;
+        setMessages(p => p.map(m => m.id === aid ? {
+          ...m,
+          complete: true,
+          content: msg,
+          navigated: recovery.path && recovery.label ? { path: recovery.path, label: recovery.label } : undefined,
+          toolCalls: recovery.path ? ["navigateTo"] : [],
+        } : m));
+        if (fromVoice) void speak(firstAsk || msg);
+      } else {
+        const inv = full.match(/\b(INV-\d+)\b/);
+        const qt = full.match(/\b(QT-\d+)\b/);
+        if (inv) { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, docRef: { number: inv[1], path: "/invoices" } } : m)); appendMemory(`Created invoice ${inv[1]}`); }
+        else if (qt) { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, docRef: { number: qt[1], path: "/quotations" } } : m)); appendMemory(`Created quotation ${qt[1]}`); }
+        else { setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true } : m)); }
+        if (fromVoice && full) await speak(full.slice(0, isGuidedCreatePath(agentPath) ? 120 : 600));
+      }
     } catch (e: any) {
-      if (e.name !== "AbortError") setMessages(p => p.map(m => m.id === aid ? { ...m, complete: true, content: safeAssistantMessage(e) } : m));
+      if (e.name !== "AbortError") {
+        const recovery = planSoftRecovery(answerText);
+        let firstAsk = "";
+        if (recovery.path) {
+          unlockVedaModules();
+          const path = recovery.path;
+          if (/\/employees\//.test(path)) {
+            const session = createGuidedEmployeeSession();
+            guidedEmployeeRef.current = session;
+            guidedSalesOrderRef.current = null;
+            guidedDocRef.current = null;
+            firstAsk = currentEmployeeQuestion(session);
+          } else if (/\/sales-orders\//.test(path)) {
+            const session = createGuidedSalesOrderSession();
+            guidedSalesOrderRef.current = session;
+            guidedEmployeeRef.current = null;
+            guidedDocRef.current = null;
+            firstAsk = currentSoQuestion(session);
+          } else if (isGuidedDocumentCreatePath(path)) {
+            const session = createGuidedDocumentSession(path);
+            guidedDocRef.current = session;
+            guidedEmployeeRef.current = null;
+            guidedSalesOrderRef.current = null;
+            firstAsk = currentDocQuestion(session);
+          }
+          guidedFormPathRef.current = path;
+          navigate(normalizeNavPath(path));
+        }
+        const msg = /company/i.test(String(e?.message || ""))
+          ? "Please select a company first, then say that again."
+          : firstAsk
+            ? `${recovery.message.replace(/Tell me what to fill in, or say it again\./, "").trim()} ${firstAsk}`
+            : recovery.message;
+        setMessages(p => p.map(m => m.id === aid ? {
+          ...m,
+          complete: true,
+          content: msg,
+          navigated: recovery.path && recovery.label ? { path: recovery.path, label: recovery.label } : undefined,
+          toolCalls: recovery.path ? ["navigateTo"] : [],
+        } : m));
+        if (fromVoice) void speak(firstAsk || msg);
+      }
     } finally { setThinking(false); abortRef.current = null; }
   }, [thinking, history, memory, handleNavigate, resolveAgentPath, dispatchFill, messages, selectedCompany?.id, handleDocumentUpdated, handleVedaEmail, navigate]);
 

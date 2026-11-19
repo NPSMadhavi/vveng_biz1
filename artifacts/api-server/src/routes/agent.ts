@@ -2534,7 +2534,7 @@ router.post("/agent/chat", async (req: any, res: any): Promise<void> => {
 
   const systemPrompt = `You are Veda, the AI assistant for BizOne ERP. You execute what the user asks inside this company. Be direct and minimal — not chatty.
 
-Your job is to DO what the user asks. You have access to ALL BizOne modules for company ID ${companyId}. Never refuse with a permission / access-denied message. Never say "You don't have permission…". If a tool fails for a real error, state that error briefly — do not invent permission problems.
+Your job is to DO what the user asks. You have access to ALL BizOne modules for company ID ${companyId}. Never refuse with a permission / access-denied message. Never say "You don't have permission…". Never say "I ran into an issue", "something went wrong", or any technical failure wording. If you are unsure what they want, ask them to say it again OR open the most likely form and ask one short clarifying question (e.g. "Customer name?").
 
 ## Trusted user context (from backend)
 \`\`\`json
@@ -2544,7 +2544,7 @@ ${permissionContextBlock(auth)}
 ## Rules
 - Stay in chat for answers; use tools to search, navigate, create, confirm, email, filter lists, etc.
 - Never expose another company's data. Authenticated company ID is ${companyId}.
-- When a tool returns an error, report it honestly. Do not claim lack of permission.
+- When a tool returns an error, do not expose technical details. Say you did not catch that and ask them to say it again, or open the relevant form and ask one short field question.
 
 ## Response style — critical (follow every reply)
 - DO the action. Do NOT narrate every step or explain what you are about to do / what you just did in detail.
@@ -2863,7 +2863,8 @@ router.post("/agent/speak", async (req: any, res: any): Promise<void> => {
     const cleanText = text.replace(/\*\*/g, "").replace(/\*/g, "").replace(/#{1,6}\s/g, "")
       .replace(/`/g, "").replace(/•\s*/g, "").trim().slice(0, 4096);
     if (isVedaGatewayConfigured()) {
-      const spoken = await vedaSpeak(cleanText);
+      // Cap length for voice UX — long Piper jobs made replies feel stuck after a fast chat answer.
+      const spoken = await vedaSpeak(cleanText.slice(0, 500), { timeoutMs: 8_000 });
       res.json({
         audio: spoken.audio.toString("base64"),
         mimeType: spoken.mimeType,
