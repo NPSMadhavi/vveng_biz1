@@ -1,6 +1,41 @@
 {
   "records": [
     {
+      "token": "8b63dfd2-561b-41fb-aebd-734208f9e283",
+      "companyId": 26,
+      "side": "customer",
+      "partyName": "Ramu",
+      "partyEmail": "",
+      "periodLabel": "01 Nov 2026 – 30 Nov 2026",
+      "rows": [
+        {
+          "name": "Madhu (101) — Software Developer",
+          "normal": 64,
+          "overtime": 8
+        },
+        {
+          "name": "Shannu (102) — Accounting",
+          "normal": 8,
+          "overtime": 3
+        }
+      ],
+      "totalNormal": 72,
+      "totalOt": 11,
+      "timesheetIds": [
+        "1795149576035",
+        "1795090858818",
+        "1795090599341",
+        "1795090296733",
+        "1795089750542",
+        "1795089514826",
+        "1795088999689",
+        "1795087739185"
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-20T04:57:46.998Z",
+      "updatedAt": "2026-11-20T04:57:46.998Z"
+    },
+    {
       "token": "e78f386f-06d3-45f7-85a8-02bce622f9ae",
       "companyId": 26,
       "side": "customer",

@@ -531,7 +531,7 @@ const ASSET_COLUMNS = [
 
 const EMPLOYEE_COLUMNS = [
   "employee_id", "user_id", "name", "email", "phone", "gender", "address", "department",
-  "designation", "join_date", "status", "salary", "annual_salary", "work_type", "per_hour_charge", "nationality",
+  "designation", "join_date", "status", "salary", "annual_salary", "employment_type", "work_type", "per_hour_charge", "nationality",
   "pr_status", "date_of_birth", "passport_number", "passport_expiry", "visa_number",
   "visa_expiry", "visa_type", "visa_remarks", "nric_number", "nric_expiry",
   "passport_scan", "visa_scan", "nric_scan", "bank_account", "bank_name",

@@ -570,6 +570,8 @@ export const DRIZZLE_COLUMN_MIGRATIONS: string[] = [
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
   `ALTER TABLE purchase_quotations ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
   `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS terms_and_conditions text`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS authorised_signature text`,
   `ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS manpower_details jsonb`,
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS po_ref_no text`,
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS void_reason text`,

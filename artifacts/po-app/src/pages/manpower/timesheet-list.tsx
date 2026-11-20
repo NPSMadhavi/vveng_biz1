@@ -60,7 +60,7 @@ export default function TimesheetList({ side }: { side: DeploymentSide }) {
             <TableRow>
               <TableHead>Timesheet No.</TableHead>
               <TableHead>Work Date</TableHead>
-              <TableHead>Deployment No.</TableHead>
+              <TableHead>PO Reference No.</TableHead>
               <TableHead>Employee</TableHead>
               <TableHead>{partyLabel}</TableHead>
               <TableHead>Status</TableHead>
@@ -78,8 +78,8 @@ export default function TimesheetList({ side }: { side: DeploymentSide }) {
               <TableRow key={row.id} className="cursor-pointer" onClick={() => setLocation(`${base}/${row.id}`)}>
                 <TableCell className="font-medium">{row.timesheetNo}</TableCell>
                 <TableCell>{formatDisplayDate(row.workDate)}</TableCell>
-                <TableCell>{row.deploymentNo || "—"}</TableCell>
-                <TableCell>{row.employeeLabel}</TableCell>
+                <TableCell>{row.poReference || row.deploymentNo || "—"}</TableCell>
+                <TableCell>{(row.entries && row.entries.length > 1) ? `${row.entries.length} employees` : (row.employeeLabel || row.entries?.[0]?.employeeLabel || "—")}</TableCell>
                 <TableCell>{row.partyName || "—"}</TableCell>
                 <TableCell>{statusBadge(row.status)}</TableCell>
                 <TableCell onClick={(event) => event.stopPropagation()}>

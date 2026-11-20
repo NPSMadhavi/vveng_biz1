@@ -34,10 +34,14 @@ import {
   computeViGstTotals,
   emptyViLineItem,
   mapDocItemsToViLines,
+  newViLineId,
   normalizeViItemsForApi,
   type VendorInvoiceLineItem,
 } from "@/lib/vendor-invoice-items";
 import { invalidateInventoryQueries } from "@/lib/invalidate-inventory";
+import { TimesheetRefSelect } from "@/components/timesheet-ref-select";
+import { loadTimesheets, type Timesheet } from "@/pages/manpower/timesheet-store";
+import { classifyEntryHours } from "@/operations-8june/lib/timesheet-cpf-consolidation";
 
 function dueDateFromTerms(date: string, terms: string) {
   const match = terms.match(/(\d+)\s+Days?\s+Net/i);
@@ -77,13 +81,12 @@ export default function VendorInvoiceEdit() {
   const [paymentTerms, setPaymentTerms] = useState("30 Days Net");
   const [dueDate, setDueDate] = useState("");
   const [plannedPaymentDate, setPlannedPaymentDate] = useState("");
-  const [remindersEnabled, setRemindersEnabled] = useState(false);
-  const [reminderStartAfterDay, setReminderStartAfterDay] = useState("15");
-  const [reminderEmail, setReminderEmail] = useState("");
-  const [reminderEmails, setReminderEmails] = useState<string[]>([]);
   const [vendorSearch, setVendorSearch] = useState("");
   const [selectedVendor, setSelectedVendor] = useState<any>(null);
   const [vendorFromPo, setVendorFromPo] = useState(false);
+  const [timesheetReferenceNo, setTimesheetReferenceNo] = useState("");
+  const [timesheetReferenceId, setTimesheetReferenceId] = useState("");
+  const [vendorFromTimesheet, setVendorFromTimesheet] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [currency, setCurrency] = useState((selectedCompany as any)?.currency || "SGD");
   const [lineItems, setLineItems] = useState<VendorInvoiceLineItem[]>([emptyViLineItem()]);
@@ -169,13 +172,6 @@ export default function VendorInvoiceEdit() {
     setPaymentTerms(pi.paymentTerms || "30 Days Net");
     setDueDate(pi.dueDate ? String(pi.dueDate).split("T")[0] : dueDateFromTerms(pi.piDate, pi.paymentTerms || "30 Days Net"));
     setPlannedPaymentDate(pi.plannedPaymentDate ? String(pi.plannedPaymentDate).split("T")[0] : "");
-    setRemindersEnabled(!!pi.remindersEnabled);
-    setReminderStartAfterDay(
-      pi.reminderStartAfterDay != null && Number(pi.reminderStartAfterDay) > 0
-        ? String(pi.reminderStartAfterDay)
-        : "15"
-    );
-    setReminderEmails(Array.isArray(pi.reminderEmails) ? pi.reminderEmails : []);
     setVendorSearch(pi.vendorName || "");
     setSelectedVendor(null);
     setSelectedPoIds(Array.isArray(pi.poIds) ? pi.poIds.map(Number) : []);
@@ -196,6 +192,9 @@ export default function VendorInvoiceEdit() {
     setGstInclusive(isGstInclusive);
     setSalesPerson(pi.salesPerson || "");
     setWorkLocation(pi.manpowerDetails?.workLocation || "");
+    setTimesheetReferenceNo(pi.manpowerDetails?.timesheetReferenceNo || "");
+    setTimesheetReferenceId(pi.manpowerDetails?.timesheetReferenceId || "");
+    setVendorFromTimesheet(!!pi.manpowerDetails?.timesheetReferenceNo);
     setExpenseAccountId(pi.expenseAccountId ? String(pi.expenseAccountId) : "none");
     setExchangeRate(
       pi.exchangeRate != null && pi.exchangeRate !== ""
@@ -221,6 +220,110 @@ export default function VendorInvoiceEdit() {
   }, [vendors, vendorSearch, location]);
 
   const vendorName = selectedVendor ? selectedVendor.name : vendorSearch.trim();
+
+  const normalizeDocNo = (value: string) => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+
+  const loadTimesheetByRef = (raw: string, sheet?: Timesheet) => {
+    const key = normalizeDocNo(raw);
+    if (!key) return;
+    const found = sheet
+      || loadTimesheets().find((row) => row.side === "supplier" && normalizeDocNo(row.timesheetNo) === key)
+      || loadTimesheets().find((row) => row.side === "supplier" && normalizeDocNo(row.timesheetNo).endsWith(key));
+    if (!found) {
+      toast({ title: "Timesheet not found", description: `No timesheet matches "${raw.trim()}"`, variant: "destructive" });
+      return;
+    }
+
+    setTimesheetReferenceNo(found.timesheetNo || raw.trim());
+    setTimesheetReferenceId(found.id);
+    if (found.workLocation) setWorkLocation(found.workLocation);
+
+    if (found.partyName) {
+      const match = vendors.find((v: any) =>
+        String(v.name || "").trim().toLowerCase() === String(found.partyName || "").trim().toLowerCase(),
+      );
+      if (match) {
+        setSelectedVendor(match);
+        setVendorSearch(match.name);
+        if (match.currency) setCurrency(match.currency);
+      } else {
+        setSelectedVendor(null);
+        setVendorSearch(found.partyName);
+      }
+      setVendorFromTimesheet(true);
+      setVendorFromPo(false);
+    }
+
+    const billing = Number(String(found.billingRate || "").replace(/[^0-9.]/g, "")) || 0;
+    const otRate = Number(String(found.otBillingRate || "").replace(/[^0-9.]/g, "")) || (billing > 0 ? billing * 1.5 : 0);
+    const entries = Array.isArray(found.entries) && found.entries.length > 0
+      ? found.entries
+      : [{
+          normalHours: found.normalHours,
+          overtimeHours: found.overtimeHours,
+          dayType: found.dayType,
+          employeeId: found.employeeId,
+          employeeLabel: found.employeeLabel,
+        }];
+    const workerKeys = new Set<string>();
+    const classified = { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 };
+    for (const entry of entries as any[]) {
+      const workerKey = String(entry.employeeId || entry.employeeLabel || "").trim();
+      if (workerKey) workerKeys.add(workerKey);
+      const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+      classified.normal += hours.normal;
+      classified.ot15 += hours.ot15;
+      classified.ot20 += hours.ot20;
+      classified.restDay += hours.restDay;
+      classified.publicHoliday += hours.publicHoliday;
+    }
+    if (workerKeys.size === 0 && (found.employeeId || found.employeeLabel)) {
+      workerKeys.add(String(found.employeeId || found.employeeLabel));
+    }
+    const workerCount = Math.max(1, workerKeys.size);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const nextItems: VendorInvoiceLineItem[] = [];
+    const pushLine = (designation: string, hours: number, rate: number) => {
+      if (hours <= 0) return;
+      nextItems.push({
+        lineId: newViLineId(),
+        type: "item",
+        sectionLabel: "",
+        sectionAlign: "left",
+        partNumber: "",
+        description: designation,
+        qty: workerCount,
+        hours: String(round2(hours)),
+        unitPrice: rate > 0 ? rate : 0,
+        discount: 0,
+        uom: "Hourly",
+        isFoc: false,
+      });
+    };
+    const ot20Rate = otRate > 0 ? Math.round(otRate * (2 / 1.5) * 100) / 100 : 0;
+    pushLine("Normal Hours", classified.normal, billing);
+    pushLine("OT 1.5x", classified.ot15, otRate);
+    pushLine("OT 2.0x", classified.ot20, ot20Rate || otRate);
+    pushLine("Rest Day", classified.restDay, otRate);
+    pushLine("Public Holiday", classified.publicHoliday, otRate);
+    if (nextItems.length > 0) {
+      setLineItems(nextItems);
+      setItemsAutoFilled(true);
+    }
+
+    if (found.poReference) {
+      const poKey = normalizeDocNo(found.poReference);
+      const matchedPo = pos.find((p: any) =>
+        normalizeDocNo(p.poNumber) === poKey || normalizeDocNo(p.poNumber).endsWith(poKey),
+      );
+      if (matchedPo && !selectedPoIds.includes(matchedPo.id)) {
+        setSelectedPoIds([matchedPo.id]);
+        if (matchedPo.currency) setCurrency(matchedPo.currency);
+      }
+    }
+
+    toast({ title: "Timesheet loaded", description: found.timesheetNo });
+  };
 
   const fetchExchangeRate = async (curr: string, date: string, isManual = false) => {
     if (curr === "SGD") {
@@ -380,7 +483,18 @@ export default function VendorInvoiceEdit() {
 
   const handleSave = async () => {
     if (!piNumber.trim()) { toast({ title: "Error", description: "Vendor PI number is required", variant: "destructive" }); return; }
-    if (!vendorName) { toast({ title: "Error", description: "Vendor name is required", variant: "destructive" }); return; }
+    if (isManpower && !timesheetReferenceNo.trim()) {
+      toast({ title: "Error", description: "Timesheet reference number is required", variant: "destructive" });
+      return;
+    }
+    if (!vendorName) {
+      toast({
+        title: "Error",
+        description: isManpower ? "Select a timesheet to load the vendor" : "Vendor name is required",
+        variant: "destructive",
+      });
+      return;
+    }
     if (itemsSubtotal <= 0) { toast({ title: "Error", description: "Add at least one line item with an amount", variant: "destructive" }); return; }
 
     setSaving(true);
@@ -406,9 +520,9 @@ export default function VendorInvoiceEdit() {
           paymentTerms,
           dueDate: dueDate || null,
           plannedPaymentDate: plannedPaymentDate || null,
-          remindersEnabled,
-          reminderStartAfterDay: remindersEnabled ? (parseInt(reminderStartAfterDay, 10) || 15) : null,
-          reminderEmails,
+          remindersEnabled: false,
+          reminderStartAfterDay: null,
+          reminderEmails: [],
           exchangeRate: currency !== "SGD" ? parseFloat(exchangeRate) || 1 : 1,
           notes: notes || null,
           customerNote: customerNote || null,
@@ -417,7 +531,13 @@ export default function VendorInvoiceEdit() {
           authorisedSignature: authorisedSignature || null,
           discountAmount,
           salesPerson: salesPerson || null,
-          manpowerDetails: isManpower ? { workLocation } : null,
+          manpowerDetails: isManpower
+            ? {
+                workLocation,
+                timesheetReferenceNo: timesheetReferenceNo || "",
+                timesheetReferenceId: timesheetReferenceId || "",
+              }
+            : null,
           ...attachment.payload,
           expenseAccountId: (expenseAccountId && expenseAccountId !== "none") ? parseInt(expenseAccountId) : null,
         }),
@@ -566,13 +686,31 @@ export default function VendorInvoiceEdit() {
               <div className="space-y-1.5"><Label>Due Date</Label><SyncBridgeDatePicker value={dueDate} onChange={setDueDate} /></div>
               <div className="space-y-1.5"><Label>Planned Payment Date</Label><SyncBridgeDatePicker value={plannedPaymentDate} onChange={setPlannedPaymentDate} /></div>
             </div>
-            <div className="rounded-md border bg-background p-3 space-y-3">
-              <div className="flex items-center justify-between"><div><Label>Payment reminders</Label><p className="text-xs text-muted-foreground">Daily reminders begin after the selected day.</p></div><Switch checked={remindersEnabled} onCheckedChange={setRemindersEnabled} /></div>
-              {remindersEnabled && <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><div className="space-y-1"><Label className="text-sm">Remaind after (days)</Label><Input type="number" min="0" value={reminderStartAfterDay} onChange={e => setReminderStartAfterDay(e.target.value)} /></div><div className="space-y-1"><Label className="text-sm">Additional email addresses</Label><div className="flex gap-2"><Input type="email" placeholder="" value={reminderEmail} onChange={e => setReminderEmail(e.target.value)} /><Button type="button" variant="outline" onClick={() => { if (reminderEmail.trim()) { setReminderEmails([...reminderEmails, reminderEmail.trim()]); setReminderEmail(""); } }}>Add email</Button></div>{reminderEmails.length > 0 && <p className="text-xs text-muted-foreground">{reminderEmails.join(", ")}</p>}</div></div>}
-            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 items-start">
+            {isManpower ? (
+            <div className="space-y-1.5">
+              <Label>Timesheet Reference No. <span className="text-destructive">*</span></Label>
+              <TimesheetRefSelect
+                value={timesheetReferenceNo}
+                onChange={setTimesheetReferenceNo}
+                placeholder="Select timesheet reference"
+                side="supplier"
+                onSelect={(timesheetNo, sheet) => {
+                  void loadTimesheetByRef(timesheetNo, sheet);
+                }}
+              />
+              {vendorName ? (
+                <p className="text-xs text-muted-foreground">
+                  Vendor: <span className="font-medium text-foreground">{vendorName}</span>
+                  {vendorFromTimesheet ? " (from timesheet)" : ""}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Select a timesheet to auto-fill vendor and hours</p>
+              )}
+            </div>
+            ) : (
             <div className="space-y-1.5">
               <Label>Vendor <span className="text-destructive">*</span></Label>
               <div className="relative">
@@ -646,6 +784,7 @@ export default function VendorInvoiceEdit() {
                 <p className="text-xs text-muted-foreground">Not in directory — will be saved as typed</p>
               )}
             </div>
+            )}
 
             <div className="space-y-1.5">
               <Label>

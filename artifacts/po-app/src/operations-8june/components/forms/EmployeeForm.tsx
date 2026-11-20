@@ -83,6 +83,10 @@ const employeeFormSchema = insertEmployeeSchema.extend({
   status: z.enum(["active", "resigned", "on_hold", "terminated"]),
   salary: z.string().optional().nullable(),
   annualSalary: z.string().optional().nullable(),
+  employmentType: z.preprocess(
+    (val) => (val === "" || val == null ? null : val),
+    z.enum(["full_time", "part_time", "hourly"]).optional().nullable(),
+  ),
   workType: z.preprocess(
     (val) => (val === "" || val == null ? null : val),
     z.enum(["hourly", "monthly"]).optional().nullable(),
@@ -194,6 +198,7 @@ export default function EmployeeForm({
     status: emp?.status || "active",
     salary: (emp as any)?.salary?.toString() || "",
     annualSalary: (emp as any)?.annualSalary?.toString() || "",
+    employmentType: (emp as any)?.employmentType || "",
     workType: (emp as any)?.workType || "",
     perHourCharge: (emp as any)?.perHourCharge?.toString() || "",
     nationality: (emp as any)?.nationality || "",
@@ -614,6 +619,71 @@ export default function EmployeeForm({
                     <FormMessage />
                   </FormItem>
                 )} />
+                  <div className="col-span-full grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                  <FormField control={form.control} name="employmentType" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className={formLabelClass}>Work Type</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value || undefined}
+                      >
+                        <FormControl>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="full_time">Full time</SelectItem>
+                          <SelectItem value="part_time">Part time</SelectItem>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="workType" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className={formLabelClass}>Salary Type</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value || undefined}
+                      >
+                        <FormControl>
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="hourly">Hourly</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+                  <FormField control={form.control} name="perHourCharge" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className={formLabelClass}>Per hour charge {isHourlyWork ? <span className="text-[#DC2626]">*</span> : null}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder=""
+                          disabled={!isHourlyWork}
+                          className={lockedMoneyClass}
+                          name={field.name}
+                          ref={field.ref}
+                          onBlur={field.onBlur}
+                          value={field.value || ""}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "" || /^\d*\.?\d*$/.test(v)) field.onChange(v);
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
                   <FormField control={form.control} name="salary" render={({ field }) => (
                     <FormItem>
                       <FormLabel className={formLabelClass}>Monthly Salary {!isHourlyWork ? <span className="text-[#DC2626]">*</span> : null}</FormLabel>
@@ -667,51 +737,8 @@ export default function EmployeeForm({
                       <FormMessage />
                     </FormItem>
                   )} />
-                  <div className="grid grid-cols-2 gap-3">
-                  <FormField control={form.control} name="workType" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className={formLabelClass}>Work Type</FormLabel>
-                      <Select
-                        onValueChange={field.onChange}
-                        value={field.value || undefined}
-                      >
-                        <FormControl>
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="hourly">Hourly</SelectItem>
-                          <SelectItem value="monthly">Monthly</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                  <FormField control={form.control} name="perHourCharge" render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className={formLabelClass}>Per hour charge {isHourlyWork ? <span className="text-[#DC2626]">*</span> : null}</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="text"
-                          inputMode="decimal"
-                          placeholder=""
-                          disabled={!isHourlyWork}
-                          className={lockedMoneyClass}
-                          name={field.name}
-                          ref={field.ref}
-                          onBlur={field.onBlur}
-                          value={field.value || ""}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            if (v === "" || /^\d*\.?\d*$/.test(v)) field.onChange(v);
-                          }}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
                   </div>
+
                   <FormField control={form.control} name="nationality" render={({ field }) => (
                     <FormItem>
                       <FormLabel className={formLabelClass}>Nationality <span className="text-[#DC2626]">*</span></FormLabel>

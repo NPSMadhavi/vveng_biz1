@@ -48,6 +48,7 @@ export const OPERATIONS_TABLE_MIGRATIONS = [
     status TEXT NOT NULL DEFAULT 'active',
     salary TEXT,
     annual_salary TEXT,
+    employment_type TEXT,
     work_type TEXT,
     per_hour_charge TEXT,
     nationality TEXT,
@@ -234,6 +235,7 @@ export const OPERATIONS_TABLE_MIGRATIONS = [
 export const OPERATIONS_COLUMN_MIGRATIONS = [
   // employees
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_salary TEXT`,
+  `ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type TEXT`,
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS work_type TEXT`,
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS per_hour_charge TEXT`,
   `ALTER TABLE employees ADD COLUMN IF NOT EXISTS pr_status TEXT`,

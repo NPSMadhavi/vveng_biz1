@@ -1,5 +1,5 @@
 ﻿import { useState } from "react";
-import { useListQuotations } from "@workspace/api-client-react";
+import { useListQuotations, useListPurchaseQuotations } from "@workspace/api-client-react";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
@@ -12,6 +12,8 @@ interface QuotationRefSelectProps {
   onSelect?: (qtNumber: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** sales = customer QT numbers; purchase = vendor PQ numbers */
+  source?: "sales" | "purchase";
 }
 
 export function QuotationRefSelect({
@@ -20,17 +22,26 @@ export function QuotationRefSelect({
   onSelect,
   disabled,
   placeholder = "Select quotation",
+  source = "sales",
 }: QuotationRefSelectProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const { data: quotations = [], isLoading } = useListQuotations();
-  const allNumbers: string[] = (quotations as any[])
-    .map((qt: any) => qt.qtNumber)
+  const salesQuery = useListQuotations({
+    query: { enabled: source === "sales" },
+  });
+  const purchaseQuery = useListPurchaseQuotations({
+    query: { enabled: source === "purchase" },
+  });
+  const isLoading = source === "purchase" ? purchaseQuery.isLoading : salesQuery.isLoading;
+  const rows = (source === "purchase" ? purchaseQuery.data : salesQuery.data) as any[] | undefined;
+  const allNumbers: string[] = (rows || [])
+    .map((qt: any) => (source === "purchase" ? qt.pqNumber : qt.qtNumber))
     .filter(Boolean);
   // Filter only by active search — not by selected value — so reopening shows all quotations
   const filtered = search.trim()
     ? allNumbers.filter((n) => n.toLowerCase().includes(search.trim().toLowerCase()))
     : allNumbers;
+  const headingLabel = source === "purchase" ? "Purchase Quotation" : "Quotation";
 
   return (
     <Popover
@@ -82,10 +93,10 @@ export function QuotationRefSelect({
           <CommandList>
             {filtered.length === 0 ? (
               <CommandEmpty className="py-2 text-center text-xs text-muted-foreground">
-                {isLoading ? "Loading quotations…" : "No quotations found"}
+                {isLoading ? `Loading ${headingLabel.toLowerCase()}s…` : `No ${headingLabel.toLowerCase()}s found`}
               </CommandEmpty>
             ) : (
-              <CommandGroup heading={`${allNumbers.length} Quotation${allNumbers.length !== 1 ? "s" : ""}`}>
+              <CommandGroup heading={`${allNumbers.length} ${headingLabel}${allNumbers.length !== 1 ? "s" : ""}`}>
                 {filtered.map((qn) => (
                   <CommandItem
                     key={qn}

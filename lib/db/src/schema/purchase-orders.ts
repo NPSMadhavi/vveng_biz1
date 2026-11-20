@@ -16,6 +16,8 @@ export const purchaseOrdersTable = pgTable("purchase_orders", {
   paymentTerms: text("payment_terms"),
   quoteRefNo: text("quote_ref_no"),
   notes: text("notes"),
+  termsAndConditions: text("terms_and_conditions"),
+  authorisedSignature: text("authorised_signature"),
   isPrivate: boolean("is_private").default(false).notNull(),
   items: jsonb("items").notNull().default([]),
   subtotal: decimal("subtotal", { precision: 15, scale: 2 }).notNull().default("0"),

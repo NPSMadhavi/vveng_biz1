@@ -6,11 +6,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SimpleDatePicker } from "@/components/ui/simple-date-picker";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { TimesheetApprovalDialog } from "./timesheet-approval-dialog";
 import { FormPageShell } from "@/operations-8june/components/layout/FormPageShell";
 import {
@@ -21,16 +23,17 @@ import {
 import { formFieldGridClass } from "@/lib/form-ui";
 import { useAuth } from "@/contexts/auth-context";
 import { useToast } from "@/hooks/use-toast";
-import { useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
-import { deploymentEmployees, loadDeployments, todayIso, type DeploymentSide } from "./deployment-store";
+import { useGetSettings, getGetSettingsQueryKey, useListSalesOrders, getListSalesOrdersQueryKey, useListPurchaseOrders, getListPurchaseOrdersQueryKey, useListQuotations, getListQuotationsQueryKey, useListPurchaseQuotations, getListPurchaseQuotationsQueryKey } from "@workspace/api-client-react";
+import { todayIso, formatDisplayDate, type DeploymentSide } from "./deployment-store";
+import { classifyEntryHours } from "@/operations-8june/lib/timesheet-cpf-consolidation";
 import {
   loadTimesheets,
   removeTimesheet,
   saveTimesheet,
   updateTimesheet,
   type Timesheet,
+  type TimesheetEntry,
 } from "./timesheet-store";
-import { buildApprovalSheet } from "./timesheet-approval";
 import {
   createTimesheetAck,
   localStatusFromAck,
@@ -40,13 +43,50 @@ import {
 const DAY_TYPES = ["Normal Working Day", "Rest Day", "Public Holiday", "Leave", "Absent"];
 const labelClass = "text-sm font-medium text-[#111827]";
 
-type Party = { id: number; name: string; contactEmail?: string | null };
+type Party = {
+  id: number;
+  name: string;
+  contactEmail?: string | null;
+  assignedEmployees?: Array<{ id: number; name?: string | null; employeeId?: string | null; designation?: string | null }>;
+};
+
+type PoDoc = {
+  id: number;
+  number: string;
+  partyName: string;
+  partyId?: number | null;
+  project?: string;
+  workLocation?: string;
+  employeeIds?: number[];
+  employeeNames?: string;
+  billingRate?: string;
+  qtId?: number | null;
+  qtNumber?: string;
+};
+
+type EmpOpt = { id: string; label: string };
 
 async function fetchJson<T>(url: string): Promise<T[]> {
   const res = await fetch(url, { credentials: "include" });
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : [];
+}
+
+function sumClassification(entries: TimesheetEntry[]) {
+  return entries.reduce(
+    (acc, row) => {
+      const c = classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
+      return {
+        normal: acc.normal + c.normal,
+        ot15: acc.ot15 + c.ot15,
+        ot20: acc.ot20 + c.ot20,
+        restDay: acc.restDay + c.restDay,
+        publicHoliday: acc.publicHoliday + c.publicHoliday,
+      };
+    },
+    { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 },
+  );
 }
 
 function calcHours(timeIn: string, timeOut: string, breakHours: string) {
@@ -78,6 +118,82 @@ function dateToIso(date?: Date | null) {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
+function parseEmployeeIds(raw: unknown): number[] {
+  if (Array.isArray(raw)) {
+    return raw.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.split(/[,\s]+/).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  }
+  return [];
+}
+
+function parseEmployeeNames(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
+  return String(raw).split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function mapSalesOrders(docs: any[]): PoDoc[] {
+  return (docs || []).map((doc) => {
+    const md = doc.manpowerDetails || {};
+    const ids = parseEmployeeIds(md.employeeIds);
+    return {
+      id: Number(doc.id),
+      number: String(doc.soNumber || ""),
+      partyName: String(doc.customerName || ""),
+      partyId: doc.customerId != null ? Number(doc.customerId) : null,
+      project: String(md.project || ""),
+      workLocation: String(md.workLocation || ""),
+      employeeIds: ids,
+      employeeNames: String(md.employeeNames || ""),
+      billingRate: String(md.customerRate || md.customerBillingRates?.[0]?.rate || ""),
+      qtId: doc.qtId != null ? Number(doc.qtId) : null,
+      qtNumber: String(doc.qtNumber || ""),
+    };
+  }).filter((row) => row.number);
+}
+
+function mapPurchaseOrders(docs: any[]): PoDoc[] {
+  return (docs || []).map((doc) => {
+    const md = doc.manpowerDetails || {};
+    const ids = parseEmployeeIds(md.employeeIds);
+    return {
+      id: Number(doc.id),
+      number: String(doc.poNumber || ""),
+      partyName: String(doc.vendorName || ""),
+      partyId: doc.vendorId != null ? Number(doc.vendorId) : null,
+      project: String(md.project || ""),
+      workLocation: String(md.workLocation || doc.deliveryAddress || ""),
+      employeeIds: ids,
+      employeeNames: String(md.employeeNames || ""),
+      billingRate: String(md.supplierRate || md.customerRate || md.customerBillingRates?.[0]?.rate || ""),
+      qtId: null,
+      qtNumber: "",
+    };
+  }).filter((row) => row.number);
+}
+
+function entryTotals(entries: TimesheetEntry[]) {
+  const normal = entries.reduce((sum, row) => sum + (Number(row.normalHours) || 0), 0);
+  const overtime = entries.reduce((sum, row) => sum + (Number(row.overtimeHours) || 0), 0);
+  const first = entries[0];
+  return {
+    normalHours: String(Math.round(normal * 100) / 100),
+    overtimeHours: String(Math.round(overtime * 100) / 100),
+    employeeId: first?.employeeId || "",
+    employeeLabel: entries.length > 1
+      ? `${entries.length} employees`
+      : (first?.employeeLabel || ""),
+    workLocation: first?.workLocation || "",
+    workDate: first?.workDate || todayIso(),
+    timeIn: first?.timeIn || "08:00",
+    timeOut: first?.timeOut || "18:00",
+    breakHours: first?.breakHours || "1",
+    dayType: first?.dayType || "Normal Working Day",
+  };
+}
+
 export function CustomerTimesheetForm() {
   return <TimesheetForm side="customer" />;
 }
@@ -96,29 +212,46 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     : "/manpower/suppliers/timesheets/:id/edit";
   const [, viewParams] = useRoute(viewPattern);
   const [, editParams] = useRoute(editPattern);
-  const params = editParams ?? viewParams;
-  const isEdit = location.endsWith("/edit");
+  const isEdit = location.includes("/edit");
+  const id = (isEdit ? editParams?.id : viewParams?.id) || "";
+  const existing = useMemo(
+    () => (id ? loadTimesheets().find((row) => row.id === id) || null : null),
+    [id],
+  );
+
   const { selectedCompany, user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: settings } = useGetSettings({ query: { queryKey: getGetSettingsQueryKey() } });
   const companyId = selectedCompany?.id ?? null;
-  const existingId = params?.id && params.id !== "new" ? params.id : null;
-  const existing = useMemo(
-    () => (existingId ? loadTimesheets().find((row) => row.id === existingId && row.side === side) ?? null : null),
-    [existingId, side],
-  );
   const partyNoun = side === "customer" ? "Customer" : "Vendor";
   const listPath = side === "customer" ? "/manpower/customers/timesheets" : "/manpower/suppliers/timesheets";
-  const partyUrl = side === "customer" ? "/api/customers" : "/api/vendors";
+
+  const { data: settings } = useGetSettings();
+  const { data: salesOrders } = useListSalesOrders({
+    query: { queryKey: getListSalesOrdersQueryKey(), enabled: side === "customer" },
+  });
+  const { data: purchaseOrders } = useListPurchaseOrders({
+    query: { queryKey: getListPurchaseOrdersQueryKey(), enabled: side === "supplier" },
+  });
+  const { data: quotations } = useListQuotations({
+    query: { queryKey: getListQuotationsQueryKey(), enabled: side === "customer" },
+  });
+  const { data: purchaseQuotations } = useListPurchaseQuotations({
+    query: { queryKey: getListPurchaseQuotationsQueryKey(), enabled: side === "supplier" },
+  });
 
   const { data: parties = [] } = useQuery({
     queryKey: ["timesheet-parties", side],
-    queryFn: () => fetchJson<Party>(partyUrl),
+    queryFn: () => fetchJson<Party>(side === "customer" ? "/api/customers" : "/api/vendors"),
   });
-  const deployments = useMemo(
-    () => loadDeployments().filter((row) => row.side === side && (companyId == null || row.companyId == null || String(row.companyId) === String(companyId))),
-    [side, companyId],
+  const { data: allEmployees = [] } = useQuery({
+    queryKey: ["timesheet-employees"],
+    queryFn: () => fetchJson<{ id: number; name?: string | null; employeeId?: string | null; designation?: string | null }>("/api/employees"),
+  });
+
+  const allPos = useMemo(
+    () => (side === "customer" ? mapSalesOrders(salesOrders as any[]) : mapPurchaseOrders(purchaseOrders as any[])),
+    [side, salesOrders, purchaseOrders],
   );
 
   const runningNo = useMemo(() => {
@@ -129,27 +262,122 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   }, [settings]);
 
   const [timesheetNo] = useState(() => existing?.timesheetNo ?? "");
-  const [deploymentId, setDeploymentId] = useState(existing?.deploymentId ?? "");
-  const [employeeKey, setEmployeeKey] = useState(existing?.employeeId ?? "");
+  const [project, setProject] = useState(existing?.project ?? "");
+  const [partyId, setPartyId] = useState(existing?.partyId ?? "");
+  const [poId, setPoId] = useState(existing?.poId ?? "");
+  const [entries, setEntries] = useState<TimesheetEntry[]>(() => existing?.entries ?? []);
+  const [employeeKey, setEmployeeKey] = useState("");
+  const [workLocation, setWorkLocation] = useState(existing?.workLocation ?? "");
   const [workDate, setWorkDate] = useState(existing?.workDate ?? todayIso());
-  const [timeIn, setTimeIn] = useState(existing?.timeIn ?? "08:00");
-  const [timeOut, setTimeOut] = useState(existing?.timeOut ?? "18:00");
-  const [breakHours, setBreakHours] = useState(existing?.breakHours ?? "1");
-  const [normalHours, setNormalHours] = useState(existing?.normalHours ?? "8");
-  const [overtimeHours, setOvertimeHours] = useState(existing?.overtimeHours ?? "1");
-  const [dayType, setDayType] = useState(existing?.dayType ?? "Normal Working Day");
+  const [timeIn, setTimeIn] = useState("08:00");
+  const [timeOut, setTimeOut] = useState("18:00");
+  const [breakHours, setBreakHours] = useState("1");
+  const [normalHours, setNormalHours] = useState("8");
+  const [overtimeHours, setOvertimeHours] = useState("1");
+  const [dayType, setDayType] = useState("Normal Working Day");
   const [remarks, setRemarks] = useState(existing?.remarks ?? "");
+  const [approvedBy, setApprovedBy] = useState(existing?.approvedBy ?? "");
+  const [formStatus, setFormStatus] = useState<"draft" | "approved">(
+    existing?.status === "approved" ? "approved" : "draft",
+  );
   const [saved, setSaved] = useState<Timesheet | null>(existing);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [ackToken, setAckToken] = useState(existing?.approvalToken || "");
   const readOnly = Boolean(existing) && !isEdit;
 
   const shownNo = existing?.timesheetNo || timesheetNo || runningNo.value;
-  const deployment = deployments.find((row) => row.id === deploymentId) ?? null;
-  const staff = deployment ? deploymentEmployees(deployment) : [];
-  const employeeText = staff.length
-    ? staff.map((employee) => employee.label).join(", ")
-    : existing?.employeeLabel || "";
+  const selectedParty = parties.find((party) => String(party.id) === String(partyId)) ?? null;
+  const relatedPos = useMemo(() => {
+    if (!partyId && !selectedParty) return [];
+    return allPos.filter((doc) => {
+      if (doc.partyId != null && partyId && String(doc.partyId) === String(partyId)) return true;
+      if (selectedParty?.name && doc.partyName.trim().toLowerCase() === selectedParty.name.trim().toLowerCase()) return true;
+      return false;
+    });
+  }, [allPos, partyId, selectedParty]);
+
+  const selectedPo = relatedPos.find((doc) => String(doc.id) === String(poId))
+    || allPos.find((doc) => String(doc.id) === String(poId))
+    || null;
+
+  const linkedQuotations = useMemo(() => {
+    const rows = side === "customer"
+      ? (Array.isArray(quotations) ? (quotations as any[]) : [])
+      : (Array.isArray(purchaseQuotations) ? (purchaseQuotations as any[]) : []);
+    if (!rows.length) return [] as any[];
+    const matched: any[] = [];
+    if (selectedPo?.qtId != null) {
+      const byId = rows.find((row) => Number(row.id) === Number(selectedPo.qtId));
+      if (byId) matched.push(byId);
+    }
+    if (selectedPo?.qtNumber) {
+      const key = String(selectedPo.qtNumber).trim().toUpperCase();
+      const byNo = rows.find((row) =>
+        String(row.qtNumber || row.pqNumber || "").trim().toUpperCase() === key
+      );
+      if (byNo && !matched.some((row) => Number(row.id) === Number(byNo.id))) matched.push(byNo);
+    }
+    // Same party quotations (covers older docs that lost employeeIds)
+    const partyName = (selectedParty?.name || selectedPo?.partyName || "").trim().toLowerCase();
+    const partyIdNum = selectedParty?.id != null ? Number(selectedParty.id) : (selectedPo?.partyId != null ? Number(selectedPo.partyId) : null);
+    rows.forEach((row) => {
+      const rowPartyId = side === "customer" ? row.customerId : row.vendorId;
+      const rowPartyName = side === "customer" ? row.customerName : row.vendorName;
+      const sameId = partyIdNum != null && rowPartyId != null && Number(rowPartyId) === partyIdNum;
+      const sameName = partyName && String(rowPartyName || "").trim().toLowerCase() === partyName;
+      if ((sameId || sameName) && !matched.some((m) => Number(m.id) === Number(row.id))) matched.push(row);
+    });
+    return matched;
+  }, [side, selectedPo, selectedParty, quotations, purchaseQuotations]);
+
+  const employeeOptions: EmpOpt[] = useMemo(() => {
+    if (!selectedPo && !selectedParty) return [];
+
+    const labelFor = (
+      emp: { id?: number | string; name?: string | null; employeeId?: string | null; designation?: string | null } | undefined,
+      fallback?: string,
+    ) => {
+      if (emp?.name || emp?.employeeId) {
+        return `${emp.name || "Employee"}${emp.employeeId ? ` (${emp.employeeId})` : ""}${emp.designation ? ` — ${emp.designation}` : ""}`;
+      }
+      return fallback || String(emp?.id || "");
+    };
+
+    const ids: number[] = [...parseEmployeeIds(selectedPo?.employeeIds)];
+    const names: string[] = [...parseEmployeeNames(selectedPo?.employeeNames)];
+    linkedQuotations.forEach((qt) => {
+      const md = qt?.manpowerDetails || {};
+      ids.push(...parseEmployeeIds(md.employeeIds));
+      names.push(...parseEmployeeNames(md.employeeNames));
+    });
+
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length) {
+      return uniqueIds.map((id) => {
+        const emp = allEmployees.find((row) => Number(row.id) === Number(id));
+        return { id: String(id), label: labelFor(emp, String(id)) };
+      });
+    }
+
+    const uniqueNames = [...new Set(names)];
+    if (uniqueNames.length) {
+      return uniqueNames.map((name, index) => ({ id: `named-${index}-${name}`, label: name }));
+    }
+
+    const assigned = selectedParty?.assignedEmployees || [];
+    if (assigned.length) {
+      return assigned.map((emp) => ({ id: String(emp.id), label: labelFor(emp) }));
+    }
+
+    // Last fallback so timesheet is usable if PO/customer has no linked employees yet
+    if (selectedPo && allEmployees.length) {
+      return allEmployees.map((emp) => ({ id: String(emp.id), label: labelFor(emp) }));
+    }
+
+    return [];
+  }, [selectedPo, selectedParty, allEmployees, linkedQuotations]);
+
+  const classification = useMemo(() => sumClassification(entries), [entries]);
 
   useEffect(() => {
     if (readOnly) return;
@@ -158,37 +386,55 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     if (next.overtime) setOvertimeHours(next.overtime);
   }, [timeIn, timeOut, breakHours, readOnly]);
 
-  function onDeployment(value: string) {
-    const row = deployments.find((item) => item.id === value);
-    if (!row) return;
-    setDeploymentId(row.id);
-    setEmployeeKey(deploymentEmployees(row)[0]?.id ?? "");
+  function resetEntryFields(keepLocation = true) {
+    setEmployeeKey("");
+    if (!keepLocation) setWorkLocation("");
+    setTimeIn("08:00");
+    setTimeOut("18:00");
+    setBreakHours("1");
+    setNormalHours("8");
+    setOvertimeHours("1");
+    setDayType("Normal Working Day");
   }
 
-  function partyEmail(partyId: string) {
-    return parties.find((party) => String(party.id) === partyId)?.contactEmail || "";
+  function onPartyChange(value: string) {
+    setPartyId(value);
+    setPoId("");
+    setEntries([]);
+    setProject("");
+    setWorkLocation("");
+    resetEntryFields(false);
   }
 
-  async function submit() {
-    const chosen = deployments.find((row) => row.id === deploymentId);
-    const chosenStaff = chosen ? deploymentEmployees(chosen) : [];
-    if (!chosen) {
-      toast({ title: "Select deployment", variant: "destructive" });
+  function onPoChange(value: string) {
+    setPoId(value);
+    const doc = relatedPos.find((row) => String(row.id) === String(value)) || allPos.find((row) => String(row.id) === String(value));
+    if (!doc) return;
+    if (doc.project) setProject(doc.project);
+    if (doc.workLocation) setWorkLocation(doc.workLocation);
+    resetEntryFields(true);
+  }
+
+  function partyEmail(id: string) {
+    return parties.find((party) => String(party.id) === id)?.contactEmail || "";
+  }
+
+  function addEntry() {
+    if (readOnly) return;
+    if (!employeeKey) {
+      toast({ title: "Select employee", variant: "destructive" });
       return;
     }
-    const record: Timesheet = {
-      id: saved?.id ?? existing?.id ?? `${Date.now()}`,
-      companyId,
-      side,
-      timesheetNo: shownNo,
-      deploymentId: chosen.id,
-      deploymentNo: chosen.deploymentNo,
-      employeeId: chosenStaff.map((employee) => employee.id).join(",") || employeeKey,
-      employeeLabel: chosenStaff.map((employee) => employee.label).join(", "),
-      partyId: chosen?.partyId ?? "",
-      partyName: chosen?.partyName ?? "",
-      partyEmail: partyEmail(chosen?.partyId ?? ""),
-      workLocation: chosen?.workLocation ?? "",
+    if (!workDate) {
+      toast({ title: "Select work date", variant: "destructive" });
+      return;
+    }
+    const emp = employeeOptions.find((row) => row.id === employeeKey);
+    const next: TimesheetEntry = {
+      id: `${Date.now()}-${employeeKey}`,
+      employeeId: employeeKey,
+      employeeLabel: emp?.label || employeeKey,
+      workLocation: workLocation.trim(),
       workDate,
       timeIn,
       timeOut,
@@ -196,15 +442,65 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       normalHours,
       overtimeHours,
       dayType,
+    };
+    setEntries((prev) => {
+      const withoutDup = prev.filter((row) => !(row.employeeId === next.employeeId && row.workDate === next.workDate));
+      return [...withoutDup, next];
+    });
+    toast({ title: "Employee hours saved." });
+    resetEntryFields(true);
+  }
+
+  function removeEntry(entryId: string) {
+    setEntries((prev) => prev.filter((row) => row.id !== entryId));
+  }
+
+  async function submit() {
+    if (!partyId) {
+      toast({ title: `Select ${partyNoun.toLowerCase()}`, variant: "destructive" });
+      return;
+    }
+    if (!poId) {
+      toast({ title: "Select PO Reference No.", variant: "destructive" });
+      return;
+    }
+    if (entries.length === 0) {
+      toast({ title: "Save at least one employee", variant: "destructive" });
+      return;
+    }
+    const totals = entryTotals(entries);
+    const record: Timesheet = {
+      id: saved?.id ?? existing?.id ?? `${Date.now()}`,
+      companyId,
+      side,
+      timesheetNo: shownNo,
+      project: project.trim(),
+      poReference: selectedPo?.number || existing?.poReference || "",
+      poId: String(selectedPo?.id || poId),
+      employeeId: totals.employeeId,
+      employeeLabel: totals.employeeLabel,
+      partyId,
+      partyName: selectedParty?.name || existing?.partyName || "",
+      partyEmail: partyEmail(partyId),
+      workLocation: totals.workLocation,
+      workDate: totals.workDate,
+      timeIn: totals.timeIn,
+      timeOut: totals.timeOut,
+      breakHours: totals.breakHours,
+      normalHours: totals.normalHours,
+      overtimeHours: totals.overtimeHours,
+      dayType: totals.dayType,
       remarks: remarks.trim(),
       submittedBy: user?.username || "Admin",
-      status: isEdit && existing?.status ? existing.status : "submitted",
+      approvedBy: approvedBy.trim(),
+      status: formStatus,
       sentTo: existing?.sentTo ?? "",
-      billingRate: chosen?.billingRate?.trim() || existing?.billingRate || "",
+      billingRate: selectedPo?.billingRate?.trim() || existing?.billingRate || "",
       otBillingRate: (() => {
-        const base = Number(String(chosen?.billingRate || existing?.billingRate || "").replace(/[^0-9.]/g, ""));
+        const base = Number(String(selectedPo?.billingRate || existing?.billingRate || "").replace(/[^0-9.]/g, ""));
         return base > 0 ? String(Math.round(base * 1.5 * 100) / 100) : (existing?.otBillingRate || "");
       })(),
+      entries,
     };
     saveTimesheet(record);
     if (isEdit) {
@@ -222,73 +518,45 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
     }
     setSaved(record);
-    setPreviewOpen(true);
     toast({ title: "Timesheet submitted." });
+    setLocation(listPath);
   }
 
-  
-  const current = saved ?? existing;
-
+  const current = saved || existing;
   async function applyRemoteStatuses(sheet: Timesheet) {
-    const approval = buildApprovalSheet(sheet);
-    const ids = approval.ids.length ? approval.ids : [sheet.id];
-    const byId = await syncTimesheetAckStatus(ids);
-    let nextStatus = sheet.status;
-    let nextToken = sheet.approvalToken || ackToken;
-    for (const id of ids) {
-      const remote = byId[id];
-      if (!remote) continue;
-      nextToken = remote.token || nextToken;
-      const mapped = localStatusFromAck(remote.status);
-      if (mapped === "approved" || mapped === "rejected") {
-        nextStatus = mapped;
-        updateTimesheet(id, { status: mapped, approvalToken: remote.token || nextToken });
-      } else if (remote.token) {
-        updateTimesheet(id, { approvalToken: remote.token });
-      }
+    if (!sheet.approvalToken) return;
+    try {
+      const remote = await syncTimesheetAckStatus(sheet.approvalToken);
+      const status = localStatusFromAck(remote.status);
+      if (!status || status === sheet.status) return;
+      updateTimesheet(sheet.id, { status });
+      setSaved({ ...sheet, status });
+    } catch {
+      /* ignore */
     }
-    if (nextToken) setAckToken(nextToken);
-    if (nextStatus !== sheet.status || nextToken) {
-      setSaved({ ...sheet, status: nextStatus, approvalToken: nextToken || sheet.approvalToken });
-    }
-    return { status: nextStatus, token: nextToken };
   }
 
-  async function ensureAckPacket(sheet: Timesheet) {
-    const created = await createTimesheetAck(sheet);
-    if (!created) return "";
-    setAckToken(created.token);
-    const approval = buildApprovalSheet(sheet);
-    (approval.ids.length ? approval.ids : [sheet.id]).forEach((id) =>
-      updateTimesheet(id, { approvalToken: created.token }),
-    );
-    setSaved({ ...sheet, approvalToken: created.token });
-    return created.token;
+  async function ensureAckToken(sheet: Timesheet) {
+    if (sheet.approvalToken) return sheet.approvalToken;
+    try {
+      const created = await createTimesheetAck(sheet);
+      setAckToken(created.token);
+      updateTimesheet(sheet.id, { approvalToken: created.token });
+      setSaved({ ...sheet, approvalToken: created.token });
+      return created.token;
+    } catch {
+      return "";
+    }
   }
 
   useEffect(() => {
-    if (!existing || existing.status === "draft") return;
-    let cancelled = false;
-    (async () => {
-      const result = await applyRemoteStatuses(existing);
-      if (cancelled || !result) return;
+    if (!current || current.status === "draft") return;
+    void (async () => {
+      const token = await ensureAckToken(current);
+      if (token) await applyRemoteStatuses({ ...current, approvalToken: token });
     })();
-    return () => { cancelled = true; };
-  }, [existing?.id]);
-
-  useEffect(() => {
-    if (!previewOpen || !current) return;
-    let cancelled = false;
-    (async () => {
-      await applyRemoteStatuses(current);
-      if (cancelled) return;
-      const token = await ensureAckPacket(current);
-      if (!cancelled && token) setAckToken(token);
-    })();
-    return () => { cancelled = true; };
-  }, [previewOpen, current?.id]);
-
-  const approvalLabel = side === "customer" ? "Customer Approval" : "Vendor Approval";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id]);
 
   function remove() {
     if (!existing) return;
@@ -296,6 +564,15 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     toast({ title: "Timesheet deleted." });
     setLocation(listPath);
   }
+
+  const approvalLabel = side === "customer" ? "Customer Approval" : "Vendor Approval";
+  const classRows = [
+    { label: "Normal Hours", value: classification.normal },
+    { label: "OT 1.5x", value: classification.ot15 },
+    { label: "OT 2.0x", value: classification.ot20 },
+    { label: "Rest Day", value: classification.restDay },
+    { label: "Public Holiday", value: classification.publicHoliday },
+  ];
 
   return (
     <>
@@ -322,18 +599,35 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
         <div className="space-y-8">
           <section className="space-y-4">
             <ModalSectionHeader title="Daily Timesheet" />
-            <div className={formFieldGridClass}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
               <Readonly label="Timesheet No." value={shownNo} mono />
-              <Field label="Deployment No.">
-                <Select value={deploymentId || undefined} onValueChange={onDeployment} disabled={readOnly}>
+              <Field label="Project">
+                <Input value={project} onChange={(event) => setProject(event.target.value)} readOnly={readOnly} placeholder="Project" />
+              </Field>
+              <Field label={partyNoun}>
+                <Select value={partyId || undefined} onValueChange={onPartyChange} disabled={readOnly}>
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select deployment" />
+                    <SelectValue placeholder={`Select ${partyNoun.toLowerCase()}`} />
                   </SelectTrigger>
                   <SelectContent>
-                    {deployments.length === 0 ? (
-                      <SelectItem value="__none" disabled>No deployments found</SelectItem>
-                    ) : deployments.map((row) => (
-                      <SelectItem key={row.id} value={row.id}>{row.deploymentNo}</SelectItem>
+                    {parties.length === 0 ? (
+                      <SelectItem value="__none" disabled>No {partyNoun.toLowerCase()}s found</SelectItem>
+                    ) : parties.map((party) => (
+                      <SelectItem key={party.id} value={String(party.id)}>{party.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="PO Reference No.">
+                <Select value={poId || undefined} onValueChange={onPoChange} disabled={readOnly || !partyId}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder={partyId ? "Select PO" : `Select ${partyNoun.toLowerCase()} first`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {relatedPos.length === 0 ? (
+                      <SelectItem value="__none" disabled>No POs found</SelectItem>
+                    ) : relatedPos.map((doc) => (
+                      <SelectItem key={doc.id} value={String(doc.id)}>{doc.number}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -341,47 +635,153 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
             </div>
           </section>
 
+          {!readOnly && (
+            <>
+              <section className="space-y-4">
+                <ModalSectionHeader title="Employee Details" />
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <Field label="Employee">
+                    <Select value={employeeKey || undefined} onValueChange={setEmployeeKey} disabled={!poId}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={poId ? "Select employee" : "Select PO first"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {employeeOptions.length === 0 ? (
+                          <SelectItem value="__none" disabled>No employees found</SelectItem>
+                        ) : employeeOptions.map((emp) => (
+                          <SelectItem key={emp.id} value={emp.id}>{emp.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Worksite">
+                    <Input value={workLocation} onChange={(event) => setWorkLocation(event.target.value)} />
+                  </Field>
+                  <Field label="Work Date">
+                    <SimpleDatePicker date={isoToDate(workDate)} setDate={(date) => setWorkDate(dateToIso(date))} />
+                  </Field>
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <ModalSectionHeader title="Working Hours" />
+                <div className={formFieldGridClass}>
+                  <Field label="Time In">
+                    <Input type="time" value={timeIn} onChange={(event) => setTimeIn(event.target.value)} />
+                  </Field>
+                  <Field label="Time Out">
+                    <Input type="time" value={timeOut} onChange={(event) => setTimeOut(event.target.value)} />
+                  </Field>
+                  <Field label="Break Hours">
+                    <Input inputMode="decimal" value={breakHours} onChange={(event) => setBreakHours(event.target.value)} />
+                  </Field>
+                  <Field label="Normal Hours">
+                    <Input inputMode="decimal" value={normalHours} onChange={(event) => setNormalHours(event.target.value)} />
+                  </Field>
+                  <Field label="Overtime Hours">
+                    <Input inputMode="decimal" value={overtimeHours} onChange={(event) => setOvertimeHours(event.target.value)} />
+                  </Field>
+                  <Field label="Day Type">
+                    <Select value={dayType} onValueChange={setDayType}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select day type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DAY_TYPES.map((item) => (
+                          <SelectItem key={item} value={item}>{item}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+                <div className="flex justify-end">
+                  <Button type="button" onClick={addEntry} className="bg-[#2563EB] text-white hover:bg-[#1D4ED8]">
+                    Save
+                  </Button>
+                </div>
+              </section>
+            </>
+          )}
+
           <section className="space-y-4">
-            <ModalSectionHeader title={`Employee & ${partyNoun}`} />
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-              <Readonly label="Employee" value={employeeText} />
-              <Readonly label={partyNoun} value={deployment?.partyName || current?.partyName || ""} />
-              <Readonly label="Worksite" value={deployment?.workLocation || current?.workLocation || ""} />
-              <Field label="Work Date">
-                <SimpleDatePicker date={isoToDate(workDate)} setDate={(date) => setWorkDate(dateToIso(date))} disabled={readOnly} />
-              </Field>
+            <ModalSectionHeader title="Saved Employees" />
+            <div className="overflow-hidden rounded-lg border border-[#E5E7EB] bg-white">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Work Date</TableHead>
+                    <TableHead>Worksite</TableHead>
+                    <TableHead>Time In</TableHead>
+                    <TableHead>Time Out</TableHead>
+                    <TableHead className="text-right">Normal</TableHead>
+                    <TableHead className="text-right">OT</TableHead>
+                    <TableHead>Day Type</TableHead>
+                    <TableHead className="text-right">Total Hours</TableHead>
+                    {!readOnly && <TableHead className="w-16"> </TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {entries.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={readOnly ? 9 : 10} className="h-24 text-center text-muted-foreground">
+                        No employees saved yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : entries.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-medium">{row.employeeLabel}</TableCell>
+                      <TableCell>{formatDisplayDate(row.workDate)}</TableCell>
+                      <TableCell>{row.workLocation || "—"}</TableCell>
+                      <TableCell>{row.timeIn}</TableCell>
+                      <TableCell>{row.timeOut}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.normalHours}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.overtimeHours}</TableCell>
+                      <TableCell>{row.dayType}</TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {Math.round(((Number(row.normalHours) || 0) + (Number(row.overtimeHours) || 0)) * 100) / 100}
+                      </TableCell>
+                      {!readOnly && (
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive"
+                            aria-label="Remove entry"
+                            onClick={() => removeEntry(row.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           </section>
 
           <section className="space-y-4">
-            <ModalSectionHeader title="Working Hours" />
-            <div className={formFieldGridClass}>
-              <Field label="Time In">
-                <Input type="time" value={timeIn} onChange={(event) => setTimeIn(event.target.value)} disabled={readOnly} />
-              </Field>
-              <Field label="Time Out">
-                <Input type="time" value={timeOut} onChange={(event) => setTimeOut(event.target.value)} disabled={readOnly} />
-              </Field>
-              <Field label="Break Hours">
-                <Input inputMode="decimal" value={breakHours} onChange={(event) => setBreakHours(event.target.value)} readOnly={readOnly} />
-              </Field>
-              <Field label="Normal Hours">
-                <Input inputMode="decimal" value={normalHours} onChange={(event) => setNormalHours(event.target.value)} readOnly={readOnly} />
-              </Field>
-              <Field label="Overtime Hours">
-                <Input inputMode="decimal" value={overtimeHours} onChange={(event) => setOvertimeHours(event.target.value)} readOnly={readOnly} />
-              </Field>
+            <h3 className="text-base font-semibold text-[#111827]">Working Hours Classification</h3>
+            <div className="overflow-hidden rounded-lg border border-[#E5E7EB] bg-white">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC] text-[#6B7280]">
+                    <th className="px-4 py-3 text-left font-medium">Category</th>
+                    <th className="px-4 py-3 text-right font-medium">Hours</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {classRows.map((row) => (
+                    <tr key={row.label} className="border-b border-[#F1F5F9] last:border-b-0">
+                      <td className="px-4 py-3 text-[#111827]">{row.label}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-[#111827]">{Math.round(row.value * 100) / 100}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-            <Field label="Day Type">
-              <RadioGroup value={dayType} onValueChange={setDayType} className="grid gap-2" disabled={readOnly}>
-                {DAY_TYPES.map((item) => (
-                  <label key={item} className="flex items-center gap-2 text-sm text-[#111827]">
-                    <RadioGroupItem value={item} disabled={readOnly} />
-                    {item}
-                  </label>
-                ))}
-              </RadioGroup>
-            </Field>
             <Field label="Remarks">
               <Textarea
                 value={remarks}
@@ -395,13 +795,48 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
 
           <section className="space-y-4">
             <ModalSectionHeader title="Approval Details" />
-            <div className={formFieldGridClass}>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Readonly label="Submitted By" value={current?.submittedBy || user?.username || "Admin"} />
               <Readonly
                 label={approvalLabel}
-                value={current?.status === "approved" ? "Confirmed" : current?.status === "rejected" ? "Rejected" : "Pending"}
+                value={
+                  current?.status === "approved" || formStatus === "approved"
+                    ? "Confirmed"
+                    : current?.status === "rejected"
+                      ? "Rejected"
+                      : "Pending"
+                }
               />
-              <Readonly label="Status" value={current?.status === "approved" ? "Confirmed" : current?.status === "rejected" ? "Rejected" : current?.status === "submitted" ? "Pending" : "Draft"} />
+              <Field label="Approved By">
+                {readOnly ? (
+                  <div className="flex min-h-10 items-center rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2 text-sm text-[#111827]">
+                    <span className="min-w-0 break-words">{approvedBy || current?.approvedBy || "—"}</span>
+                  </div>
+                ) : (
+                  <Input
+                    value={approvedBy}
+                    onChange={(event) => setApprovedBy(event.target.value)}
+                    placeholder="Approved by"
+                  />
+                )}
+              </Field>
+              <Field label="Status">
+                {readOnly ? (
+                  <div className="flex min-h-10 items-center rounded-lg border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2 text-sm text-[#111827]">
+                    <span className="min-w-0 break-words">{formStatus === "approved" ? "Approved" : "Draft"}</span>
+                  </div>
+                ) : (
+                  <Select value={formStatus} onValueChange={(value) => setFormStatus(value as "draft" | "approved")}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </Field>
             </div>
           </section>
         </div>

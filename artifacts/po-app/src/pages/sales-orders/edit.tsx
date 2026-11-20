@@ -1,5 +1,5 @@
 import { useDocNav } from "@/lib/doc-nav";
-import { emptySalesManpower, ManpowerLineItemsTable, ManpowerSalesCustomerFields, ManpowerSalesDateFields, salesManpowerSchema, quotationLineAmount } from "@/components/manpower-quotation-fields";
+import { blankManpowerLine, emptySalesManpower, ManpowerLineItemsTable, ManpowerSalesCustomerFields, ManpowerSalesDateFields, salesManpowerSchema, quotationLineAmount , ManpowerRequirementsCard, ManpowerCustomerBillingRatesCard } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -204,7 +204,7 @@ export default function SalesOrderEdit() {
     }
   }, [doc]);
 
-  const { fields, append, remove, insert } = useFieldArray({ control: form.control, name: "items" });
+  const { fields, append, remove, update, insert } = useFieldArray({ control: form.control, name: "items" });
   const updateMutation = useUpdateSalesOrder();
   const items = form.watch("items");
   const taxPercent = isOverseas ? 0 : Number(form.watch("tax") ?? 0);
@@ -272,11 +272,28 @@ export default function SalesOrderEdit() {
       return (i.partNumber || "").trim() !== "" || (i.description || "").trim() !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
-    if (realItems.length === 0) {
-      toast({ title: "Error", description: "At least one line item required.", variant: "destructive" });
-      setIsSubmitting(false);
-      return;
-    }
+    if (realItems.length === 0 && !isManpower) {
+        toast({ title: "Error", description: "At least one line item is required.", variant: "destructive" });
+        setIsSubmitting(false);
+        return;
+      }
+      if (isManpower && realItems.length === 0) {
+        const md: any = values.manpowerDetails || {};
+        const designation = String(md.designation || md.employeeNames || "Manpower").trim() || "Manpower";
+        const rate = Number(md.customerRate || md.customerBillingRates?.[0]?.rate || 0) || 0;
+        const workers = Number(md.workers) > 0 ? Number(md.workers) : (Array.isArray(md.employeeIds) && md.employeeIds.length ? md.employeeIds.length : 1);
+        const seedLine = blankManpowerLine({
+          designation,
+          workers: String(workers),
+          hours: String(md.hours || ""),
+          billingType: md.billingType || "Hourly",
+          customerRate: String(rate || md.customerRate || ""),
+          supplierRate: String(md.supplierRate || ""),
+        });
+        values.items = [seedLine];
+        filledItems.length = 0;
+        filledItems.push(seedLine as any);
+      }
     const itemsWithAmount = filledItems.map(i => {
       if ((i as any).type === "section") return { type: "section", sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left" };
       const disc = Number(i.discount) || 0;
@@ -363,7 +380,7 @@ export default function SalesOrderEdit() {
   });
 
   if (!doc) return <div className="flex items-center justify-center h-64"><div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
-
+
   const normalizeDocNo = (value: string) => String(value || "").trim().toUpperCase().replace(/\s+/g, "");
 
   const loadQuotationByRef = async (raw: string) => {
@@ -651,15 +668,7 @@ export default function SalesOrderEdit() {
                   )}
                 </div>
                 {isManpower ? (
-                  <ManpowerSalesDateFields control={form.control}>
-                    <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                      <FormItem className="min-w-0">
-                        <FormLabel>Delivery Date</FormLabel>
-                        <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )} />
-                  </ManpowerSalesDateFields>
+                  <ManpowerSalesDateFields control={form.control} />
                 ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <FormField control={form.control} name="isPrivate" render={({ field }) => (
@@ -670,13 +679,6 @@ export default function SalesOrderEdit() {
                         <p className="flex-1 text-xs text-muted-foreground">Only you &amp; admins</p>
                         <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                       </div>
-                    </FormItem>
-                  )} />
-                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                    <FormItem className="sm:col-span-2">
-                      <FormLabel>Delivery Date</FormLabel>
-                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} /></FormControl>
-                      <FormMessage />
                     </FormItem>
                   )} />
                 </div>
@@ -697,6 +699,27 @@ export default function SalesOrderEdit() {
             </Card>
           </div>
 
+          
+          {isManpower && (
+              <ManpowerRequirementsCard
+                control={form.control}
+                hideSource
+                onAddLine={(line) => {
+                  const current = form.getValues("items") || [];
+                  const onlyBlank = current.length === 1
+                    && (current[0] as any)?.type !== "section"
+                    && !String(current[0]?.description || "").trim()
+                    && !String(current[0]?.partNumber || "").trim();
+                  if (onlyBlank) update(0, { ...current[0], ...line });
+                  else append(line);
+                }}
+              />
+            )}
+            {isManpower && (
+              <ManpowerCustomerBillingRatesCard control={form.control} />
+            )}
+
+          {!isManpower && (
           <Card className="overflow-hidden">
             <CardHeader className="pb-4 bg-muted/20 border-b">
               <div className="flex items-center justify-between">
@@ -928,9 +951,12 @@ export default function SalesOrderEdit() {
             </CardContent>
           </Card>
 
+          )}
+
           <Card>
             <CardHeader className="pb-4"><CardTitle className="text-lg">Additional Information</CardTitle></CardHeader>
             <CardContent className="space-y-4">
+              {!isManpower && (
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Internal Notes</FormLabel>
@@ -938,6 +964,7 @@ export default function SalesOrderEdit() {
                   <FormMessage />
                 </FormItem>
               )} />
+              )}
               
               <DocumentAdditionalInfoFields control={form.control} />
             </CardContent>

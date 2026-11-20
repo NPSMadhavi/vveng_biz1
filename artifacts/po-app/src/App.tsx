@@ -170,11 +170,6 @@ const AisSubmissionPage  = lazy(() => import("@/operations-8june/pages/ais-submi
 const PayrollConfigNewPage = lazy(() => import("@/operations-8june/pages/payroll-config-new"));
 const PayrollConfigEditPage = lazy(() => import("@/operations-8june/pages/payroll-config-edit"));
 const PayrollProcessPage = lazy(() => import("@/operations-8june/pages/payroll-process"));
-
-const CustomerDeploymentList = lazy(() => import("@/pages/manpower/employee-deployment-list").then((m) => ({ default: m.CustomerDeploymentList })));
-const SupplierDeploymentList = lazy(() => import("@/pages/manpower/employee-deployment-list").then((m) => ({ default: m.SupplierDeploymentList })));
-const CustomerDeploymentForm = lazy(() => import("@/pages/manpower/employee-deployment-form").then((m) => ({ default: m.CustomerDeploymentForm })));
-const SupplierDeploymentForm = lazy(() => import("@/pages/manpower/employee-deployment-form").then((m) => ({ default: m.SupplierDeploymentForm })));
 const CustomerTimesheetList = lazy(() => import("@/pages/manpower/timesheet-list").then((m) => ({ default: m.CustomerTimesheetList })));
 const SupplierTimesheetList = lazy(() => import("@/pages/manpower/timesheet-list").then((m) => ({ default: m.SupplierTimesheetList })));
 const CustomerTimesheetForm = lazy(() => import("@/pages/manpower/timesheet-form").then((m) => ({ default: m.CustomerTimesheetForm })));
@@ -185,10 +180,6 @@ const SupplierTimesheetReport = lazy(() => import("@/pages/manpower/timesheet-re
 // ── Route title map ────────────────────────────────────────────────────────
 const ROUTE_TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
-  "/manpower/suppliers/employee-deployment/new": "New Employee Deployment",
-  "/manpower/customers/employee-deployment/new": "New Employee Deployment",
-  "/manpower/suppliers/employee-deployment": "Employee Deployment",
-  "/manpower/customers/employee-deployment": "Employee Deployment",
   "/manpower/suppliers/quotations": "Supplier Quotation",
   "/manpower/suppliers/purchase-orders": "Supplier Purchase Order",
   "/manpower/suppliers/timesheets/new": "New Timesheet",
@@ -257,7 +248,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/payroll/ir8a/employers": "Employer's (IR8A)",
   "/payroll/config/new": "Add Payroll Configuration",
   "/payroll/process": "Process Payroll",
-  "/accounting/chart-of-accounts": "Chart of Accounts",
+"/accounting/chart-of-accounts": "Chart of Accounts",
   "/accounting/bank-reconciliation": "Bank Reconciliation",
   "/accounting/journal-entries": "Journal Entries",
   "/accounting/profit-loss": "Profit & Loss",
@@ -442,7 +433,7 @@ function Router() {
           <Route path="/payroll/config/new">{() => <ProtectedRoute component={PayrollConfigNewPage} module="payroll" />}</Route>
           <Route path="/payroll/config/:id/edit">{() => <ProtectedRoute component={PayrollConfigEditPage} module="payroll" />}</Route>
           <Route path="/payroll/process">{() => <ProtectedRoute component={PayrollProcessPage} module="payroll" />}</Route>
-          <Route path="/payroll/ir8a/employers">{() => <ProtectedRoute component={Ir8aEmployersPage} module="payroll" />}</Route>
+<Route path="/payroll/ir8a/employers">{() => <ProtectedRoute component={Ir8aEmployersPage} module="payroll" />}</Route>
           <Route path="/payroll/ir8a/ais">{() => <ProtectedRoute component={AisSubmissionPage} module="payroll" />}</Route>
           <Route path="/payroll/ir8a">{() => <ProtectedRoute component={Ir8aPage} module="payroll" />}</Route>
           <Route path="/payroll">{() => <ProtectedRoute component={PayrollPage} module="payroll" />}</Route>
@@ -518,10 +509,6 @@ function Router() {
           <Route path="/manpower/suppliers/purchase-orders/:id/edit">{() => <ProtectedRoute component={PurchaseOrderEdit} />}</Route>
           <Route path="/manpower/suppliers/purchase-orders/:id">{() => <ProtectedRoute component={PurchaseOrderView} />}</Route>
           <Route path="/manpower/suppliers/purchase-orders">{() => <ProtectedRoute component={PurchaseOrderList} />}</Route>
-          <Route path="/manpower/suppliers/employee-deployment/new">{() => <ProtectedRoute component={SupplierDeploymentForm} />}</Route>
-          <Route path="/manpower/suppliers/employee-deployment/:id/edit">{() => <ProtectedRoute component={SupplierDeploymentForm} />}</Route>
-          <Route path="/manpower/suppliers/employee-deployment/:id">{() => <ProtectedRoute component={SupplierDeploymentForm} />}</Route>
-          <Route path="/manpower/suppliers/employee-deployment">{() => <ProtectedRoute component={SupplierDeploymentList} />}</Route>
           <Route path="/manpower/suppliers/timesheets/new">{() => <ProtectedRoute component={SupplierTimesheetForm} />}</Route>
           <Route path="/manpower/suppliers/timesheets/report">{() => <ProtectedRoute component={SupplierTimesheetReport} />}</Route>
           <Route path="/manpower/suppliers/timesheets/:id/edit">{() => <ProtectedRoute component={SupplierTimesheetForm} />}</Route>
@@ -539,10 +526,6 @@ function Router() {
           <Route path="/manpower/customers/sales-orders/:id/edit">{() => <ProtectedRoute component={SalesOrderEdit} />}</Route>
           <Route path="/manpower/customers/sales-orders/:id">{() => <ProtectedRoute component={SalesOrderView} />}</Route>
           <Route path="/manpower/customers/sales-orders">{() => <ProtectedRoute component={SalesOrderList} />}</Route>
-          <Route path="/manpower/customers/employee-deployment/new">{() => <ProtectedRoute component={CustomerDeploymentForm} />}</Route>
-          <Route path="/manpower/customers/employee-deployment/:id/edit">{() => <ProtectedRoute component={CustomerDeploymentForm} />}</Route>
-          <Route path="/manpower/customers/employee-deployment/:id">{() => <ProtectedRoute component={CustomerDeploymentForm} />}</Route>
-          <Route path="/manpower/customers/employee-deployment">{() => <ProtectedRoute component={CustomerDeploymentList} />}</Route>
           <Route path="/manpower/customers/timesheets/new">{() => <ProtectedRoute component={CustomerTimesheetForm} />}</Route>
           <Route path="/manpower/customers/timesheets/report">{() => <ProtectedRoute component={CustomerTimesheetReport} />}</Route>
           <Route path="/manpower/customers/timesheets/:id/edit">{() => <ProtectedRoute component={CustomerTimesheetForm} />}</Route>

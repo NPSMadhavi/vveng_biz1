@@ -470,6 +470,23 @@ async function upsertPayrollRecord(
     payPeriodEnd,
   );
 
+  const payloadValues = [
+    companyId,
+    employee.id,
+    activeConfig.id,
+    payPeriodStart,
+    payPeriodEnd,
+    baseSalary,
+    overtimeHours,
+    amounts.overtimePay,
+    JSON.stringify(allowances),
+    JSON.stringify(deductions),
+    amounts.grossPay,
+    amounts.netPay,
+    amounts.employeeCpf,
+    amounts.employerCpf,
+  ];
+
   if (!existing) {
     const insertResult = await pool.query<DbPayrollRecord>(
       `INSERT INTO payroll_records (
@@ -479,35 +496,73 @@ async function upsertPayrollRecord(
          allowances, deductions,
          gross_pay, net_pay, cpf_employee, cpf_employer,
          status, processed_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, 'pending', NOW())
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, 'processed', NOW())
        RETURNING *`,
-      [
-        companyId,
-        employee.id,
-        activeConfig.id,
-        payPeriodStart,
-        payPeriodEnd,
-        baseSalary,
-        overtimeHours,
-        amounts.overtimePay,
-        JSON.stringify(allowances),
-        JSON.stringify(deductions),
-        amounts.grossPay,
-        amounts.netPay,
-        amounts.employeeCpf,
-        amounts.employerCpf,
-      ],
+      payloadValues,
     );
     return { action: "created", record: insertResult.rows[0]! };
   }
 
-  const configChanged = hasPayrollConfigChanged(activeConfig, existing, amounts);
-  void options;
-  return {
-    action: "skipped",
-    record: existing,
-    reason: configChanged ? "data_changed" : "already_processed",
-  };
+  const status = String((existing as any).status || "").toLowerCase();
+  const isFinalized = status === "processed" || status === "paid";
+  // Add Payroll saves a draft/pending month snapshot — Process Payroll may finalize it.
+  const isSetupSnapshot = status === "draft" || status === "pending" || status === "";
+
+  if (isFinalized && !options.forceUpdate) {
+    const configChanged = hasPayrollConfigChanged(activeConfig, existing, amounts);
+    return {
+      action: "skipped",
+      record: existing,
+      reason: configChanged ? "data_changed" : "already_processed",
+    };
+  }
+
+  if (!isSetupSnapshot && !options.forceUpdate) {
+    const configChanged = hasPayrollConfigChanged(activeConfig, existing, amounts);
+    return {
+      action: "skipped",
+      record: existing,
+      reason: configChanged ? "data_changed" : "already_processed",
+    };
+  }
+
+  const updateResult = await pool.query<DbPayrollRecord>(
+    `UPDATE payroll_records SET
+       payroll_config_id = $1,
+       pay_period_start = $2,
+       pay_period_end = $3,
+       base_salary = $4,
+       overtime_hours = $5,
+       overtime_pay = $6,
+       allowances = $7::jsonb,
+       deductions = $8::jsonb,
+       gross_pay = $9,
+       net_pay = $10,
+       cpf_employee = $11,
+       cpf_employer = $12,
+       status = 'processed',
+       processed_at = COALESCE(processed_at, NOW()),
+       updated_at = NOW()
+     WHERE id = $13 AND company_id = $14
+     RETURNING *`,
+    [
+      activeConfig.id,
+      payPeriodStart,
+      payPeriodEnd,
+      baseSalary,
+      overtimeHours,
+      amounts.overtimePay,
+      JSON.stringify(allowances),
+      JSON.stringify(deductions),
+      amounts.grossPay,
+      amounts.netPay,
+      amounts.employeeCpf,
+      amounts.employerCpf,
+      existing.id,
+      companyId,
+    ],
+  );
+  return { action: "updated", record: updateResult.rows[0]! };
 }
 
 export async function processIndividualPayrollCompany(
@@ -1050,7 +1105,7 @@ export async function savePayrollMonthSnapshot(
          allowances, deductions,
          gross_pay, net_pay, cpf_employee, cpf_employer,
          status, processed_at
-       ) VALUES ($1, $2, $3, $4::date, $5::date, $6, $7, $8, 0, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, 'pending', NOW())`,
+       ) VALUES ($1, $2, $3, $4::date, $5::date, $6, $7, $8, 0, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, 'draft', NULL)`,
       [
         companyId,
         employeeId,

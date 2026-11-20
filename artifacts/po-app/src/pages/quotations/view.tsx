@@ -1,4 +1,4 @@
-import { useDocNav } from "@/lib/doc-nav";
+﻿import { useDocNav } from "@/lib/doc-nav";
 import { useGetQuotation, getGetQuotationQueryKey, getListQuotationsQueryKey, useDeleteQuotation, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
 import { useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -305,7 +305,7 @@ export default function QuotationView() {
             <div><span className="font-medium text-base">{doc.customerName}</span></div>
             {(doc as any).manpowerDetails?.phone && (
               <div className="text-sm">
-                <span className="text-muted-foreground">Phone: </span>
+                <span className="text-muted-foreground">Contact Number: </span>
                 <span>{(doc as any).manpowerDetails.phone}</span>
               </div>
             )}
@@ -370,6 +370,33 @@ export default function QuotationView() {
             {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.supplierRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Supplier Rate</span><span>{(doc as any).manpowerDetails.supplierRate}</span></div>}
             {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.workingDates && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Working Days</span><span>{(doc as any).manpowerDetails.workingDates}</span></div>}
             {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.otSupplierRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">OT Supplier Rate</span><span>{(doc as any).manpowerDetails.otSupplierRate}</span></div>}
+          
+            {(() => {
+              const rates = Array.isArray((doc as any).manpowerDetails.customerBillingRates) && (doc as any).manpowerDetails.customerBillingRates.length
+                ? (doc as any).manpowerDetails.customerBillingRates
+                : [
+                    (doc as any).manpowerDetails.customerRate ? { category: "Normal Hour", rate: (doc as any).manpowerDetails.customerRate, gst: (doc as any).manpowerDetails.customerRateGst || "Applicable" } : null,
+                    ((doc as any).manpowerDetails.customerRateOt15 || (doc as any).manpowerDetails.weekdayOtRate) ? { category: "OT 1.5x", rate: (doc as any).manpowerDetails.customerRateOt15 || (doc as any).manpowerDetails.weekdayOtRate, gst: "Applicable" } : null,
+                  ].filter(Boolean);
+              if (!rates.length) return null;
+              return (
+              <div className="sm:col-span-2 space-y-2">
+                <div className="text-muted-foreground">Customer Billing Rates</div>
+                <div className="rounded-lg border overflow-hidden text-sm">
+                  <div className="grid grid-cols-3 bg-[#DBEAFE] px-3 py-2 font-semibold text-[#1E3A5F]">
+                    <span>Category</span><span>Rate (SGD / Hour)</span><span>GST</span>
+                  </div>
+                  {rates.map((row: any, idx: number) => (
+                    <div key={idx} className="grid grid-cols-3 border-t px-3 py-2">
+                      <span>{row.category || "—"}</span>
+                      <span>{row.rate != null && String(row.rate) !== "" ? "$" + Number(row.rate).toFixed(2) : "—"}</span>
+                      <span>{row.gst || "Applicable"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              );
+            })()}
           </CardContent>
         </Card>
       )}

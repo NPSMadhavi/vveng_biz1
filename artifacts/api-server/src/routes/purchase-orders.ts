@@ -22,6 +22,8 @@ const router: IRouter = Router();
 async function ensureManpowerDetails(): Promise<void> {
   try {
     await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manpower_details jsonb`);
+    await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS terms_and_conditions text`);
+    await pool.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS authorised_signature text`);
   } catch (error: any) {
     if (error?.code === "42P01") return;
     throw error;
@@ -168,6 +170,7 @@ router.post("/purchase-orders", async (req, res): Promise<void> => {
   const {
     vendorName, vendorAddress, vendorContact, vendorContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, quoteRefNo, notes,
+    termsAndConditions, authorisedSignature,
     items, tax = 0, currency, isPrivate, status, customerId, customerPoRef, manpowerDetails,
   } = req.body;
 
@@ -190,6 +193,8 @@ router.post("/purchase-orders", async (req, res): Promise<void> => {
     companyId: req.session.companyId!,
     vendorName, vendorAddress, vendorContact, vendorContactEmail,
     deliveryAddress, issueDate: issueDate || new Date().toISOString().split("T")[0], deliveryDate, paymentTerms, quoteRefNo, notes,
+    termsAndConditions: termsAndConditions || null,
+    authorisedSignature: authorisedSignature || null,
     items: itemsWithAmounts,
     currency: currency || "SGD",
     isPrivate: isPrivate === true,
@@ -274,6 +279,7 @@ router.put("/purchase-orders/:id", async (req, res): Promise<void> => {
   const {
     vendorName, vendorAddress, vendorContact, vendorContactEmail,
     deliveryAddress, issueDate, deliveryDate, paymentTerms, quoteRefNo, notes,
+    termsAndConditions, authorisedSignature,
     items, tax = 0, currency, isPrivate, status, customerId, customerPoRef, manpowerDetails,
   } = req.body;
 
@@ -302,6 +308,8 @@ router.put("/purchase-orders/:id", async (req, res): Promise<void> => {
       ? (manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : null)
       : existing[0].manpowerDetails ?? null,
   };
+  if (termsAndConditions !== undefined) updateData.termsAndConditions = termsAndConditions || null;
+  if (authorisedSignature !== undefined) updateData.authorisedSignature = authorisedSignature || null;
   if (currency !== undefined) updateData.currency = currency;
   if (isPrivate !== undefined) updateData.isPrivate = isPrivate === true;
   if (status) updateData.status = status;

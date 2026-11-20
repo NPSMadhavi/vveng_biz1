@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS employees (
   status TEXT NOT NULL DEFAULT 'active',
   salary TEXT,
   annual_salary TEXT,
+employment_type TEXT,
   nationality TEXT,
   pr_status TEXT,
   date_of_birth TIMESTAMPTZ,
@@ -207,6 +208,7 @@ CREATE TABLE IF NOT EXISTS employee_documents (
 
 -- Column upgrades for existing databases (idempotent)
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_salary TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS employment_type TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS pr_status TEXT;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS date_of_birth TIMESTAMPTZ;
 ALTER TABLE employees ADD COLUMN IF NOT EXISTS passport_number TEXT;

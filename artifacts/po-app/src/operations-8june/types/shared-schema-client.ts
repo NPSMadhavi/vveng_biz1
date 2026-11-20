@@ -68,6 +68,7 @@ export type Employee = {
   status: string;
   salary?: string | null;
   annualSalary?: string | null;
+  employmentType?: string | null;
   workType?: string | null;
   nationality?: string | null;
   prStatus?: string | null;
@@ -216,6 +217,7 @@ export const insertEmployeeSchema = z.object({
   status: z.string().optional(),
   salary: z.union([z.string(), z.number()]).optional().nullable(),
   annualSalary: z.union([z.string(), z.number()]).optional().nullable(),
+  employmentType: z.enum(["full_time", "part_time", "hourly"]).optional().nullable(),
   workType: z.enum(["hourly", "monthly"]).optional().nullable(),
   nationality: z.string().optional().nullable(),
   prStatus: z.string().optional().nullable(),

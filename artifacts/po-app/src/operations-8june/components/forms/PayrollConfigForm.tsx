@@ -62,6 +62,7 @@ import {
   deploymentEmployees,
   loadDeployments,
 } from "@/pages/manpower/deployment-store";
+import { consolidateEmployeeMonthTimesheets, type CustomerHoursRow } from "@/operations-8june/lib/timesheet-cpf-consolidation";
 
 const optionalAmount = z.preprocess((val) => {
   if (val === "" || val === null || val === undefined) return undefined;
@@ -714,9 +715,14 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   });
 
   const [customerId, setCustomerId] = useState("");
+  const [selectedCustomerPartyKey, setSelectedCustomerPartyKey] = useState("");
   const [hourlyRateInput, setHourlyRateInput] = useState("");
   const [normalHours, setNormalHours] = useState("");
   const [actualHours, setActualHours] = useState("");
+  const [selectedTsOt15, setSelectedTsOt15] = useState(0);
+  const [selectedTsOt20, setSelectedTsOt20] = useState(0);
+  const [selectedTsRest, setSelectedTsRest] = useState(0);
+  const [selectedTsPh, setSelectedTsPh] = useState(0);
   const [deploymentTick, setDeploymentTick] = useState(0);
 
   useEffect(() => {
@@ -750,11 +756,43 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     return { customerToEmployees, employeeToCustomers };
   }, [deploymentTick]);
 
+  const applyCustomerHoursRow = (row: CustomerHoursRow) => {
+    const partyKey = String(row.partyId || row.customerName || "");
+    setSelectedCustomerPartyKey(partyKey);
+    if (row.partyId) setCustomerId(String(row.partyId));
+    const days = row.workingDays > 0 ? row.workingDays : Math.max(1, Math.round(row.normal / HOURS_PER_WORKING_DAY) || 0);
+    if (days > 0) {
+      form.setValue("workingDays", days, { shouldDirty: true, shouldValidate: true });
+    }
+    const normal = Math.round(row.normal * 100) / 100;
+    const total = Math.round(row.totalHours * 100) / 100;
+    if (normal > 0) setNormalHours(String(normal));
+    if (total > 0) setActualHours(String(total));
+    const ot = Math.round((row.ot15 + row.ot20 + row.restDay + row.publicHoliday) * 100) / 100;
+    setSelectedTsOt15(Math.round(row.ot15 * 100) / 100);
+    setSelectedTsOt20(Math.round(row.ot20 * 100) / 100);
+    setSelectedTsRest(Math.round(row.restDay * 100) / 100);
+    setSelectedTsPh(Math.round(row.publicHoliday * 100) / 100);
+    form.setValue("overtimeRate", ot > 0 ? ot : undefined, { shouldDirty: true, shouldValidate: true });
+  };
+
   const [selectedPayrollYear, setSelectedPayrollYear] = useState<number>(new Date().getFullYear());
   const savedMonths = useMemo(
     () => listEmployeePayrollMonths(payrollRecords, Number(selectedEmployeeId) || 0),
     [payrollRecords, selectedEmployeeId],
   );
+  const timesheetCustomers = useMemo((): CustomerHoursRow[] => {
+    if (!selectedEmployee || isAllEmployees || selectedPayrollMonth == null) return [];
+    return consolidateEmployeeMonthTimesheets({
+      employeeId: selectedEmployee.id,
+      employeeCode: selectedEmployee.employeeId,
+      employeeLabel: selectedEmployee.name,
+      year: selectedPayrollYear,
+      month: selectedPayrollMonth,
+      requireApproved: false,
+    }).customers;
+  }, [selectedEmployee, isAllEmployees, selectedPayrollMonth, selectedPayrollYear]);
+
   const workingYear = useWorkingYearBounds();
   const payrollMonthChoices = useMemo(
     () => financialYearMonthChoices(workingYear.from, workingYear.to),
@@ -770,6 +808,8 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     setSelectedPayrollYear(year);
     setMonthError("");
     setMonthMenuOpen(false);
+    setSelectedCustomerPartyKey("");
+    setCustomerId("");
     const hourly = String(selectedEmployee?.workType || "") === "hourly";
     const weekdays = countWeekdays(year, month);
     form.setValue("workingDays", hourly ? weekdays : getDaysInMonth(month, year), {
@@ -859,13 +899,14 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   const visibleEmployeeOptions = useMemo(() => {
     if (!customerId) return employeeOptions;
     const ids = deploymentLinks.customerToEmployees.get(String(customerId)) || new Set<number>();
+    if (ids.size === 0) return employeeOptions;
     const matched = employeeOptions.filter((employee) => ids.has(Number(employee.id)));
     return [
       {
         id: ALL_EMPLOYEES_ID,
         name: "All Employees",
         employeeId: `${matched.length} assigned`,
-        designation: "Process payroll for everyone deployed to this customer",
+        designation: "Process payroll for everyone linked to this customer",
       },
       ...matched,
     ];
@@ -876,12 +917,22 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     : 0;
   const autoNormalHours = hourlyWorkingDays > 0 ? hourlyWorkingDays * HOURS_PER_WORKING_DAY : 0;
   const normalHourlyRate = perHourCharge;
-  const normalWorkingHours = autoNormalHours;
-  const actualWorkingHours = actualHours === "" ? autoNormalHours : (Number(actualHours) || 0);
+  const normalWorkingHours = normalHours !== "" ? (Number(normalHours) || 0) : autoNormalHours;
+  const actualWorkingHours = actualHours === "" ? normalWorkingHours : (Number(actualHours) || 0);
   const normalPay = roundMoney(perHourCharge * normalWorkingHours);
-  const hourlyOtHours = roundMoney(Math.max(0, actualWorkingHours - normalWorkingHours));
+  const classifiedOtHours = roundMoney(selectedTsOt15 + selectedTsOt20 + selectedTsRest + selectedTsPh);
+  const hourlyOtHours = classifiedOtHours > 0
+    ? classifiedOtHours
+    : roundMoney(Math.max(0, actualWorkingHours - normalWorkingHours));
   const hourlyOtRate = roundMoney(normalHourlyRate * 1.5);
-  const hourlyOtPay = roundMoney(hourlyOtHours * hourlyOtRate);
+  const hourlyOt20Rate = roundMoney(normalHourlyRate * 2);
+  const hourlyOtPay = classifiedOtHours > 0
+    ? roundMoney(
+        selectedTsOt15 * hourlyOtRate
+        + selectedTsOt20 * hourlyOt20Rate
+        + (selectedTsRest + selectedTsPh) * hourlyOtRate,
+      )
+    : roundMoney(hourlyOtHours * hourlyOtRate);
   const overtimePay = isHourlyEmployee
     ? hourlyOtPay
     : Math.round(overtimeHours * forHoursInSgd * 100) / 100;
@@ -1027,6 +1078,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     const saved = (editData?.allowances || {}) as Record<string, unknown>;
     if (isEditMode && saved.assignedCustomerId != null) {
       setCustomerId(String(saved.assignedCustomerId));
+      setSelectedCustomerPartyKey(String(saved.assignedCustomerId));
     }
   }, [selectedEmployee?.id, isEditMode]);
 
@@ -1040,6 +1092,8 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
 
   useEffect(() => {
     if (!isHourlyEmployee || selectedPayrollMonth == null) return;
+    // Prefer timesheet hours whenever this employee has customer timesheets in the month
+    if (timesheetCustomers.length > 0) return;
     const days = countWeekdays(selectedPayrollYear, selectedPayrollMonth);
     const hours = String(days * HOURS_PER_WORKING_DAY);
     form.setValue("workingDays", days, { shouldDirty: true });
@@ -1056,7 +1110,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     const savedAllowances = (saved?.allowances || record?.allowances || {}) as Record<string, unknown>;
     const savedActual = savedAllowances.hourlyActualHours;
     setActualHours(savedActual != null && String(savedActual) !== "" ? String(savedActual) : hours);
-  }, [isHourlyEmployee, selectedPayrollMonth, selectedPayrollYear, selectedEmployee?.id]);
+  }, [isHourlyEmployee, selectedPayrollMonth, selectedPayrollYear, selectedEmployee?.id, selectedCustomerPartyKey, timesheetCustomers.length]);
 
   useEffect(() => {
     if (!isHourlyEmployee) return;
@@ -1068,20 +1122,42 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
   }, [isHourlyEmployee, normalPay]);
 
   useEffect(() => {
-    if (!selectedEmployee || isAllEmployees) return;
-    if (customersForEmployee.length === 1) {
-      setCustomerId(String(customersForEmployee[0].id));
+    if (!selectedEmployee || isAllEmployees) {
+      setSelectedCustomerPartyKey("");
+      setCustomerId("");
+      setSelectedTsOt15(0);
+      setSelectedTsOt20(0);
+      setSelectedTsRest(0);
+      setSelectedTsPh(0);
       return;
     }
-    if (customersForEmployee.length > 1) {
+    if (timesheetCustomers.length === 1) {
+      applyCustomerHoursRow(timesheetCustomers[0]);
+      return;
+    }
+    if (timesheetCustomers.length > 1) {
+      setSelectedCustomerPartyKey((current) => {
+        const still = timesheetCustomers.some((row) => String(row.partyId || row.customerName) === current);
+        if (still) return current;
+        setCustomerId("");
+        return "";
+      });
+      return;
+    }
+    // fallback to deployment-linked customers
+    if (customersForEmployee.length === 1) {
+      setCustomerId(String(customersForEmployee[0].id));
+      setSelectedCustomerPartyKey(String(customersForEmployee[0].id));
+    } else if (customersForEmployee.length > 1) {
       setCustomerId((current) =>
         customersForEmployee.some((customer) => String(customer.id) === current) ? current : "",
       );
-      return;
+    } else {
+      setCustomerId("");
+      setSelectedCustomerPartyKey("");
     }
-    // No deployment for this employee — clear customer
-    setCustomerId("");
-  }, [selectedEmployee?.id, isAllEmployees, customersForEmployee]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEmployee?.id, isAllEmployees, timesheetCustomers, customersForEmployee]);
 
   const handleCustomerChange = (id: string) => {
     setCustomerId(id);
@@ -1155,6 +1231,14 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
         if (selectedCustomer) {
           allowances.assignedCustomerId = Number(selectedCustomer.id);
           allowances.assignedCustomerName = selectedCustomer.name;
+        }
+        const selectedTsCustomer = timesheetCustomers.find(
+          (row) => String(row.partyId || row.customerName) === selectedCustomerPartyKey
+            || String(row.partyId) === customerId,
+        );
+        if (selectedTsCustomer?.timesheetNos?.length) {
+          allowances.timesheetReferenceNo = selectedTsCustomer.timesheetNos.join(", ");
+          allowances.timesheetReferenceNos = selectedTsCustomer.timesheetNos;
         }
         return { ...payload, allowances };
       };
@@ -1408,7 +1492,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
             className="space-y-8"
           >
             <section className="space-y-4">
-              <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+              <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
                 <FormField
                   control={form.control}
                   name="employeeId"
@@ -1446,30 +1530,6 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                     </FormItem>
                   )}
                 />
-
-                <FormItem>
-                  <FormLabel className={formLabelClass}>Customer</FormLabel>
-                  <Select
-                    value={customerId || undefined}
-                    onValueChange={handleCustomerChange}
-                    disabled={customerChoices.length === 0}
-                  >
-                    <SelectTrigger>
-                      <SelectValue
-                        placeholder={
-                          customerChoices.length === 0 ? "No customers" : "Select customer"
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {customerChoices.map((customer) => (
-                        <SelectItem key={customer.id} value={String(customer.id)}>
-                          {customer.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </FormItem>
 
                 <FormItem>
                   <FormLabel className={formLabelClass}>Month *</FormLabel>
@@ -1524,43 +1584,54 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                 </FormItem>
               </div>
 
-              {savedMonths.length > 0 && (
+              {selectedEmployee && !isAllEmployees && selectedPayrollMonth != null && (
                 <div className="space-y-2">
-                  <p className="text-sm font-medium text-[#111827]">Saved months — click a month to edit it</p>
-                  <div className="overflow-x-auto rounded-md border border-[#E5E7EB]">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-[#EFF6FF] text-left text-[#1D4ED8]">
-                        <tr>
-                          {["Month", "Basic", "Transport", "Food", "Bonus", "Other", "Gross"].map((heading) => (
-                            <th key={heading} className="whitespace-nowrap px-3 py-2 font-medium">{heading}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {savedMonths.map((row) => {
-                          const selected = selectedPayrollMonth === row.month && selectedPayrollYear === row.year;
-                          return (
-                            <tr
-                              key={`${row.year}-${row.month}`}
-                              className={cn(
-                                "cursor-pointer border-t border-[#E5E7EB] hover:bg-[#F8FAFC]",
-                                selected && "bg-[#EFF6FF]",
-                              )}
-                              onClick={() => applyMonthSelection(row.month, row.year)}
-                            >
-                              <td className="whitespace-nowrap px-3 py-2 font-medium text-[#111827]">{row.label}</td>
-                              <td className="px-3 py-2">{formatCurrency(row.basic)}</td>
-                              <td className="px-3 py-2">{formatCurrency(row.transport)}</td>
-                              <td className="px-3 py-2">{formatCurrency(row.meal)}</td>
-                              <td className="px-3 py-2">{formatCurrency(row.bonus)}</td>
-                              <td className="px-3 py-2">{formatCurrency(row.other)}</td>
-                              <td className="px-3 py-2">{formatCurrency(row.gross)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  <p className="text-sm font-medium text-[#111827]">
+                    Customers — click a customer to load per-hour / working days
+                  </p>
+                  {timesheetCustomers.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-[#E5E7EB] px-3 py-4 text-sm text-[#6B7280]">
+                      No customer timesheets found for this employee in the selected month.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-md border border-[#E5E7EB]">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-[#EFF6FF] text-left text-[#1D4ED8]">
+                          <tr>
+                            {["#", "Customer", "Working Days", "Normal Hrs", "OT Hrs", "Total Hrs"].map((heading) => (
+                              <th key={heading} className="whitespace-nowrap px-3 py-2 font-medium">{heading}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {timesheetCustomers.map((row, index) => {
+                            const partyKey = String(row.partyId || row.customerName || "");
+                            const selected = selectedCustomerPartyKey === partyKey || String(row.partyId) === customerId;
+                            const ot = Math.round((row.ot15 + row.ot20 + row.restDay + row.publicHoliday) * 100) / 100;
+                            return (
+                              <tr
+                                key={partyKey || `customer-${index}`}
+                                className={cn(
+                                  "cursor-pointer border-t border-[#E5E7EB] hover:bg-[#F8FAFC]",
+                                  selected && "bg-[#EFF6FF]",
+                                )}
+                                onClick={() => applyCustomerHoursRow(row)}
+                              >
+                                <td className="whitespace-nowrap px-3 py-2 font-medium text-[#111827]">
+                                  Customer {index + 1}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2 font-medium text-[#111827]">{row.customerName}</td>
+                                <td className="px-3 py-2">{row.workingDays || 0}</td>
+                                <td className="px-3 py-2">{row.normal.toFixed(2)}</td>
+                                <td className="px-3 py-2">{ot.toFixed(2)}</td>
+                                <td className="px-3 py-2">{row.totalHours.toFixed(2)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1751,7 +1822,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       value={selectedPayrollMonth == null ? "" : String(hourlyWorkingDays)}
                       className={readOnlyInputClass}
                     />
-                    <p className="text-xs text-[#6B7280]">Weekdays in the selected month</p>
+                    <p className="text-xs text-[#6B7280]">From selected customer timesheet (or weekdays in month)</p>
                   </div>
                   <div className="space-y-1.5">
                     <label className={payheadLabelClass}>Normal Working Hours</label>
@@ -1761,7 +1832,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       className={readOnlyInputClass}
                     />
                     <p className="text-xs text-[#6B7280]">
-                      {hourlyWorkingDays > 0 ? `${hourlyWorkingDays} working days × ${HOURS_PER_WORKING_DAY} hours` : "Select a month"}
+                      {normalHours !== "" ? "From timesheet normal hours" : hourlyWorkingDays > 0 ? `${hourlyWorkingDays} working days × ${HOURS_PER_WORKING_DAY} hours` : "Select a month"}
                     </p>
                   </div>
                   <div className="space-y-1.5">

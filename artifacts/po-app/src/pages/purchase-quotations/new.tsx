@@ -1,5 +1,5 @@
 import { useDocNav } from "@/lib/doc-nav";
-import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard, ManpowerServiceDateFields, quotationLineAmount } from "@/components/manpower-quotation-fields";
+import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerServiceDateFields, quotationLineAmount, ManpowerCustomerBillingRatesCard, ManpowerRequirementsCard, blankManpowerLine } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray, type FieldErrors } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -11,6 +11,7 @@ import { invalidateDocumentList } from "@/lib/invalidate-document-lists";
 import { ContactAutocomplete } from "@/components/contact-autocomplete";
 import { Button } from "@/components/ui/button";
 import { FormStickyActions } from "@/components/form-sticky-actions";
+import { DocumentAdditionalInfoFields } from "@/components/document-additional-info-fields";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -25,7 +26,6 @@ import { Trash2, Save, Eye, Lock, Plus, Layers, AlignLeft, AlignCenter, Upload, 
 import { cn } from "@/lib/utils";
 import { generatePurchaseQuotation_PDF } from "@/lib/pdf";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
-import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField, getToday } from "@/components/issue-date-field";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
 import { DirectoryPickerButton } from "@/components/directory-picker-button";
@@ -67,7 +67,7 @@ const schema = z.object({
   discountAmount: z.coerce.number().min(0).default(0),
   isPrivate: z.boolean().default(false),
   manpowerDetails: manpowerDetailsSchema.optional(),
-  items: z.array(itemSchema).min(1, "At least one item is required"),
+  items: z.array(itemSchema).default([]),
 });
 
 export default function PurchaseQuotationNew() {
@@ -241,10 +241,27 @@ export default function PurchaseQuotationNew() {
       return i.partNumber.trim() !== "" || i.description.trim() !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
-    if (realItems.length === 0) {
+        if (realItems.length === 0 && !isManpower) {
       toast({ title: "Error", description: "At least one line item is required.", variant: "destructive" });
       setIsSubmitting(false);
       return;
+    }
+    if (isManpower && realItems.length === 0) {
+      const md = values.manpowerDetails || {};
+      const designation = String(md.designation || md.workerNames || md.employeeNames || "Manpower").trim() || "Manpower";
+      const rate = Number(md.customerRate || md.supplierRate || md.customerBillingRates?.[0]?.rate || 0) || 0;
+      const workers = Number(md.workers) > 0 ? Number(md.workers) : 1;
+      const seedLine = blankManpowerLine({
+        designation,
+        workers: String(workers),
+        hours: String(md.hours || ""),
+        billingType: md.billingType || "Hourly",
+        customerRate: String(md.customerRate || rate || ""),
+        supplierRate: String(md.supplierRate || ""),
+      });
+      values.items = [seedLine];
+      filledItems.length = 0;
+      filledItems.push(seedLine);
     }
     const itemsWithAmount = filledItems.map(i => {
       if ((i as any).type === "section") return { type: "section", sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left" };
@@ -253,6 +270,9 @@ export default function PurchaseQuotationNew() {
     });
     const payload: any = { ...values, status: openPreview ? "confirmed" : "draft", discountAmount: values.discountAmount, items: itemsWithAmount };
     payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
+      if (isManpower && payload.manpowerDetails && typeof payload.manpowerDetails === "object") {
+        payload.manpowerDetails.source = payload.manpowerDetails.source || "supplier";
+      }
     createMutation.mutate({ data: payload }, {
       onSuccess: async (data) => {
         // Show the new purchaseQuotation in the list immediately (no manual refresh).
@@ -471,14 +491,6 @@ export default function PurchaseQuotationNew() {
                   </FormItem>
                 )} />
                 )}
-                {!isManpower && (
-                <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                  <FormItem className="sm:col-span-2 lg:col-span-3">
-                    <FormLabel>Delivery Date</FormLabel>
-                    <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} /></FormControl><FormMessage />
-                  </FormItem>
-                )} />
-                )}
                 </div>
                 {isManpower && (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,0.7fr)_minmax(0,0.9fr)_minmax(0,1.8fr)]">
@@ -496,16 +508,11 @@ export default function PurchaseQuotationNew() {
                       </div>
                     </FormItem>
                   )} />
-                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                    <FormItem className="min-w-0">
-                      <FormLabel>Delivery Date</FormLabel>
-                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl><FormMessage />
-                    </FormItem>
-                  )} />
                 </div>
                 )}
               </CardContent>
             </Card>
+            
             {isManpower && (
               <ManpowerRequirementsCard
                 control={form.control}
@@ -521,8 +528,12 @@ export default function PurchaseQuotationNew() {
                 }}
               />
             )}
+            {isManpower && (
+              <ManpowerCustomerBillingRatesCard control={form.control} title="Supplier Billing Rates" />
+            )}
           </div>
 
+          {!isManpower && (
           <Card className="overflow-hidden">
             <CardHeader className="pb-4 bg-muted/20 border-b">
               <div className="flex items-center justify-between">
@@ -767,13 +778,21 @@ export default function PurchaseQuotationNew() {
               </div>
             </CardContent>
           </Card>
+          )}
 
           <Card>
-            <CardHeader className="pb-4"><CardTitle className="text-lg">Additional Notes</CardTitle></CardHeader>
-            <CardContent>
+            <CardHeader className="pb-4"><CardTitle className="text-lg">Additional Information</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              {!isManpower && (
               <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem><FormControl><RichTextEditor value={field.value ?? ""} onChange={field.onChange} placeholder="Terms, conditions, or special instructions..." className="min-h-[96px]" /></FormControl><FormMessage /></FormItem>
+                <FormItem>
+                  <FormLabel>Internal Notes</FormLabel>
+                  <FormControl><RichTextEditor value={field.value ?? ""} onChange={field.onChange} placeholder="Terms, conditions, or special instructions..." className="min-h-[96px]" /></FormControl>
+                  <FormMessage />
+                </FormItem>
               )} />
+              )}
+              <DocumentAdditionalInfoFields control={form.control} />
             </CardContent>
           </Card>
 

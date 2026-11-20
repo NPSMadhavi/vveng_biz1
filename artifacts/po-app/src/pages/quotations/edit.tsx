@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from "react";
+﻿import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -30,12 +30,11 @@ import { Trash2, Save, ArrowLeft, Eye, Lock, Plus, Layers, AlignLeft, AlignCente
 import { cn, plainText } from "@/lib/utils";
 import type { FieldErrors } from "react-hook-form";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
-import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField } from "@/components/issue-date-field";
 import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
 import { DirectoryPickerButton } from "@/components/directory-picker-button";
-import { emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard, quotationLineAmount } from "@/components/manpower-quotation-fields";
+import { blankManpowerLine, emptyManpowerDetails, manpowerDetailsSchema, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerRequirementsCard, ManpowerCustomerBillingRatesCard, quotationLineAmount } from "@/components/manpower-quotation-fields";
 import { CurrencyMismatchDialog } from "@/components/currency-mismatch-dialog";
 import { generateQuotation_PDF } from "@/lib/pdf";
 import { useAuth } from "@/contexts/auth-context";
@@ -269,10 +268,27 @@ export default function QuotationEdit() {
       return plainText(i.partNumber) !== "" || plainText(i.description) !== "" || (isManpower && Number(i.unitPrice) > 0);
     });
     const realItems = filledItems.filter((i: any) => i.type !== "section");
-    if (realItems.length === 0) {
+    if (realItems.length === 0 && !isManpower) {
       toast({ title: "Error", description: "At least one line item required.", variant: "destructive" });
       setIsSubmitting(false);
       return;
+    }
+    if (isManpower && realItems.length === 0) {
+      const md: any = values.manpowerDetails || {};
+      const designation = String(md.designation || md.employeeNames || "Manpower").trim() || "Manpower";
+      const rate = Number(md.customerRate || md.customerBillingRates?.[0]?.rate || 0) || 0;
+      const workers = Number(md.workers) > 0 ? Number(md.workers) : (Array.isArray(md.employeeIds) && md.employeeIds.length ? md.employeeIds.length : 1);
+      const seedLine = blankManpowerLine({
+        designation,
+        workers: String(workers),
+        hours: String(md.hours || ""),
+        billingType: md.billingType || "Hourly",
+        customerRate: String(rate || md.customerRate || ""),
+        supplierRate: String(md.supplierRate || ""),
+      });
+      values.items = [seedLine];
+      filledItems.length = 0;
+      filledItems.push(seedLine as any);
     }
     const itemsWithAmount = filledItems.map(i => {
       if ((i as any).type === "section") return { type: "section", sectionLabel: (i as any).sectionLabel || "", sectionAlign: (i as any).sectionAlign || "left" };
@@ -606,13 +622,6 @@ export default function QuotationEdit() {
                       </div>
                     </FormItem>
                   )} />
-                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                    <FormItem className={isManpower ? "min-w-0" : "sm:col-span-2"}>
-                      <FormLabel>Delivery Date</FormLabel>
-                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap={isManpower} /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
                   {isManpower && (
                   <FormField control={form.control} name="status" render={({ field }) => (
                     <FormItem className="md:col-span-3">
@@ -647,8 +656,12 @@ export default function QuotationEdit() {
                 }}
               />
             )}
+            {isManpower && (
+              <ManpowerCustomerBillingRatesCard control={form.control} />
+            )}
           </div>
 
+          {!isManpower && (
           <Card className="overflow-hidden">
             <CardHeader className="pb-4 bg-muted/20 border-b">
               <div className="flex items-center justify-between">
@@ -897,10 +910,12 @@ export default function QuotationEdit() {
               </div>
             </CardContent>
           </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-4"><CardTitle className="text-lg">Additional Information</CardTitle></CardHeader>
             <CardContent className="space-y-4">
+              {!isManpower && (
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Internal Notes</FormLabel>
@@ -908,6 +923,7 @@ export default function QuotationEdit() {
                   <FormMessage />
                 </FormItem>
               )} />
+              )}
               
               <DocumentAdditionalInfoFields control={form.control} />
             </CardContent>

@@ -543,6 +543,7 @@ CREATE TABLE IF NOT EXISTS public.employees (
     status text DEFAULT 'active'::text NOT NULL,
     salary text,
     annual_salary text,
+    employment_type text,
     work_type text,
     per_hour_charge text,
     nationality text,

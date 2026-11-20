@@ -1,5 +1,6 @@
 import { useDocNav } from "@/lib/doc-nav";
-import { emptySalesManpower, ManpowerCustomerExtraFields, ManpowerLineItemsTable, ManpowerSalesDateFields, salesManpowerSchema } from "@/components/manpower-quotation-fields";
+import { blankManpowerLine, emptySalesManpower, ManpowerCustomerExtraFields, ManpowerLineItemsTable, salesManpowerSchema, ManpowerCustomerBillingRatesCard, ManpowerRequirementsCard } from "@/components/manpower-quotation-fields";
+import { DocumentAdditionalInfoFields } from "@/components/document-additional-info-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import type { FieldErrors } from "react-hook-form";
@@ -38,7 +39,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { generatePO_PDF } from "@/lib/pdf";
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
 import { QuotationRefSelect } from "@/components/quotation-ref-select";
-import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField, getToday } from "@/components/issue-date-field";
 import { PdfPreviewModal } from "@/components/pdf-preview-modal";
 import { StockItemPickerDialog, type StockItemSelection } from "@/components/stock-item-picker-dialog";
@@ -80,6 +80,8 @@ const poSchema = z.object({
   deliveryDate: z.string().optional(),
   paymentTerms: z.string().optional(),
   notes: z.string().optional(),
+  termsAndConditions: z.string().optional(),
+  authorisedSignature: z.string().optional(),
   currency: z.string().default("SGD"),
   isPrivate: z.boolean().default(false),
   customerId: z.number().nullable().optional(),
@@ -141,11 +143,13 @@ export default function PurchaseOrderNew() {
       deliveryDate: "",
       paymentTerms: "30 Days Net",
       notes: "",
+      termsAndConditions: "",
+      authorisedSignature: "",
       currency: "SGD",
       isPrivate: false,
       customerId: null,
       customerPoRef: "",
-      manpowerDetails: { ...emptySalesManpower },
+      manpowerDetails: { ...emptySalesManpower, source: "supplier" },
       tax: 9,
       items: [{ partNumber: "", description: "", qty: 1, unitPrice: 0, isStockItem: false, itemImage: "" }],
     },
@@ -181,7 +185,7 @@ export default function PurchaseOrderNew() {
   }, [stockPickerIndex]);
 
 
-  const { fields, append, remove, insert } = useFieldArray({
+  const { fields, append, remove, insert, update } = useFieldArray({
     control: form.control,
     name: "items",
   });
@@ -214,11 +218,14 @@ export default function PurchaseOrderNew() {
       deliveryDate: urlSourceQt.deliveryDate || "",
       paymentTerms: urlSourceQt.paymentTerms || "30 Days Net",
       notes: urlSourceQt.notes || "",
+      termsAndConditions: (urlSourceQt as any).termsAndConditions || "",
+      authorisedSignature: (urlSourceQt as any).authorisedSignature || "",
       currency: (urlSourceQt as any).currency || "SGD",
       isPrivate: false,
       customerId: matchedCustomer?.id ?? null,
       customerPoRef: urlSourceQt.qtNumber || "",
       tax: taxPct,
+      manpowerDetails: { ...emptySalesManpower, source: "supplier", ...((urlSourceQt as any).manpowerDetails || {}) },
       items: qtItems.length > 0
         ? qtItems.map((it: any) => ({
             type: it.type || "item",
@@ -306,11 +313,14 @@ export default function PurchaseOrderNew() {
       deliveryDate: prefill.deliveryDate || "",
       paymentTerms: prefill.paymentTerms || "30 Days Net",
       notes: prefill.notes || "",
+      termsAndConditions: prefill.termsAndConditions || "",
+      authorisedSignature: prefill.authorisedSignature || "",
       currency: prefill.currency || "SGD",
       isPrivate: false,
       customerId: matchedCustomer?.id ?? prefill.customerId ?? null,
       customerPoRef: prefill.customerPoRef || "",
       tax: prefill.tax ?? settings?.gstRate ?? 9,
+      manpowerDetails: { ...emptySalesManpower, source: "supplier", ...(prefill.manpowerDetails || {}) },
       items: mappedItems,
     });
 
@@ -401,9 +411,26 @@ export default function PurchaseOrderNew() {
         : (plainText(item.partNumber) !== "" || plainText(item.description) !== "" || (isManpower && Number(item.unitPrice) > 0))
     );
     const realItems = filledItems.filter((item: any) => item.type !== "section");
-    if (realItems.length === 0) {
+    if (realItems.length === 0 && !isManpower) {
       toast({ title: "Error", description: "At least one line item is required.", variant: "destructive" });
       return null;
+    }
+    if (isManpower && realItems.length === 0) {
+      const md = values.manpowerDetails || {};
+      const designation = String((md as any).designation || (md as any).workerNames || (md as any).employeeNames || "Manpower").trim() || "Manpower";
+      const rate = Number((md as any).customerRate || (md as any).supplierRate || (md as any).customerBillingRates?.[0]?.rate || 0) || 0;
+      const workers = Number((md as any).workers) > 0 ? Number((md as any).workers) : 1;
+      const seedLine = blankManpowerLine({
+        designation,
+        workers: String(workers),
+        hours: String((md as any).hours || ""),
+        billingType: (md as any).billingType || "Hourly",
+        customerRate: String((md as any).customerRate || rate || ""),
+        supplierRate: String((md as any).supplierRate || ""),
+      });
+      values.items = [seedLine as any];
+      filledItems.length = 0;
+      filledItems.push(seedLine as any);
     }
     const itemsWithAmount = filledItems.map(item => ({
       ...item,
@@ -418,7 +445,11 @@ export default function PurchaseOrderNew() {
 
     return new Promise<any>((resolve, reject) => {
       createMutation.mutate(
-        { data: (() => { const payload: any = { ...values, items: itemsWithAmount, status, customerId: values.customerId ?? undefined, ...attachment.payload }; payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null; return payload; })() },
+        { data: (() => { const payload: any = { ...values, items: itemsWithAmount, status, customerId: values.customerId ?? undefined, ...attachment.payload }; payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
+      if (isManpower && payload.manpowerDetails && typeof payload.manpowerDetails === "object") {
+        payload.manpowerDetails.source = payload.manpowerDetails.source || "supplier";
+        payload.manpowerDetails.poDate = payload.issueDate || payload.manpowerDetails.poDate || "";
+      } return payload; })() },
         {
           onSuccess: async (data) => {
             // Show the new PO in the list immediately (no manual refresh).
@@ -745,12 +776,13 @@ export default function PurchaseOrderNew() {
  name="quoteRefNo"
  render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Sales Quote Reference No.</FormLabel>
+                      <FormLabel>Purchase Quotations</FormLabel>
                       <FormControl>
                         <QuotationRefSelect
                           value={field.value || ""}
                           onChange={field.onChange}
-                          placeholder="Select sales quote"
+                          placeholder="Select purchase quotation"
+                          source="purchase"
                         />
                       </FormControl>
                       <FormMessage />
@@ -799,32 +831,6 @@ export default function PurchaseOrderNew() {
                   )}
                 />
                 </div>
-                {isManpower && (
-                <ManpowerSalesDateFields control={form.control}>
-                  <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                    <FormItem className="min-w-0">
-                      <FormLabel>Delivery Date</FormLabel>
-                      <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} nowrap /></FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )} />
-                </ManpowerSalesDateFields>
-                )}
-                {!isManpower && (
-                <FormField
- control={form.control}
- name="deliveryDate"
- render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Delivery Date</FormLabel>
-                      <FormControl>
-                        <DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                )}
                 <div className="grid grid-cols-1 md:grid-cols-2">
                 <FormField
  control={form.control}
@@ -842,6 +848,27 @@ export default function PurchaseOrderNew() {
             </Card>
           </div>
 
+          {isManpower && (
+            <ManpowerRequirementsCard
+              control={form.control}
+              supplierOnly
+              onAddLine={(line) => {
+                const current = form.getValues("items") || [];
+                const onlyBlank = current.length === 1
+                  && (current[0] as any)?.type !== "section"
+                  && !String(current[0]?.description || "").trim()
+                  && !String(current[0]?.partNumber || "").trim();
+                if (onlyBlank) update(0, { ...current[0], ...line });
+                else append(line);
+              }}
+            />
+          )}
+
+          {isManpower && (
+            <ManpowerCustomerBillingRatesCard control={form.control} title="Supplier Billing Rates" />
+          )}
+
+          {!isManpower && (
           <Card className="overflow-hidden">
             <CardHeader className="pb-4 bg-muted/20 border-b">
               <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -1065,8 +1092,25 @@ export default function PurchaseOrderNew() {
               </div>
             </div>
           </Card>
+          )}
 
           {attachment.node}
+
+          <Card>
+            <CardHeader className="pb-4"><CardTitle className="text-lg">Additional Information</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              {!isManpower && (
+              <FormField control={form.control} name="notes" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Internal Notes</FormLabel>
+                  <FormControl><RichTextEditor value={field.value ?? ""} onChange={field.onChange} placeholder="Terms, conditions, or special instructions..." className="min-h-[96px]" /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              )}
+              <DocumentAdditionalInfoFields control={form.control} />
+            </CardContent>
+          </Card>
 
           <FormStickyActions>
             <Button type="button" variant="outline" onClick={() => setLocation("/purchase-orders")}>

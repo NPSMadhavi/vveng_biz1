@@ -450,7 +450,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const { user, hasModuleAccess, selectedCompany, isAdmin } = useAuth();
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [openGroup, setOpenGroup] = React.useState<string | null>(null);
-  const [txnBranch, setTxnBranch] = React.useState({ general: false, manpower: false });
+  const [txnBranch, setTxnBranch] = React.useState({ general: false, manpower: true });
   const [collapsed, setCollapsed] = React.useState(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "true"; } catch { return false; }
   });
@@ -695,6 +695,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         visible
         hasActive={isGeneralTransaction(location) || location.startsWith("/manpower")}
       >
+{false && (
         <TxnBranch
           label="General"
           open={txnBranch.general}
@@ -784,6 +785,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
           )}
         </TxnBranch>
 
+)}
+
         <TxnBranch
           label="Man power supply"
           open={txnBranch.manpower}
@@ -804,9 +807,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <NavItem href="/manpower/suppliers/purchase-orders" icon={FileText} active={location.startsWith("/manpower/suppliers/purchase-orders")} inGroup>
             Purchase order
           </NavItem>
-          <NavItem href="/manpower/suppliers/employee-deployment" icon={UserCheck} active={location.startsWith("/manpower/suppliers/employee-deployment")} inGroup>
-            Employee Deployment
-          </NavItem>
           <NavItem href="/manpower/suppliers/timesheets" icon={Clock} active={location.startsWith("/manpower/suppliers/timesheets")} inGroup>
             Time Sheet Management
           </NavItem>
@@ -822,9 +822,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </NavItem>
           <NavItem href="/manpower/customers/sales-orders" icon={ShoppingBag} active={location.startsWith("/manpower/customers/sales-orders")} inGroup>
             Sales order
-          </NavItem>
-          <NavItem href="/manpower/customers/employee-deployment" icon={UserCheck} active={location.startsWith("/manpower/customers/employee-deployment")} inGroup>
-            Employee Deployment
           </NavItem>
           <NavItem href="/manpower/customers/timesheets" icon={Clock} active={location.startsWith("/manpower/customers/timesheets")} inGroup>
             Time Sheet Management
@@ -878,7 +875,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         icon={Package}
         isOpen={openGroup === "inventory"}
         onToggle={toggleGroup}
-        visible={hasInventory}
+        visible={false}
         hasActive={location.startsWith("/stock") || location.startsWith("/inventory")}
       >
         {hasModuleAccess("warehouses") && (

@@ -258,7 +258,7 @@ export default function TimesheetReport({ side }: { side: DeploymentSide }) {
     const deployments = loadDeployments();
     return sheets
       .filter((row) => row.side === side && sameId(row.companyId, companyId))
-      .map((row) => toReportRow(row, deployments, employees));
+      .flatMap((row) => toReportRows(row, deployments, employees));
   }, [sheets, side, companyId, employees]);
 
   const filtered = useMemo(() => {
@@ -608,38 +608,68 @@ function TrendTick({ x = 0, y = 0, payload }: { x?: number; y?: number; payload?
   );
 }
 
-function toReportRow(row: Timesheet, deployments: ReturnType<typeof loadDeployments>, employees: EmployeeRow[]): ReportRow {
+function designationFromLabel(label: string) {
+  const parts = label.split(/—|–/).map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : "";
+}
+
+function toReportRows(row: Timesheet, deployments: ReturnType<typeof loadDeployments>, employees: EmployeeRow[]): ReportRow[] {
   const deployment = resolveDeployment(row, deployments);
-  const ids = row.employeeId.split(",").map((item) => item.trim()).filter(Boolean);
-  const employee = employees.find((item) => ids.includes(String(item.id)) || (item.employeeId && ids.includes(String(item.employeeId))));
-  const normal = Number(row.normalHours) || 0;
-  const ot = Number(row.overtimeHours) || 0;
   const rate = parseRate(row.billingRate) || parseRate(deployment?.billingRate) || parseRate(deployment?.payRate);
   const otRate = parseRate(row.otBillingRate) || (rate > 0 ? rate * 1.5 : 0);
-  const normalAmount = Math.round(normal * rate * 100) / 100;
-  const otAmount = Math.round(ot * otRate * 100) / 100;
-  const totalAmount = Math.round((normalAmount + otAmount) * 100) / 100;
-  return {
-    id: row.id,
-    employeeName: employeeName(row.employeeLabel),
-    designation: deployment?.designation || employee?.designation || "—",
-    department: employee?.department || "—",
-    dateIso: row.workDate.slice(0, 10),
-    dateLabel: slashDate(row.workDate),
-    checkIn: clockLabel(row.timeIn),
-    checkOut: clockLabel(row.timeOut),
-    normal,
-    ot,
-    total: normal + ot,
-    rate,
-    otRate,
-    normalAmount,
-    otAmount,
-    totalAmount,
-    status: row.status,
-    absent: String(row.dayType || "").toLowerCase().includes("absent"),
-    partyName: row.partyName || "—",
-  };
+
+  const entryList = Array.isArray(row.entries) && row.entries.length > 0
+    ? row.entries
+    : [{
+        id: row.id,
+        employeeId: row.employeeId,
+        employeeLabel: row.employeeLabel,
+        workLocation: row.workLocation,
+        workDate: row.workDate,
+        timeIn: row.timeIn,
+        timeOut: row.timeOut,
+        breakHours: row.breakHours,
+        normalHours: row.normalHours,
+        overtimeHours: row.overtimeHours,
+        dayType: row.dayType,
+      }];
+
+  return entryList.map((entry, index) => {
+    const ids = String(entry.employeeId || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const employee = employees.find((item) =>
+      ids.includes(String(item.id)) || (item.employeeId && ids.includes(String(item.employeeId))),
+    );
+    const normal = Number(entry.normalHours) || 0;
+    const ot = Number(entry.overtimeHours) || 0;
+    const normalAmount = Math.round(normal * rate * 100) / 100;
+    const otAmount = Math.round(ot * otRate * 100) / 100;
+    const totalAmount = Math.round((normalAmount + otAmount) * 100) / 100;
+    const workDate = String(entry.workDate || row.workDate || "").slice(0, 10);
+    return {
+      id: `${row.id}-${entry.id || index}`,
+      employeeName: employeeName(entry.employeeLabel || employee?.name || ""),
+      designation: deployment?.designation || employee?.designation || designationFromLabel(entry.employeeLabel || "") || "—",
+      department: employee?.department || "—",
+      dateIso: workDate,
+      dateLabel: slashDate(workDate),
+      checkIn: clockLabel(entry.timeIn || row.timeIn),
+      checkOut: clockLabel(entry.timeOut || row.timeOut),
+      normal,
+      ot,
+      total: normal + ot,
+      rate,
+      otRate,
+      normalAmount,
+      otAmount,
+      totalAmount,
+      status: row.status,
+      absent: String(entry.dayType || row.dayType || "").toLowerCase().includes("absent"),
+      partyName: row.partyName || "—",
+    };
+  });
 }
 
 function unique(values: string[]) {

@@ -627,7 +627,12 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       data.payPeriodEnd
     );
 
-    if (existingRecord) {
+    // Add Payroll saves a draft/pending month snapshot — that is NOT Process Payroll yet.
+    const existingStatus = String((existingRecord as any)?.status || "").toLowerCase();
+    const isFinalized =
+      !!existingRecord && (existingStatus === "processed" || existingStatus === "paid");
+
+    if (isFinalized) {
       openProcessedDialog(
         data,
         hasPayrollDataChanged(config, existingRecord, 0) ? "overwrite" : "no-changes"
@@ -636,7 +641,10 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     }
 
     setPendingFormData(data);
-    processPayrollMutation.mutate(data);
+    processPayrollMutation.mutate({
+      ...data,
+      forceOverwrite: existingRecord ? true : data.forceOverwrite,
+    });
   };
 
   const handleProcessClick = () => {
@@ -681,8 +689,14 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
     if (Number(formData.employeeId) === ALL_EMPLOYEES_ID) {
       if (processedDialogMode === "pending") {
         processPayrollMutation.mutate({ ...formData, processScope: "pending" });
+      } else if (processedDialogMode === "overwrite") {
+        processPayrollMutation.mutate({ ...formData, forceOverwrite: true, processScope: "changed" });
       }
       return;
+    }
+
+    if (processedDialogMode === "overwrite") {
+      processPayrollMutation.mutate({ ...formData, forceOverwrite: true });
     }
   };
 
@@ -729,7 +743,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-3">
         <div className="lg:col-span-2 min-w-0 max-w-2xl">
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8 [&_input:not([type=checkbox]):not([type=radio])]:rounded-lg [&_input:not([type=checkbox]):not([type=radio])]:border-[#E5E7EB] [&_input:not([type=checkbox]):not([type=radio])]:bg-[#F8FAFC] [&_input:not([type=checkbox]):not([type=radio])]:shadow-none [&_textarea]:rounded-lg [&_textarea]:border-[#E5E7EB] [&_textarea]:bg-[#F8FAFC] [&_textarea]:shadow-none [&_[role=combobox]]:rounded-lg [&_[role=combobox]]:border-[#E5E7EB] [&_[role=combobox]]:bg-[#F8FAFC] [&_[role=combobox]]:shadow-none">
+            <form onSubmit={(event) => { event.preventDefault(); }} className="space-y-8 [&_input:not([type=checkbox]):not([type=radio])]:rounded-lg [&_input:not([type=checkbox]):not([type=radio])]:border-[#E5E7EB] [&_input:not([type=checkbox]):not([type=radio])]:bg-[#F8FAFC] [&_input:not([type=checkbox]):not([type=radio])]:shadow-none [&_textarea]:rounded-lg [&_textarea]:border-[#E5E7EB] [&_textarea]:bg-[#F8FAFC] [&_textarea]:shadow-none [&_[role=combobox]]:rounded-lg [&_[role=combobox]]:border-[#E5E7EB] [&_[role=combobox]]:bg-[#F8FAFC] [&_[role=combobox]]:shadow-none">
               <section className="space-y-4">
                 <ModalSectionHeader icon={User} title="Employee & Pay Period" />
                 <div className="space-y-4 max-w-2xl">
@@ -1109,7 +1123,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                 : "Payroll Already Processed"}
             </DialogTitle>
             <div className="space-y-2 pt-2 text-sm text-gray-600">
-              {processedDialogMode === "pending" ? (
+              {processedDialogMode === "pending" || processedDialogMode === "overwrite" ? (
                 <p>
                   Payroll for{" "}
                   <span className="font-semibold text-gray-900">{dialogMonthLabel}</span> is not
@@ -1145,7 +1159,11 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                   onClick={handleConfirmOverwrite}
                   disabled={processPayrollMutation.isPending}
                 >
-                  {processPayrollMutation.isPending ? "Processing..." : "Yes, Proceed"}
+                  {processPayrollMutation.isPending
+                    ? "Processing..."
+                    : processedDialogMode === "overwrite"
+                      ? "Yes, Overwrite"
+                      : "Yes, Proceed"}
                 </Button>
               </>
             ) : (

@@ -1,11 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { z } from "zod";
-import { useFormContext, useWatch, type Control } from "react-hook-form";
+import { useFieldArray, useFormContext, useWatch, type Control } from "react-hook-form";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2 } from "lucide-react";
+import { ChevronDown, Trash2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,10 +21,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 
 export const BILLING_TYPES = ["Hourly", "Daily", "Monthly"];
+export const EXTRA_WORK_TYPES = ["Selection", "Rest Day", "Public Holiday"];
 const CREATE_DESIGNATION = "__create__";
+const CREATE_WORKER = "__create_worker__";
+
+/** OT rate = base × 1.5 (2 d.p.). Empty/invalid base → "". */
+export function otRateFromBase(raw: string): string {
+  const n = Number(String(raw || "").replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return "";
+  return String(Math.round(n * 1.5 * 100) / 100);
+}
 
 export const manpowerDetailsSchema = z.object({
   phone: z.string().optional(),
+  project: z.string().optional(),
   workLocation: z.string().optional(),
   serviceStartDate: z.string().optional(),
   serviceEndDate: z.string().optional(),
@@ -24,17 +42,29 @@ export const manpowerDetailsSchema = z.object({
   designation: z.string().optional(),
   workers: z.string().optional(),
   hours: z.string().optional(),
+  employeeIds: z.array(z.coerce.number()).optional(),
+  employeeNames: z.string().optional(),
+  workerNames: z.string().optional(),
+  extraWorkType: z.string().optional(),
   billingType: z.string().optional(),
   customerRate: z.string().optional(),
+  customerRateOt15: z.string().optional(),
+  customerRateGst: z.string().optional(),
+  customerBillingRates: z.array(z.object({
+    category: z.string(),
+    rate: z.string().optional(),
+    gst: z.string().optional(),
+  })).optional(),
   standardHours: z.string().optional(),
   weekdayOtRate: z.string().optional(),
   supplierRate: z.string().optional(),
   workingDates: z.string().optional(),
   otSupplierRate: z.string().optional(),
-});
+}).passthrough();
 
 export const emptyManpowerDetails = {
   phone: "",
+  project: "",
   workLocation: "",
   serviceStartDate: "",
   serviceEndDate: "",
@@ -42,8 +72,18 @@ export const emptyManpowerDetails = {
   designation: "",
   workers: "",
   hours: "",
+  employeeIds: [] as number[],
+  employeeNames: "",
+  workerNames: "",
+  extraWorkType: "",
   billingType: "Hourly",
   customerRate: "",
+  customerRateOt15: "",
+  customerRateGst: "Applicable",
+  customerBillingRates: [
+    { category: "Normal Hour", rate: "", gst: "Applicable" },
+    { category: "OT 1.5x", rate: "", gst: "Applicable" },
+  ],
   standardHours: "8",
   weekdayOtRate: "",
   supplierRate: "",
@@ -112,7 +152,7 @@ export function ManpowerCustomerExtraFields({ control, addressName = "customerAd
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <FormField control={control} name="manpowerDetails.phone" render={({ field }) => (
         <FormItem>
-          <FormLabel>Phone Number</FormLabel>
+          <FormLabel>Contact Number</FormLabel>
           <FormControl><Input {...field} value={field.value || ""} /></FormControl>
           <FormMessage />
         </FormItem>
@@ -285,15 +325,16 @@ export function quotationLineAmount(item: {
   const hours = Number(item?.hours) || 0;
   const uom = String(item?.uom || "").toLowerCase();
   const hourly = uom.startsWith("hour") || uom === "hr" || uom === "hrs";
-  // Hourly: Amount = workers × hours × rate (auto). Daily/Monthly: workers × rate.
-  const factor = hourly ? (hours > 0 ? hours : 0) : 1;
+  // Hourly: Amount = hours × rate (workers are headcount only, not multiplied).
+  // Daily/Monthly: Amount = workers × rate.
   const disc = Number(item?.discount) || 0;
   const qty = Number(item?.qty) || 0;
   const price = Number(item?.unitPrice) || 0;
-  return Math.round(qty * factor * price * (1 - disc / 100) * 100) / 100;
+  const base = hourly ? (hours > 0 ? hours : 0) : qty;
+  return Math.round(base * price * (1 - disc / 100) * 100) / 100;
 }
 
-function blankManpowerLine(details: {
+export function blankManpowerLine(details: {
   designation: string;
   workers?: string;
   hours?: string;
@@ -324,28 +365,47 @@ export function ManpowerRequirementsCard({
   control,
   onAddLine,
   supplierOnly = false,
+  hideSource = false,
 }: {
   control: Control<any>;
   onAddLine?: (line: ReturnType<typeof blankManpowerLine>) => void;
   /** Vendor quotations: only Supplier Manpower (no Own Employees). */
   supplierOnly?: boolean;
+  /** Sales orders: hide Own/Supplier radio; always Own Employees. */
+  hideSource?: boolean;
 }) {
   const { getValues, setValue } = useFormContext();
   const watchedSource = useWatch({ control, name: "manpowerDetails.source" });
-  const source = supplierOnly ? "supplier" : (watchedSource || "own");
+  const source = supplierOnly ? "supplier" : hideSource ? "own" : (watchedSource || "own");
   const showSupplierFields = source === "supplier";
+  const showEmployeePicker = !supplierOnly && source === "own";
 
   useEffect(() => {
-    if (!supplierOnly) return;
-    if (watchedSource !== "supplier") {
-      setValue("manpowerDetails.source", "supplier", { shouldDirty: false });
+    if (supplierOnly) {
+      if (watchedSource !== "supplier") {
+        setValue("manpowerDetails.source", "supplier", { shouldDirty: false });
+      }
+      return;
     }
-  }, [supplierOnly, watchedSource, setValue]);
+    if (hideSource && watchedSource !== "own") {
+      setValue("manpowerDetails.source", "own", { shouldDirty: false });
+    }
+  }, [supplierOnly, hideSource, watchedSource, setValue]);
+
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
   const draftNameRef = useRef("");
   const [created, setCreated] = useState<string[]>([]);
   const [addError, setAddError] = useState("");
+  const [creatingWorker, setCreatingWorker] = useState(false);
+  const [draftWorkerName, setDraftWorkerName] = useState("");
+  const draftWorkerNameRef = useRef("");
+  const [createdWorkers, setCreatedWorkers] = useState<string[]>([]);
+  const [workerError, setWorkerError] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [draftIds, setDraftIds] = useState<number[]>([]);
+
+  const selectedIds = (useWatch({ control, name: "manpowerDetails.employeeIds" }) || []) as number[];
   const lineItems = useWatch({ control, name: "items" }) || [];
   const designationOptions = useMemo(() => {
     const fromLines = (lineItems as Array<{ description?: string }>)
@@ -353,6 +413,62 @@ export function ManpowerRequirementsCard({
       .filter(Boolean);
     return Array.from(new Set([...created, ...fromLines]));
   }, [created, lineItems]);
+
+  const { data: employees = [], isLoading: employeesLoading, isError: employeesError } = useQuery({
+    queryKey: ["quotation-manpower-employees"],
+    queryFn: fetchQuotationEmployees,
+    enabled: showEmployeePicker || pickerOpen,
+  });
+
+  const employeeRows = useMemo(
+    () =>
+      [...employees].sort((a, b) =>
+        String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" }),
+      ),
+    [employees],
+  );
+
+  const selectedSummary = useMemo(() => {
+    const names = employeeRows
+      .filter((e) => selectedIds.includes(Number(e.id)))
+      .map((e) => e.name || String(e.employeeId || e.id));
+    if (names.length) return names.join(", ");
+    if (selectedIds.length) return selectedIds.length + " employee" + (selectedIds.length === 1 ? "" : "s") + " selected";
+    return "";
+  }, [employeeRows, selectedIds]);
+
+  const applyEmployeeSelection = (ids: number[]) => {
+    setValue("manpowerDetails.employeeIds", ids, { shouldDirty: true });
+    const picked = employeeRows.filter((e) => ids.includes(Number(e.id)));
+    const names = picked.map((e) => e.name || String(e.employeeId || e.id)).filter(Boolean);
+    const designations = Array.from(
+      new Set(picked.map((e) => String(e.designation || "").trim()).filter(Boolean)),
+    );
+    setValue("manpowerDetails.employeeNames", names.join(", "), { shouldDirty: true });
+    setValue("manpowerDetails.designation", designations.join(", "), { shouldDirty: true });
+    if (ids.length > 0) {
+      setValue("manpowerDetails.workers", String(ids.length), { shouldDirty: true });
+    }
+    setCreating(false);
+    setDraftName("");
+    draftNameRef.current = "";
+  };
+
+  const openPicker = () => {
+    setDraftIds(selectedIds.map(Number).filter((n) => Number.isFinite(n)));
+    setPickerOpen(true);
+  };
+
+  const toggleDraft = (id: number) => {
+    setDraftIds((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    );
+  };
+
+  const confirmPicker = () => {
+    applyEmployeeSelection(draftIds);
+    setPickerOpen(false);
+  };
 
   const addingRef = useRef(false);
   const addDesignationToLines = (nameOverride?: string) => {
@@ -407,6 +523,7 @@ export function ManpowerRequirementsCard({
         <CardTitle className="text-lg">Manpower Requirements</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {!hideSource && (
         <FormField control={control} name="manpowerDetails.source" render={({ field }) => (
           <FormItem className={supplierOnly ? "w-full max-w-[240px]" : undefined}>
             <FormLabel>Manpower Source</FormLabel>
@@ -430,11 +547,105 @@ export function ManpowerRequirementsCard({
             </FormControl>
           </FormItem>
         )} />
-        <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-3">
-        <FormField control={control} name="manpowerDetails.designation" render={({ field }) => (
-          <FormItem className="min-w-0">
-            <FormLabel>Designation</FormLabel>
-              {creating ? (
+        )}
+
+        <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-4">
+          {showEmployeePicker ? (
+            <FormItem>
+              <FormLabel>Select Employee</FormLabel>
+              <button
+                type="button"
+                onClick={openPicker}
+                className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 text-left text-sm"
+              >
+                <span className={selectedSummary ? "truncate text-foreground" : "truncate text-muted-foreground"}>
+                  {selectedSummary || "Select employees"}
+                </span>
+                <ChevronDown className="ml-2 h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+            </FormItem>
+          ) : (
+            <FormField control={control} name="manpowerDetails.workerNames" render={({ field }) => (
+              <FormItem className="min-w-0">
+                <FormLabel>Workers Name</FormLabel>
+                {creatingWorker ? (
+                  <FormControl>
+                    <Input
+                      autoFocus
+                      placeholder="Type worker name"
+                      value={draftWorkerName}
+                      onChange={(event) => {
+                        draftWorkerNameRef.current = event.target.value;
+                        setDraftWorkerName(event.target.value);
+                        setWorkerError("");
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        const name = String(draftWorkerNameRef.current || draftWorkerName || "").trim();
+                        if (!name || name === CREATE_WORKER) {
+                          setWorkerError("Enter a worker name, then press Enter.");
+                          return;
+                        }
+                        setCreatedWorkers((current) => (current.includes(name) ? current : [...current, name]));
+                        const existing = String(field.value || "")
+                          .split(",")
+                          .map((v) => v.trim())
+                          .filter(Boolean);
+                        const next = existing.includes(name) ? existing : [...existing, name];
+                        field.onChange(next.join(", "));
+                        draftWorkerNameRef.current = "";
+                        setDraftWorkerName("");
+                        setCreatingWorker(false);
+                        setWorkerError("");
+                      }}
+                    />
+                  </FormControl>
+                ) : (
+                  <Select
+                    value={undefined}
+                    onValueChange={(value) => {
+                      setWorkerError("");
+                      if (value === CREATE_WORKER) {
+                        setCreatingWorker(true);
+                        draftWorkerNameRef.current = "";
+                        setDraftWorkerName("");
+                        return;
+                      }
+                      const existing = String(field.value || "")
+                        .split(",")
+                        .map((v) => v.trim())
+                        .filter(Boolean);
+                      const next = existing.includes(value) ? existing : [...existing, value];
+                      field.onChange(next.join(", "));
+                    }}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder={field.value ? String(field.value) : "Create worker name"} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value={CREATE_WORKER}>Create</SelectItem>
+                      {createdWorkers.map((item) => (
+                        <SelectItem key={item} value={item}>{item}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {workerError ? <p className="text-sm font-medium text-destructive">{workerError}</p> : null}
+              </FormItem>
+            )} />
+          )}
+
+          <FormField control={control} name="manpowerDetails.designation" render={({ field }) => (
+            <FormItem className="min-w-0">
+              <FormLabel>Designation</FormLabel>
+              {showEmployeePicker ? (
+                <FormControl>
+                  <Input {...field} value={field.value || ""} placeholder="Auto from employees" onKeyDown={addOnEnter} />
+                </FormControl>
+              ) : creating ? (
                 <FormControl>
                   <Input
                     autoFocus
@@ -473,22 +684,34 @@ export function ManpowerRequirementsCard({
                   </SelectContent>
                 </Select>
               )}
-            {addError ? <p className="text-sm font-medium text-destructive">{addError}</p> : null}
-          </FormItem>
-        )} />
+              {addError ? <p className="text-sm font-medium text-destructive">{addError}</p> : null}
+            </FormItem>
+          )} />
+
           <FormField control={control} name="manpowerDetails.workers" render={({ field }) => (
             <FormItem>
               <FormLabel>Number of Workers</FormLabel>
               <FormControl><Input inputMode="numeric" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
             </FormItem>
           )} />
-          <FormField control={control} name="manpowerDetails.hours" render={({ field }) => (
+
+          <FormField control={control} name="manpowerDetails.extraWorkType" render={({ field }) => (
             <FormItem>
-              <FormLabel>Number of Hours</FormLabel>
-              <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
+              <FormLabel>Extra Work Type</FormLabel>
+              <Select value={field.value || undefined} onValueChange={field.onChange}>
+                <FormControl>
+                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {EXTRA_WORK_TYPES.map((item) => (
+                    <SelectItem key={item} value={item}>{item}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </FormItem>
           )} />
         </div>
+
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <FormField control={control} name="manpowerDetails.billingType" render={({ field }) => (
             <FormItem>
@@ -505,8 +728,22 @@ export function ManpowerRequirementsCard({
           )} />
           <FormField control={control} name="manpowerDetails.customerRate" render={({ field }) => (
             <FormItem>
-              <FormLabel>Customer Rate (SGD)</FormLabel>
-              <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
+              <FormLabel>Customer Billing Rate</FormLabel>
+              <FormControl>
+                <Input
+                  inputMode="decimal"
+                  {...field}
+                  value={field.value || ""}
+                  onKeyDown={addOnEnter}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    field.onChange(v);
+                    const ot = otRateFromBase(v);
+                    setValue("manpowerDetails.weekdayOtRate", ot, { shouldDirty: true });
+                    setValue("manpowerDetails.customerRateOt15", ot, { shouldDirty: true });
+                  }}
+                />
+              </FormControl>
             </FormItem>
           )} />
           <FormField control={control} name="manpowerDetails.standardHours" render={({ field }) => (
@@ -517,52 +754,366 @@ export function ManpowerRequirementsCard({
           )} />
           <FormField control={control} name="manpowerDetails.weekdayOtRate" render={({ field }) => (
             <FormItem className="min-w-0">
-              <FormLabel>OT Customer Rate</FormLabel>
+              <FormLabel>Customer OT Rate</FormLabel>
               <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
             </FormItem>
           )} />
         </div>
-          {showSupplierFields && (
+
+                {showSupplierFields && (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          <FormField control={control} name="manpowerDetails.supplierRate" render={({ field }) => (
-            <FormItem className="min-w-0">
-              <FormLabel>Supplier Rate</FormLabel>
-              <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
-            </FormItem>
-          )} />
-          <FormField control={control} name="manpowerDetails.workingDates" render={({ field }) => (
-            <FormItem className="min-w-0">
-              <FormLabel>Working Days</FormLabel>
-              <FormControl><Input {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
-            </FormItem>
-          )} />
-          <FormField control={control} name="manpowerDetails.otSupplierRate" render={({ field }) => (
-            <FormItem className="min-w-0">
-              <FormLabel>OT Supplier Rate</FormLabel>
-              <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
-            </FormItem>
-          )} />
+            <FormField control={control} name="manpowerDetails.supplierRate" render={({ field }) => (
+              <FormItem className="min-w-0">
+                <FormLabel>Supplier Rate</FormLabel>
+                <FormControl>
+                  <Input
+                    inputMode="decimal"
+                    {...field}
+                    value={field.value || ""}
+                    onKeyDown={addOnEnter}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      field.onChange(v);
+                      setValue("manpowerDetails.otSupplierRate", otRateFromBase(v), { shouldDirty: true });
+                    }}
+                  />
+                </FormControl>
+              </FormItem>
+            )} />
+            <FormField control={control} name="manpowerDetails.workingDates" render={({ field }) => (
+              <FormItem className="min-w-0">
+                <FormLabel>Working Days</FormLabel>
+                <FormControl><Input {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
+              </FormItem>
+            )} />
+            <FormField control={control} name="manpowerDetails.otSupplierRate" render={({ field }) => (
+              <FormItem className="min-w-0">
+                <FormLabel>OT Supplier Rate</FormLabel>
+                <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
+              </FormItem>
+            )} />
           </div>
-          )}
+        )}
+
+        <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
+          <DialogContent className="z-[80] flex max-h-[80vh] max-w-lg flex-col gap-4">
+            <DialogHeader>
+              <DialogTitle>Select Employees</DialogTitle>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-md border">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-muted">
+                  <tr className="border-b text-left">
+                    <th className="w-12 px-3 py-2" />
+                    <th className="px-3 py-2 font-medium">Employee Name</th>
+                    <th className="px-3 py-2 font-medium">Designation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {employeesLoading ? (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-6 text-center text-muted-foreground">Loading employees…</td>
+                    </tr>
+                  ) : employeesError ? (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-6 text-center text-destructive">Could not load employees.</td>
+                    </tr>
+                  ) : employeeRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-3 py-6 text-center text-muted-foreground">No employees found.</td>
+                    </tr>
+                  ) : (
+                    employeeRows.map((employee) => {
+                      const id = Number(employee.id);
+                      const checked = draftIds.includes(id);
+                      return (
+                        <tr
+                          key={id}
+                          className="cursor-pointer border-b last:border-0 hover:bg-muted/40"
+                          onClick={() => toggleDraft(id)}
+                        >
+                          <td className="px-3 py-2">
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() => toggleDraft(id)}
+                              onClick={(event) => event.stopPropagation()}
+                              aria-label={"Select " + (employee.name || "employee")}
+                            />
+                          </td>
+                          <td className="px-3 py-2">{employee.name || "—"}</td>
+                          <td className="px-3 py-2">{employee.designation || "—"}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setPickerOpen(false)}>Cancel</Button>
+              <Button type="button" onClick={confirmPicker} disabled={draftIds.length === 0}>
+                Select{draftIds.length ? " (" + draftIds.length + ")" : ""}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );
 }
 
+type QuotationEmployeeOption = {
+  id: number;
+  name?: string | null;
+  employeeId?: string | null;
+  designation?: string | null;
+  perHourCharge?: string | number | null;
+};
+
+async function fetchQuotationEmployees(): Promise<QuotationEmployeeOption[]> {
+  const res = await fetch("/api/employees", { credentials: "include" });
+  if (!res.ok) throw new Error("Failed to load employees");
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+export function ManpowerCustomerBillingRatesCard({ control, title = "Customer Billing Rates" }: { control: Control<any>; title?: string }) {
+  const { setValue, getValues } = useFormContext();
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: "manpowerDetails.customerBillingRates",
+  });
+
+  const customerRate = useWatch({ control, name: "manpowerDetails.customerRate" }) || "";
+  const customerRateOt15 = useWatch({ control, name: "manpowerDetails.customerRateOt15" }) || "";
+  const weekdayOtRate = useWatch({ control, name: "manpowerDetails.weekdayOtRate" }) || "";
+  const customerRateGst = useWatch({ control, name: "manpowerDetails.customerRateGst" }) || "Applicable";
+  const syncingFromLegacy = useRef(false);
+
+  useEffect(() => {
+    const normal = String(customerRate || "");
+    const ot15 = String(customerRateOt15 || weekdayOtRate || "");
+    const gst = String(customerRateGst || "Applicable");
+    const current = getValues("manpowerDetails.customerBillingRates");
+    const rows = Array.isArray(current) ? [...current] : [];
+    while (rows.length < 2) {
+      rows.push({
+        category: rows.length === 0 ? "Normal Hour" : "OT 1.5x",
+        rate: "",
+        gst: "Applicable",
+      });
+    }
+    const next0 = {
+      ...rows[0],
+      category: rows[0]?.category || "Normal Hour",
+      rate: normal,
+      gst: rows[0]?.gst || gst,
+    };
+    const next1 = {
+      ...rows[1],
+      category: rows[1]?.category || "OT 1.5x",
+      rate: ot15,
+      gst: rows[1]?.gst || "Applicable",
+    };
+    if (String(rows[0]?.rate || "") === next0.rate && String(rows[1]?.rate || "") === next1.rate && rows.length >= 2) {
+      return;
+    }
+    syncingFromLegacy.current = true;
+    rows[0] = next0;
+    rows[1] = next1;
+    setValue("manpowerDetails.customerBillingRates", rows, { shouldDirty: false });
+    queueMicrotask(() => { syncingFromLegacy.current = false; });
+  }, [customerRate, customerRateOt15, weekdayOtRate, customerRateGst, getValues, setValue]);
+
+  const syncLegacyRates = (index: number, rate: string) => {
+    if (syncingFromLegacy.current) return;
+    if (index === 0) {
+      setValue("manpowerDetails.customerRate", rate, { shouldDirty: true });
+      const ot = otRateFromBase(rate);
+      setValue("manpowerDetails.customerRateOt15", ot, { shouldDirty: true });
+      setValue("manpowerDetails.weekdayOtRate", ot, { shouldDirty: true });
+      const rows = getValues("manpowerDetails.customerBillingRates");
+      if (Array.isArray(rows) && rows[1]) {
+        syncingFromLegacy.current = true;
+        const next = [...rows];
+        next[1] = { ...next[1], rate: ot };
+        setValue("manpowerDetails.customerBillingRates", next, { shouldDirty: true });
+        queueMicrotask(() => { syncingFromLegacy.current = false; });
+      }
+    }
+    if (index === 1) {
+      setValue("manpowerDetails.customerRateOt15", rate, { shouldDirty: true });
+      setValue("manpowerDetails.weekdayOtRate", rate, { shouldDirty: true });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-lg">{title}</CardTitle>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => append({ category: "", rate: "", gst: "Applicable" })}
+          >
+            + Add Line
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-hidden rounded-b-lg border-t border-[#E5E7EB]">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#E5E7EB] bg-[#DBEAFE] text-left">
+                <th className="px-4 py-2.5 font-semibold text-[#1E3A5F]">Category</th>
+                <th className="px-4 py-2.5 font-semibold text-[#1E3A5F]">Rate (SGD / Hour)</th>
+                <th className="px-4 py-2.5 font-semibold text-[#1E3A5F]">GST</th>
+                <th className="w-10" />
+              </tr>
+            </thead>
+            <tbody>
+              {fields.map((row, index) => (
+                <tr key={row.id} className="border-b border-[#E5E7EB] bg-white last:border-0">
+                  <td className="px-4 py-2">
+                    <FormField control={control} name={`manpowerDetails.customerBillingRates.${index}.category`} render={({ field }) => (
+                      <FormItem className="space-y-0">
+                        <FormControl>
+                          <Input className="h-9" placeholder="Category" {...field} value={field.value || ""} />
+                        </FormControl>
+                      </FormItem>
+                    )} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <FormField control={control} name={`manpowerDetails.customerBillingRates.${index}.rate`} render={({ field }) => (
+                      <FormItem className="space-y-0">
+                        <FormControl>
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">$</span>
+                            <Input
+                              inputMode="decimal"
+                              className="h-9 max-w-[160px]"
+                              placeholder="0.00"
+                              name={field.name}
+                              ref={field.ref}
+                              onBlur={field.onBlur}
+                              value={field.value || ""}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v !== "" && !/^\d*\.?\d*$/.test(v)) return;
+                                field.onChange(v);
+                                syncLegacyRates(index, v);
+                              }}
+                            />
+                          </div>
+                        </FormControl>
+                      </FormItem>
+                    )} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <FormField control={control} name={`manpowerDetails.customerBillingRates.${index}.gst`} render={({ field }) => (
+                      <FormItem className="space-y-0">
+                        <Select value={field.value || "Applicable"} onValueChange={field.onChange}>
+                          <FormControl>
+                            <SelectTrigger className="h-9 w-[140px]">
+                              <SelectValue placeholder="GST" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="Applicable">Applicable</SelectItem>
+                            <SelectItem value="Not Applicable">Not Applicable</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FormItem>
+                    )} />
+                  </td>
+                  <td className="px-2 py-2">
+                    {fields.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        onClick={() => remove(index)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+
 export const salesManpowerSchema = z.object({
   customerPoNumber: z.string().optional(),
   customerPoDate: z.string().optional(),
   workLocation: z.string().optional(),
+  project: z.string().optional(),
+  poDate: z.string().optional(),
   poStartDate: z.string().optional(),
   poEndDate: z.string().optional(),
-});
+  source: z.enum(["own", "supplier"]).optional(),
+  designation: z.string().optional(),
+  workers: z.string().optional(),
+  hours: z.string().optional(),
+  employeeIds: z.array(z.coerce.number()).optional(),
+  employeeNames: z.string().optional(),
+  workerNames: z.string().optional(),
+  extraWorkType: z.string().optional(),
+  billingType: z.string().optional(),
+  customerRate: z.string().optional(),
+  customerRateOt15: z.string().optional(),
+  customerRateGst: z.string().optional(),
+  customerBillingRates: z.array(z.object({
+    category: z.string(),
+    rate: z.string().optional(),
+    gst: z.string().optional(),
+  })).optional(),
+  standardHours: z.string().optional(),
+  weekdayOtRate: z.string().optional(),
+  supplierRate: z.string().optional(),
+  workingDates: z.string().optional(),
+  otSupplierRate: z.string().optional(),
+}).passthrough();
 
 export const emptySalesManpower = {
   customerPoNumber: "",
   customerPoDate: "",
   workLocation: "",
+  project: "",
+  poDate: "",
   poStartDate: "",
   poEndDate: "",
+  source: "own",
+  designation: "",
+  workers: "",
+  hours: "",
+  employeeIds: [],
+  employeeNames: "",
+  workerNames: "",
+  extraWorkType: "",
+  billingType: "Hourly",
+  customerRate: "",
+  customerRateOt15: "",
+  customerRateGst: "Applicable",
+  customerBillingRates: [
+    { category: "Normal Hour", rate: "", gst: "Applicable" },
+    { category: "OT 1.5x", rate: "", gst: "Applicable" },
+  ],
+  standardHours: "8",
+  weekdayOtRate: "",
+  supplierRate: "",
+  workingDates: "",
+  otSupplierRate: "",
 };
 
 export const invoiceManpowerSchema = z.object({
@@ -613,18 +1164,10 @@ export function ManpowerSalesCustomerFields({ control }: { control: Control<any>
 
 export function ManpowerSalesDateFields({ control, children }: { control: Control<any>; children?: ReactNode }) {
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.8fr)]">
-      <FormField control={control} name="manpowerDetails.poStartDate" render={({ field }) => (
+    <div className={"grid grid-cols-1 gap-4 " + (children ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)]" : "lg:grid-cols-1 max-w-sm")}>
+      <FormField control={control} name="manpowerDetails.poDate" render={({ field }) => (
         <FormItem className="min-w-0">
-          <FormLabel>PO Start Date</FormLabel>
-          <FormControl>
-            <SyncBridgeDatePicker value={field.value || ""} onChange={field.onChange} placeholder="DD/MM/YYYY" />
-          </FormControl>
-        </FormItem>
-      )} />
-      <FormField control={control} name="manpowerDetails.poEndDate" render={({ field }) => (
-        <FormItem className="min-w-0">
-          <FormLabel>PO End Date</FormLabel>
+          <FormLabel>PO Date</FormLabel>
           <FormControl>
             <SyncBridgeDatePicker value={field.value || ""} onChange={field.onChange} placeholder="DD/MM/YYYY" />
           </FormControl>

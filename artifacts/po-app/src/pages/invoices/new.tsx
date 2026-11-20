@@ -1,5 +1,5 @@
 import { useDocNav } from "@/lib/doc-nav";
-import { emptyInvoiceManpower, invoiceManpowerSchema, ManpowerInvoiceWorkLocation, ManpowerLineItemsTable, quotationLineAmount } from "@/components/manpower-quotation-fields";
+import { blankManpowerLine, emptyInvoiceManpower, invoiceManpowerSchema, ManpowerInvoiceWorkLocation, ManpowerLineItemsTable, quotationLineAmount } from "@/components/manpower-quotation-fields";
 import { useState, useEffect, useRef, Fragment } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -37,11 +37,13 @@ import { deliveryOrderAttachmentNames, deliveryOrderPdfAttachments, invoiceEmail
 import { PaymentTermsSelect } from "@/components/payment-terms-select";
 import { DirectoryPickerButton } from "@/components/directory-picker-button";
 import { CurrencyMismatchDialog } from "@/components/currency-mismatch-dialog";
-import { DeliveryDateField } from "@/components/delivery-date-field";
 import { IssueDateField, getToday } from "@/components/issue-date-field";
 import { PdfPreviewModal, SENT_TO_EXTERNAL } from "@/components/pdf-preview-modal";
 import { PORefSelect } from "@/components/po-ref-select";
 import { SalesOrderRefSelect } from "@/components/sales-order-ref-select";
+import { TimesheetRefSelect } from "@/components/timesheet-ref-select";
+import { loadTimesheets, type Timesheet } from "@/pages/manpower/timesheet-store";
+import { classifyEntryHours } from "@/operations-8june/lib/timesheet-cpf-consolidation";
 import { CustomerPoUploadDialog, type ExtractedPoData } from "@/components/customer-po-upload-dialog";
 import { AiInvoiceDialog, type AiGeneratedInvoice } from "@/components/ai-invoice-dialog";
 import { useAuth } from "@/contexts/auth-context";
@@ -86,6 +88,8 @@ const schema = z.object({
   poRefNo: z.string().optional(),
   soNumber: z.string().optional(),
   soId: z.number().optional().nullable(),
+  timesheetReferenceNo: z.string().optional(),
+  timesheetReferenceId: z.string().optional(),
   salesPerson: z.string().optional(),
   manpowerDetails: invoiceManpowerSchema.optional(),
   notes: z.string().optional(),
@@ -193,7 +197,7 @@ export default function InvoiceNew() {
     resolver: zodResolver(schema),
     defaultValues: {
       customerName: qtParams.get("customer") || "", customerAddress: "", customerContact: "", customerContactEmail: "",
-      issueDate: getToday(), deliveryDate: "", paymentTerms: "30 Days Net", poRefNo: qtParams.get("qtNumber") || "", soNumber: "", soId: null, notes: "",
+      issueDate: getToday(), deliveryDate: "", paymentTerms: "30 Days Net", poRefNo: qtParams.get("qtNumber") || "", soNumber: "", soId: null, timesheetReferenceNo: "", timesheetReferenceId: "", notes: "",
       termsAndConditions: "", deliveryInstructions: "", customerNote: "", authorisedSignature: "",
       currency: "SGD",
       tax: 9,
@@ -232,6 +236,8 @@ export default function InvoiceNew() {
       poRefNo: sourceQt.qtNumber || "",
       soNumber: "",
       soId: null,
+      timesheetReferenceNo: "",
+      timesheetReferenceId: "",
       notes: (sourceQt as any).notes || "",
       termsAndConditions: (sourceQt as any).termsAndConditions || "",
       deliveryInstructions: (sourceQt as any).deliveryInstructions || "",
@@ -447,9 +453,10 @@ export default function InvoiceNew() {
       itemImage: it.itemImage || "",
     }));
 
-  const loadSalesOrderByRef = async (raw: string) => {
+  const loadSalesOrderByRef = async (raw: string, opts?: { force?: boolean; preserveItems?: boolean }) => {
     const key = normalizeDocNo(raw);
-    if (!key || lastLoadedSoRef.current === key || soLookupLoading) return;
+    if (!key || soLookupLoading) return;
+    if (!opts?.force && lastLoadedSoRef.current === key) return;
     setSoLookupLoading(true);
     try {
       const listRes = await fetch("/api/sales-orders", { credentials: "include" });
@@ -493,12 +500,16 @@ export default function InvoiceNew() {
         discountAmount: disc,
         soNumber: so.soNumber || raw.trim(),
         soId: Number(so.id) || null,
-        poRefNo: so.qtNumber || current.poRefNo,
+        poRefNo: so.manpowerDetails?.customerPoNumber || so.qtNumber || current.poRefNo,
         manpowerDetails: {
           ...(current.manpowerDetails as any || {}),
           ...(so.manpowerDetails || {}),
+          timesheetReferenceNo: current.timesheetReferenceNo || (current.manpowerDetails as any)?.timesheetReferenceNo || "",
+          timesheetReferenceId: current.timesheetReferenceId || (current.manpowerDetails as any)?.timesheetReferenceId || "",
         },
-        items: soItems.length > 0 ? mapSoItems(soItems) : current.items,
+        timesheetReferenceNo: current.timesheetReferenceNo || (current.manpowerDetails as any)?.timesheetReferenceNo || "",
+        timesheetReferenceId: current.timesheetReferenceId || (current.manpowerDetails as any)?.timesheetReferenceId || "",
+        items: opts?.preserveItems ? current.items : (soItems.length > 0 ? mapSoItems(soItems) : current.items),
       });
       if (disc > 0 && sub > 0) setDiscountPct(parseFloat((disc / sub * 100).toFixed(2)));
       if (taxPct === 0) setIsOverseas(true);
@@ -509,6 +520,90 @@ export default function InvoiceNew() {
       toast({ title: "Could not load sales order", description: err?.message || "Try again", variant: "destructive" });
     } finally {
       setSoLookupLoading(false);
+    }
+  };
+
+  const loadTimesheetByRef = async (raw: string, sheet?: Timesheet) => {
+    const key = normalizeDocNo(raw);
+    if (!key) return;
+    const found = sheet || loadTimesheets().find((row) => normalizeDocNo(row.timesheetNo) === key)
+      || loadTimesheets().find((row) => normalizeDocNo(row.timesheetNo).endsWith(key));
+    if (!found) {
+      toast({ title: "Timesheet not found", description: `No timesheet matches "${raw.trim()}"`, variant: "destructive" });
+      return;
+    }
+    const current = form.getValues();
+    const md = {
+      ...(current.manpowerDetails as any || {}),
+      workLocation: found.workLocation || (current.manpowerDetails as any)?.workLocation || "",
+    };
+    const billing = Number(String(found.billingRate || "").replace(/[^0-9.]/g, "")) || 0;
+    const otRate = Number(String(found.otBillingRate || "").replace(/[^0-9.]/g, "")) || (billing > 0 ? billing * 1.5 : 0);
+    const entries = Array.isArray(found.entries) && found.entries.length > 0
+      ? found.entries
+      : [{
+          normalHours: found.normalHours,
+          overtimeHours: found.overtimeHours,
+          dayType: found.dayType,
+          employeeId: found.employeeId,
+          employeeLabel: found.employeeLabel,
+        }];
+    const workerKeys = new Set<string>();
+    const classified = { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 };
+    for (const entry of entries as any[]) {
+      const workerKey = String(entry.employeeId || entry.employeeLabel || "").trim();
+      if (workerKey) workerKeys.add(workerKey);
+      const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+      classified.normal += hours.normal;
+      classified.ot15 += hours.ot15;
+      classified.ot20 += hours.ot20;
+      classified.restDay += hours.restDay;
+      classified.publicHoliday += hours.publicHoliday;
+    }
+    if (workerKeys.size === 0 && (found.employeeId || found.employeeLabel)) {
+      workerKeys.add(String(found.employeeId || found.employeeLabel));
+    }
+    const workerCount = Math.max(1, workerKeys.size);
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const nextItems: any[] = [];
+    if (isManpower) {
+      const pushLine = (designation: string, hours: number, rate: number) => {
+        if (hours <= 0) return;
+        const line = blankManpowerLine({
+          designation,
+          workers: String(workerCount),
+          hours: String(round2(hours)),
+          billingType: "Hourly",
+          customerRate: rate > 0 ? String(rate) : "",
+        });
+        nextItems.push({ ...line, amount: quotationLineAmount(line), hours: String(round2(hours)) });
+      };
+      const ot20Rate = otRate > 0 ? Math.round(otRate * (2 / 1.5) * 100) / 100 : 0;
+      pushLine("Normal Hours", classified.normal, billing);
+      pushLine("OT 1.5x", classified.ot15, otRate);
+      pushLine("OT 2.0x", classified.ot20, ot20Rate || otRate);
+      pushLine("Rest Day", classified.restDay, otRate);
+      pushLine("Public Holiday", classified.publicHoliday, otRate);
+    }
+
+        md.timesheetReferenceNo = found.timesheetNo || raw.trim();
+    md.timesheetReferenceId = found.id;
+    form.setValue("timesheetReferenceNo", found.timesheetNo || raw.trim(), { shouldDirty: true });
+    form.setValue("timesheetReferenceId", found.id, { shouldDirty: true });
+    if (found.partyName) form.setValue("customerName", found.partyName, { shouldDirty: true });
+    form.setValue("manpowerDetails", md, { shouldDirty: true });
+    if (nextItems.length > 0) {
+      form.setValue("items", nextItems, { shouldDirty: true, shouldValidate: true });
+    }
+
+    if (found.poReference) {
+      await loadSalesOrderByRef(found.poReference, { force: true, preserveItems: true });
+      const soMd = form.getValues("manpowerDetails") as any;
+      if (soMd?.customerPoNumber) {
+        form.setValue("poRefNo", soMd.customerPoNumber, { shouldDirty: true });
+      }
+    } else {
+      toast({ title: "Timesheet loaded", description: found.timesheetNo });
     }
   };
 
@@ -717,11 +812,17 @@ export default function InvoiceNew() {
       poRefNo: values.poRefNo || null,
       soNumber: values.soNumber?.trim() || null,
       soId: values.soId ?? null,
+        timesheetReferenceNo: values.timesheetReferenceNo?.trim() || null,
+        timesheetReferenceId: values.timesheetReferenceId || null,
       items: itemsWithAmount,
       createDeliveryOrder,
       exchangeRate: currency !== "SGD" ? parseFloat(exchangeRate) || 1 : 1,
     };
     payload.manpowerDetails = isManpower ? (payload.manpowerDetails && typeof payload.manpowerDetails === "object" ? payload.manpowerDetails : {}) : null;
+      if (payload.manpowerDetails && typeof payload.manpowerDetails === "object") {
+        payload.manpowerDetails.timesheetReferenceNo = values.timesheetReferenceNo?.trim() || payload.manpowerDetails.timesheetReferenceNo || "";
+        payload.manpowerDetails.timesheetReferenceId = values.timesheetReferenceId || payload.manpowerDetails.timesheetReferenceId || "";
+      }
     // Tax invoice always confirms on save so entered stock qty is reduced once
     // (Save Changes used to stay draft and never touch stock).
     createMutation.mutate({ data: { ...payload, status: "confirmed" } as any }, {
@@ -941,7 +1042,7 @@ export default function InvoiceNew() {
                   </FormItem>
                 )} />
                 </div>
-                <div className="grid grid-cols-1 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <FormField control={form.control} name="customerAddress" render={({ field }) => (
                   <FormItem><FormLabel>Address</FormLabel>
                     <FormControl><Textarea className="resize-none" rows={3} {...field} /></FormControl><FormMessage /></FormItem>
@@ -965,15 +1066,31 @@ export default function InvoiceNew() {
                   <FormItem><FormLabel>Payment Terms</FormLabel>
                     <FormControl><PaymentTermsSelect value={field.value} onChange={field.onChange} /></FormControl><FormMessage /></FormItem>
                 )} />
+                <FormField control={form.control} name="timesheetReferenceNo" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Timesheet Reference No.</FormLabel>
+                    <FormControl>
+                      <TimesheetRefSelect
+                        value={field.value || ""}
+                        placeholder="Select timesheet reference"
+                        onChange={(value) => field.onChange(value)}
+                        onSelect={(timesheetNo, sheet) => {
+                          void loadTimesheetByRef(timesheetNo, sheet);
+                        }}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <FormField control={form.control} name="poRefNo" render={({ field }) => (
                   <FormItem><FormLabel>PO Reference No.</FormLabel>
                     <FormControl><PORefSelect value={field.value ?? ""} onChange={field.onChange} /></FormControl><FormMessage /></FormItem>
                 )} />
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <FormField control={form.control} name="soNumber" render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Sales Order</FormLabel>
+                    <FormLabel>Sales Order No.</FormLabel>
                     <FormControl>
                       <SalesOrderRefSelect
                         value={field.value || ""}
@@ -1022,15 +1139,6 @@ export default function InvoiceNew() {
                       <p className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">Only you &amp; admins</p>
                       <FormControl><Switch checked={field.value} onCheckedChange={field.onChange} /></FormControl>
                     </div>
-                  </FormItem>
-                )} />
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <FormField control={form.control} name="deliveryDate" render={({ field }) => (
-                  <FormItem className="sm:col-span-2 lg:col-span-3">
-                    <FormLabel>Delivery Date</FormLabel>
-                    <FormControl><DeliveryDateField value={field.value} onChange={field.onChange} allowCustomText={false} /></FormControl>
-                    <FormMessage />
                   </FormItem>
                 )} />
                 </div>
@@ -1403,14 +1511,6 @@ export default function InvoiceNew() {
           <Card>
             <CardHeader className="pb-4"><CardTitle className="text-lg">Additional Information</CardTitle></CardHeader>
             <CardContent className="space-y-4">
-              <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Internal Notes</FormLabel>
-                  <FormControl><RichTextEditor value={field.value ?? ""} onChange={field.onChange} className="min-h-[96px]" /></FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-              
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 items-stretch">
 <FormField control={form.control} name="termsAndConditions" render={({ field }) => (
                   <FormItem className="flex flex-col">

@@ -435,7 +435,7 @@ export default function PurchaseOrderView() {
               <div className="flex items-center gap-3">
                 <Tag className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
-                  <span className="text-sm font-medium">Sales Quote Ref: </span>
+                  <span className="text-sm font-medium">Purchase Quotation: </span>
                   <span className="text-sm text-muted-foreground">{(po as any).quoteRefNo}</span>
                 </div>
               </div>
@@ -449,6 +449,7 @@ export default function PurchaseOrderView() {
                 </div>
               </div>
             </div>
+            {po.deliveryDate ? (
             <div className="flex items-center gap-3">
               <Calendar className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>
@@ -456,6 +457,7 @@ export default function PurchaseOrderView() {
                 <span className="text-sm text-muted-foreground">{formatDeliveryDate(po.deliveryDate || "")}</span>
               </div>
             </div>
+            ) : null}
             <div className="flex items-center gap-3">
               <CreditCard className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>

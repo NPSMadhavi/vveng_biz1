@@ -51,10 +51,25 @@ export function buildApprovalSheet(anchor: Timesheet): ApprovalSheet {
   );
   const grouped = new Map<string, ApprovalRow>();
   related.forEach((row) => {
-    const current = grouped.get(row.employeeId) ?? { name: employeeName(row.employeeLabel), normal: 0, overtime: 0 };
-    current.normal += Number(row.normalHours) || 0;
-    current.overtime += Number(row.overtimeHours) || 0;
-    grouped.set(row.employeeId, current);
+    const lines = Array.isArray(row.entries) && row.entries.length > 0
+      ? row.entries
+      : [{
+          employeeId: row.employeeId,
+          employeeLabel: row.employeeLabel,
+          normalHours: row.normalHours,
+          overtimeHours: row.overtimeHours,
+        }];
+    lines.forEach((line) => {
+      const key = line.employeeId || line.employeeLabel || "employee";
+      const currentRow = grouped.get(key) ?? {
+        name: employeeName(line.employeeLabel || row.employeeLabel),
+        normal: 0,
+        overtime: 0,
+      };
+      currentRow.normal += Number(line.normalHours) || 0;
+      currentRow.overtime += Number(line.overtimeHours) || 0;
+      grouped.set(key, currentRow);
+    });
   });
   const rows = [...grouped.values()];
   return {
