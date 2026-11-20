@@ -202,6 +202,11 @@ export default function SalesOrderView() {
   const hasQtUom = regularQtItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
   const hasQtPartNo = regularQtItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
   const qtColCount = 2 + (hasQtPartNo ? 1 : 0) + (hasQtUom ? 1 : 0) + (hasItemDiscount ? 1 : 0) + 3;
+  const md = (doc as any).manpowerDetails;
+  const isManpower = !!(md && typeof md === "object" && (
+    md.source || md.customerRate || md.supplierRate || md.weekdayOtRate || md.otSupplierRate
+    || (Array.isArray(md.customerBillingRates) && md.customerBillingRates.length > 0)
+  ));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-20">
@@ -351,6 +356,7 @@ export default function SalesOrderView() {
         </Card>
       </div>
 
+      {!isManpower && (
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -414,6 +420,7 @@ export default function SalesOrderView() {
           </div>
         </div>
       </Card>
+      )}
 
       <PdfPreviewModal
         open={previewOpen}

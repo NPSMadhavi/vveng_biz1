@@ -8,6 +8,8 @@ export type TimesheetEntry = {
   employeeLabel: string;
   workLocation: string;
   workDate: string;
+  workFrom?: string;
+  workTo?: string;
   timeIn: string;
   timeOut: string;
   breakHours: string;
@@ -63,11 +65,25 @@ export function normalizeTimesheet(row: any): Timesheet {
   } as Timesheet;
 
   if (Array.isArray(row.entries) && row.entries.length > 0) {
-    return { ...base, entries: row.entries };
+    return {
+      ...base,
+      entries: row.entries.map((entry: any) => {
+        const workFrom = entry.workFrom || entry.workDate || "";
+        const workTo = entry.workTo || entry.workDate || workFrom;
+        return {
+          ...entry,
+          workFrom,
+          workTo,
+          workDate: entry.workDate || workFrom,
+        };
+      }),
+    };
   }
 
   // Legacy single-employee rows become one entry
   if (row.employeeId || row.employeeLabel) {
+    const workFrom = row.workFrom || row.workDate || "";
+    const workTo = row.workTo || row.workDate || workFrom;
     return {
       ...base,
       entries: [{
@@ -75,7 +91,9 @@ export function normalizeTimesheet(row: any): Timesheet {
         employeeId: row.employeeId || "",
         employeeLabel: row.employeeLabel || "",
         workLocation: row.workLocation || "",
-        workDate: row.workDate || "",
+        workDate: workFrom,
+        workFrom,
+        workTo,
         timeIn: row.timeIn || "08:00",
         timeOut: row.timeOut || "18:00",
         breakHours: row.breakHours || "1",

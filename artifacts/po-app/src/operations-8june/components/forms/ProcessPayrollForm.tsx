@@ -45,7 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Calculator, User, BookOpen, Check } from "lucide-react";
+import { Calculator, User, Check } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   deploymentEmployees,
@@ -768,29 +768,7 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                     />
 
                     <div className="space-y-1.5">
-                      <FormLabel className={payrollFormLabelClass}>Customer</FormLabel>
-                      <Select
-                        value={customerId || "__all__"}
-                        onValueChange={(value) => handleCustomerChange(value === "__all__" ? "" : value)}
-                        disabled={customerChoices.length === 0}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={customerChoices.length === 0 ? "No customers" : "Select customer"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All customers</SelectItem>
-                          {customerChoices.map((customer: any) => (
-                            <SelectItem key={customer.id} value={String(customer.id)}>
-                              {customer.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <FormLabel className={cn(payrollFormLabelClass, "flex items-center gap-1.5")}>
-                        <BookOpen className="h-3.5 w-3.5 text-muted-foreground" />
+                      <FormLabel className={payrollFormLabelClass}>
                         Expense Account (GL)
                       </FormLabel>
                       {(() => {
@@ -859,15 +837,11 @@ export default function ProcessPayrollForm({ onSuccess, onCancel }: ProcessPayro
                                 </Command>
                               </PopoverContent>
                             </Popover>
-                            {selectedAccount ? (
-                              <p className="text-xs text-emerald-700 flex items-center gap-1">
-                                ✓ Will auto-post: DR {selectedAccount.name} / CR Staff Salaries Payable
-                              </p>
-                            ) : (
+                            {!selectedAccount ? (
                               <p className="text-xs text-muted-foreground">
                                 — None (no journal entry will be posted)
                               </p>
-                            )}
+                            ) : null}
                           </>
                         );
                       })()}

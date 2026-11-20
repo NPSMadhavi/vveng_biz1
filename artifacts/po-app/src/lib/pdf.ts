@@ -1588,6 +1588,25 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
 
   const qtCurrency = (qt as any).currency || "SGD";
   const qtDocDiscount = Number((qt as any).discountAmount) || 0;
+  const qtMd = (qt as any).manpowerDetails || null;
+  const qtBillingRates = Array.isArray(qtMd?.customerBillingRates) ? qtMd.customerBillingRates : [];
+  const qtBillingNormalRate = Number(String(qtBillingRates[0]?.rate ?? "").replace(/[^0-9.]/g, "")) || 0;
+  const qtBillingOtRate = Number(String(qtBillingRates[1]?.rate ?? "").replace(/[^0-9.]/g, "")) || 0;
+  const qtIsManpower = !!(qtMd && typeof qtMd === "object" && (
+    qtMd.source || qtMd.otSupplierRate || qtMd.customerRate || qtMd.supplierRate || qtMd.weekdayOtRate
+    || qtBillingNormalRate > 0 || qtBillingOtRate > 0 || qtBillingRates.length > 0
+  ));
+  const qtGstFallback =
+    Number(qt.tax) > 0 ? "Applicable" : "Not Applicable";
+  const formatBillingGst = (raw: unknown) => {
+    const s = String(raw || "").trim();
+    return s === "Applicable" || s === "Not Applicable" ? s : qtGstFallback;
+  };
+  const formatBillingRate = (raw: unknown) => {
+    const n = Number(String(raw ?? "").replace(/[^0-9.]/g, ""));
+    return n > 0 ? `$${fmtNum(n)}` : "$0.00";
+  };
+
   // Strip trailing/empty item rows that have no description and no part number
   const allQtItems = (qt.items as any[]).filter((item: any) => {
     if (item.type === "section") return htmlToText(item.sectionLabel || "").trim() !== "";
@@ -1596,76 +1615,128 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
     return hasDesc || hasPart;
   });
   const regularQtItems = allQtItems.filter((item: any) => item.type !== "section");
-  const hasQtPartNo = regularQtItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
-  const hasItemDiscount = regularQtItems.some((item: any) => Number(item.discount) > 0);
-  const hasQtUom = regularQtItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
 
-  const qtHeaderArr: string[] = ["#"];
-  if (hasQtPartNo) qtHeaderArr.push("Item / Part Number");
-  qtHeaderArr.push("Description", "Qty");
-  if (hasQtUom) qtHeaderArr.push("UOM");
-  qtHeaderArr.push(`Unit Price (${currSymbol(qtCurrency)})`);
-  if (hasItemDiscount) qtHeaderArr.push("Disc %");
-  qtHeaderArr.push(`Amount (${currSymbol(qtCurrency)})`);
-  const qtHeaders = qtHeaderArr;
-  const qtTotalCols = qtHeaders.length;
-
-  const qtRichDesc: RichLine[][] = [];
-  const qtFocFlags: boolean[] = [];
-  let qtItemCounter = 0;
-  const qtTableData = allQtItems.map((item: any) => {
-    if (item.type === "section") {
-      qtRichDesc.push(htmlToRichLines(item.sectionLabel || ""));
-      qtFocFlags.push(false);
-      const halign = item.sectionAlign === "center" ? "center" : "left";
-      return [{ content: htmlToText(item.sectionLabel || ""), colSpan: qtTotalCols, styles: { halign } }];
-    }
-    qtItemCounter++;
-    const isQtFocRow = !!(item.isFoc);
-    qtFocFlags.push(isQtFocRow);
-    const qtRichLines = htmlToRichLines(item.description);
-    if (isQtFocRow) qtRichLines.push({ text: "  \u25b8 Free of Charge", bold: true, italic: false });
-    qtRichDesc.push(qtRichLines);
-    const disc = Number(item.discount) || 0;
-    const qtDisplayAmt = isQtFocRow && Number(item.amount) === 0
-      ? fmtNum(Number(item.qty) * Number(item.unitPrice) * (1 - disc / 100))
-      : fmtNum(Number(item.amount));
-    const row: any[] = [qtItemCounter];
-    if (hasQtPartNo) row.push(item.partNumber || "");
-    row.push(htmlToText(item.description), item.qty);
-    if (hasQtUom) row.push(item.uom || "");
-    row.push(fmtNum(Number(item.unitPrice)));
-    if (hasItemDiscount) row.push(disc > 0 ? `${disc}%` : "");
-    row.push(qtDisplayAmt);
-    return row;
-  });
-
+  // Manpower preview: Customer Billing Rates only (Category | Rate | GST)
+  // Non-manpower: standard line-items table
+  let qtHeaders: string[];
+  let qtTableData: any[];
+  let qtRichDesc: RichLine[][] = [];
+  let qtFocFlags: boolean[] = [];
+  let qtDescColIdx = 1;
+  let qtColStyles: Record<number, any>;
+  let qtUseCompact = false;
   const qtTableWidth = marginRight - marginLeft;
-  const qtDescColIdx = hasQtPartNo ? 2 : 1;
-  // Measure at header font so column widths are exactly as tight as needed (single-line)
-  doc.setFontSize(8.5); doc.setFont(PDF_FONT, "bold");
-  const _qtUpW  = Math.ceil(doc.getTextWidth(`Unit Price (${currSymbol(qtCurrency)})`) + 5);
-  const _qtAmtW = Math.ceil(doc.getTextWidth(`Amount (${currSymbol(qtCurrency)})`)     + 5);
-  const _qtQtyW = Math.max(Math.ceil(doc.getTextWidth("Qty") + 5), 14); // head pad 4mm + 1 safety; min 14mm for body
-  const _qtPartNoHeaderW = Math.ceil(doc.getTextWidth("Item / Part Number") + 5);
-  doc.setFontSize(9.5); doc.setFont(PDF_FONT, "normal");
-  const _qtPartNoContentW = regularQtItems.reduce((max: number, item: any) => {
-    const pn = (item.partNumber || "").trim();
-    return pn ? Math.max(max, Math.ceil(doc.getTextWidth(pn) + 8)) : max;
-  }, 0);
-  const _qtPartNoW = Math.min(55, Math.max(_qtPartNoHeaderW, _qtPartNoContentW));
-  const qtFixedMap: Array<{ halign?: string; fixed?: number; auto?: true; valign?: string; cellPadding?: { top?: number; bottom?: number; left?: number; right?: number } }> = [
-    { fixed: 12, halign: "left", valign: "top" },                     // #
-    ...(hasQtPartNo ? [{ fixed: _qtPartNoW }] : []),                  // part no (conditional)
-    { auto: true },                                                    // description
-    { fixed: _qtQtyW, halign: "right" },                              // qty
-    ...(hasQtUom ? [{ fixed: 18, halign: "center" as const }] : []),  // uom
-    { fixed: _qtUpW,  halign: "right" as const, valign: "top", cellPadding: { top: 4, bottom: 4, left: 2, right: 2 } }, // unit price
-    ...(hasItemDiscount ? [{ fixed: 18, halign: "right" as const }] : []),                                             // disc %
-    { fixed: _qtAmtW, halign: "right" as const, valign: "top", cellPadding: { top: 4, bottom: 4, left: 2, right: 2 } }, // amount
-  ];
-  const qtColStyles = smartColWidths(doc, qtHeaders, qtTableData, qtTableWidth, qtFixedMap);
-  const qtKnownDescW = qtTableWidth - 12 - (hasQtPartNo ? _qtPartNoW : 0) - _qtQtyW - (hasQtUom ? 18 : 0) - _qtUpW - (hasItemDiscount ? 18 : 0) - _qtAmtW;
+  const qtTablePages: number[] = [];
+
+  if (qtIsManpower) {
+    const billingRowsRaw = qtBillingRates.length > 0
+      ? qtBillingRates
+      : [
+          {
+            category: "Normal Hour",
+            rate: qtMd?.customerRate || "",
+            gst: qtMd?.customerRateGst || "Applicable",
+          },
+          {
+            category: "OT 1.5x",
+            rate: qtMd?.customerRateOt15 || qtMd?.weekdayOtRate || "",
+            gst: qtMd?.customerRateGst || "Applicable",
+          },
+        ];
+    const billingRows = billingRowsRaw
+      .map((r: any) => ({
+        category: String(r?.category || "").trim(),
+        rate: r?.rate,
+        gst: formatBillingGst(r?.gst),
+      }))
+      .filter((r: any) => r.category || Number(String(r.rate ?? "").replace(/[^0-9.]/g, "")) > 0);
+
+    qtHeaders = ["Category", "Rate (SGD / Hour)", "GST"];
+    qtTableData = (billingRows.length > 0 ? billingRows : [
+      { category: "Normal Hour", rate: "", gst: "Applicable" },
+      { category: "OT 1.5x", rate: "", gst: "Applicable" },
+    ]).map((r: any) => [r.category || "—", formatBillingRate(r.rate), r.gst]);
+    qtDescColIdx = 0;
+    qtRichDesc = qtTableData.map((row: any[]) => [{ text: String(row[0] || ""), bold: false, italic: false }]);
+    qtFocFlags = qtTableData.map(() => false);
+    doc.setFontSize(8.5); doc.setFont(PDF_FONT, "bold");
+    const _rateW = Math.ceil(doc.getTextWidth("Rate (SGD / Hour)") + 10);
+    const _gstW = Math.ceil(doc.getTextWidth("Not Applicable") + 8);
+    qtColStyles = {
+      0: { cellWidth: qtTableWidth - _rateW - _gstW, halign: "left", valign: "middle" },
+      1: { cellWidth: _rateW, halign: "left", valign: "middle" },
+      2: { cellWidth: _gstW, halign: "left", valign: "middle" },
+    };
+  } else {
+    const hasQtPartNo = regularQtItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
+    const hasItemDiscount = regularQtItems.some((item: any) => Number(item.discount) > 0);
+    const hasQtUom = regularQtItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
+
+    const qtHeaderArr: string[] = ["#"];
+    if (hasQtPartNo) qtHeaderArr.push("Item / Part Number");
+    qtHeaderArr.push("Description", "Qty");
+    if (hasQtUom) qtHeaderArr.push("UOM");
+    qtHeaderArr.push(`Unit Price (${currSymbol(qtCurrency)})`);
+    if (hasItemDiscount) qtHeaderArr.push("Disc %");
+    qtHeaderArr.push(`Amount (${currSymbol(qtCurrency)})`);
+    qtHeaders = qtHeaderArr;
+    const qtTotalCols = qtHeaders.length;
+
+    let qtItemCounter = 0;
+    qtTableData = allQtItems.map((item: any) => {
+      if (item.type === "section") {
+        qtRichDesc.push(htmlToRichLines(item.sectionLabel || ""));
+        qtFocFlags.push(false);
+        const halign = item.sectionAlign === "center" ? "center" : "left";
+        return [{ content: htmlToText(item.sectionLabel || ""), colSpan: qtTotalCols, styles: { halign } }];
+      }
+      qtItemCounter++;
+      const isQtFocRow = !!(item.isFoc);
+      qtFocFlags.push(isQtFocRow);
+      const qtRichLines = htmlToRichLines(item.description);
+      if (isQtFocRow) qtRichLines.push({ text: "  \u25b8 Free of Charge", bold: true, italic: false });
+      qtRichDesc.push(qtRichLines);
+      const disc = Number(item.discount) || 0;
+      const unitPrice = Number(item.unitPrice) || 0;
+      const hours = Number(item.hours) || 0;
+      const hourly = String(item.uom || "").toLowerCase().startsWith("hour");
+      const qtyFactor = hourly ? (hours > 0 ? hours : 0) : (Number(item.qty) || 0);
+      const computedAmt = qtyFactor * unitPrice * (1 - disc / 100);
+      const amountNum = Number(item.amount) > 0 ? Number(item.amount) : computedAmt;
+      const row: any[] = [qtItemCounter];
+      if (hasQtPartNo) row.push(item.partNumber || "");
+      row.push(htmlToText(item.description), item.qty);
+      if (hasQtUom) row.push(item.uom || "");
+      row.push(fmtNum(unitPrice));
+      if (hasItemDiscount) row.push(disc > 0 ? `${disc}%` : "");
+      row.push(fmtNum(amountNum));
+      return row;
+    });
+
+    qtDescColIdx = hasQtPartNo ? 2 : 1;
+    doc.setFontSize(8.5); doc.setFont(PDF_FONT, "bold");
+    const _qtUpW  = Math.ceil(doc.getTextWidth(`Unit Price (${currSymbol(qtCurrency)})`) + 5);
+    const _qtAmtW = Math.ceil(doc.getTextWidth(`Amount (${currSymbol(qtCurrency)})`)     + 5);
+    const _qtQtyW = Math.max(Math.ceil(doc.getTextWidth("Qty") + 5), 14);
+    const _qtPartNoHeaderW = Math.ceil(doc.getTextWidth("Item / Part Number") + 5);
+    doc.setFontSize(9.5); doc.setFont(PDF_FONT, "normal");
+    const _qtPartNoContentW = regularQtItems.reduce((max: number, item: any) => {
+      const pn = (item.partNumber || "").trim();
+      return pn ? Math.max(max, Math.ceil(doc.getTextWidth(pn) + 8)) : max;
+    }, 0);
+    const _qtPartNoW = Math.min(55, Math.max(_qtPartNoHeaderW, _qtPartNoContentW));
+    const qtFixedMap: Array<{ halign?: string; fixed?: number; auto?: true; valign?: string; cellPadding?: { top?: number; bottom?: number; left?: number; right?: number } }> = [
+      { fixed: 12, halign: "left", valign: "top" },
+      ...(hasQtPartNo ? [{ fixed: _qtPartNoW }] : []),
+      { auto: true },
+      { fixed: _qtQtyW, halign: "right" },
+      ...(hasQtUom ? [{ fixed: 18, halign: "left" as const }] : []),
+      { fixed: _qtUpW,  halign: "right" as const, valign: "top", cellPadding: { top: 4, bottom: 4, left: 2, right: 2 } },
+      ...(hasItemDiscount ? [{ fixed: 18, halign: "right" as const }] : []),
+      { fixed: _qtAmtW, halign: "right" as const, valign: "top", cellPadding: { top: 4, bottom: 4, left: 2, right: 2 } },
+    ];
+    qtColStyles = smartColWidths(doc, qtHeaders, qtTableData, qtTableWidth, qtFixedMap);
+  }
 
   // For quotations, use quotationTerms (not invoice termsAndConditions)
   const qtSettings = settings
@@ -1673,7 +1744,7 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
     : null;
 
   const qtExtraRows = qtDocDiscount > 0 ? 1 : 0;
-  const qtBoxH = (3 + qtExtraRows) * 7 + 16;
+  const qtBoxH = qtIsManpower ? 0 : ((3 + qtExtraRows) * 7 + 16);
     const qtBlocks: NoteBlock[] = [];
   if (qt.notes) qtBlocks.push({ title: "Internal Notes:", content: qt.notes });
   if ((qt as any).customerNote?.trim()) qtBlocks.push({ title: "Customer Note:", content: (qt as any).customerNote });
@@ -1682,40 +1753,63 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
   if (((qt as any).customerQuotationTerms || (qt as any).termsAndConditions || qtSettings?.quotationTerms)?.trim()) qtBlocks.push({ title: "Terms & Conditions:", content: ((qt as any).customerQuotationTerms || (qt as any).termsAndConditions || qtSettings?.quotationTerms) });
   const qtBankBlockH = calcBlockHeight(doc, qtBlocks, 125);
 
-  const qtUnitPriceIdx = qtHeaders.indexOf(`Unit Price (${currSymbol(qtCurrency)})`);
-  const qtAmountIdx = qtHeaders.indexOf(`Amount (${currSymbol(qtCurrency)})`);
-  const qtQtyIdx = qtHeaders.indexOf("Qty");
-  // Compact padding heuristic: if a normal-padding table would barely push the
-  // totals to page 2, switch to tighter padding to keep everything on one page.
-  const qtAvailH = pageHeight - qtTableStartY - Math.max(qtBoxH, qtBankBlockH) - FOOTER_RESERVE - 12;
-  const qtEstNormal = 9 + regularQtItems.length * 10;
-  const qtEstCompact = 9 + regularQtItems.length * 7;
-  const qtUseCompact = qtEstNormal > qtAvailH && qtEstCompact <= qtAvailH;
-  const qtTablePages: number[] = [];
-  autoTableRich(doc, {
-    startY: qtTableStartY,
-    head: [qtHeaders],
-    body: qtTableData,
-    theme: "striped",
-    headStyles: { fillColor: [24, 33, 47], textColor: 255, fontStyle: "bold", fontSize: 8.5, cellPadding: { top: 3, bottom: 3, left: 2, right: 2 } },
-    bodyStyles: { fontSize: 9.5, valign: "top", fillColor: [255, 255, 255] },
-    alternateRowStyles: { fillColor: [245, 247, 249] },
-    styles: { cellPadding: qtUseCompact ? 2 : 4 },
-    columnStyles: qtColStyles,
-    margin: { top: 20, left: marginLeft, right: 14, bottom: FOOTER_RESERVE },
-    rowPageBreak: "avoid",
-    didDrawPage: (_d: any) => { qtTablePages.push((doc as any).internal.getCurrentPageInfo().pageNumber); },
-    didParseCell: (data: any) => {
-      if ([qtQtyIdx, qtUnitPriceIdx, qtAmountIdx].includes(data.column.index)) {
-        data.cell.styles.halign = "right";
-      }
-      if (data.section === "body" && qtFocFlags[data.row.index]) {
-        if ([qtQtyIdx, qtUnitPriceIdx, qtAmountIdx].includes(data.column.index)) {
-          data.cell.styles.textColor = [217, 119, 6]; // amber
+  if (!qtIsManpower) {
+    const qtUnitPriceIdx = qtHeaders.indexOf(`Unit Price (${currSymbol(qtCurrency)})`);
+    const qtAmountIdx = qtHeaders.indexOf(`Amount (${currSymbol(qtCurrency)})`);
+    const qtQtyIdx = qtHeaders.indexOf("Qty");
+    const qtAvailH = pageHeight - qtTableStartY - Math.max(qtBoxH || 0, qtBankBlockH) - FOOTER_RESERVE - 12;
+    const qtEstNormal = 9 + regularQtItems.length * 10;
+    const qtEstCompact = 9 + regularQtItems.length * 7;
+    qtUseCompact = qtEstNormal > qtAvailH && qtEstCompact <= qtAvailH;
+    autoTableRich(doc, {
+      startY: qtTableStartY,
+      head: [qtHeaders],
+      body: qtTableData,
+      theme: "striped",
+      headStyles: { fillColor: [24, 33, 47], textColor: 255, fontStyle: "bold", fontSize: 8.5, cellPadding: { top: 3, bottom: 3, left: 2, right: 2 } },
+      bodyStyles: { fontSize: 9.5, valign: "top", fillColor: [255, 255, 255] },
+      alternateRowStyles: { fillColor: [245, 247, 249] },
+      styles: { cellPadding: qtUseCompact ? 2 : 4 },
+      columnStyles: qtColStyles,
+      margin: { top: 20, left: marginLeft, right: 14, bottom: FOOTER_RESERVE },
+      rowPageBreak: "avoid",
+      didDrawPage: (_d: any) => { qtTablePages.push((doc as any).internal.getCurrentPageInfo().pageNumber); },
+      didParseCell: (data: any) => {
+        const rightAlignIdx = [qtQtyIdx, qtUnitPriceIdx, qtAmountIdx].filter((i) => i >= 0);
+        if (rightAlignIdx.includes(data.column.index)) {
+          data.cell.styles.halign = "right";
         }
-      }
-    },
-  }, qtDescColIdx, qtRichDesc, allQtItems.map((item: any) => item.type === "section" ? null : ((item as any).itemImage || null)));
+        if (data.section === "body" && qtFocFlags[data.row.index]) {
+          if (rightAlignIdx.includes(data.column.index)) {
+            data.cell.styles.textColor = [217, 119, 6]; // amber
+          }
+        }
+      },
+    }, qtDescColIdx, qtRichDesc, allQtItems.map((item: any) => item.type === "section" ? null : ((item as any).itemImage || null)));
+  } else {
+    // Customer Billing Rates table — light blue header to match form
+    (doc as any).autoTable({
+      startY: qtTableStartY,
+      head: [qtHeaders],
+      body: qtTableData,
+      theme: "plain",
+      styles: { font: PDF_FONT, fontSize: 9.5, cellPadding: { top: 4, bottom: 4, left: 4, right: 4 }, lineColor: [229, 231, 235], lineWidth: 0.2 },
+      headStyles: {
+        font: PDF_FONT,
+        fillColor: [219, 234, 254],
+        textColor: [30, 58, 95],
+        fontStyle: "bold",
+        fontSize: 9,
+        cellPadding: { top: 4, bottom: 4, left: 4, right: 4 },
+      },
+      bodyStyles: { fillColor: [255, 255, 255], textColor: [31, 41, 55], valign: "middle" },
+      alternateRowStyles: { fillColor: [255, 255, 255] },
+      columnStyles: qtColStyles,
+      margin: { top: 20, left: marginLeft, right: 14, bottom: FOOTER_RESERVE },
+      rowPageBreak: "avoid",
+      didDrawPage: (_d: any) => { qtTablePages.push((doc as any).internal.getCurrentPageInfo().pageNumber); },
+    });
+  }
 
   const qtFinalY = (doc as any).lastAutoTable.finalY;
   { const _uniq = [...new Set(qtTablePages)];
@@ -1734,7 +1828,7 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
   let qtCurrentY = qtFinalY + 12;
 
 // ── Totals + Bank/T&C side-by-side ───────────────────────────────────────────
-  const qtCombinedH = Math.max(qtBoxH, qtBankBlockH);
+  const qtCombinedH = Math.max(qtBoxH || 0, qtBankBlockH);
   let qtTotalsOnNewPage = false;
   const qtSigH = (qt as any).authorisedSignature ? 25 : 0;
   if (qtFinalY + 12 + qtCombinedH + qtSigH + FOOTER_RESERVE - 2 > pageHeight) { doc.addPage(); qtCurrentY = 20; qtTotalsOnNewPage = true; }
@@ -1744,37 +1838,39 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
   const qtGstLabel = qtTaxRate > 0 ? `GST (${qtTaxRate}%):` : "GST:";
   const labelX = 146;
   const valueX = marginRight - 4;
-  const qtPinnedY = pageHeight - FOOTER_RESERVE - qtCombinedH - 4;
+  const qtPinnedY = pageHeight - FOOTER_RESERVE - Math.max(qtCombinedH, 20) - 4;
   // Only bottom-pin when on same page as items; on a fresh page, draw from top
   const totalsY = qtTotalsOnNewPage ? 20 : Math.max(qtFinalY + 12, qtPinnedY);
 
-  // Right: totals box
-  doc.setFillColor(244, 246, 250);
-  doc.roundedRect(labelX - 5, totalsY - 6, marginRight - labelX + 9, qtBoxH, 2, 2, "F");
-
   let ty = totalsY;
-  doc.setFontSize(9.5); doc.setTextColor(60, 60, 60); doc.setFont(PDF_FONT, "normal");
-  doc.text("Subtotal:", labelX, ty);
-  doc.text(fmtMoneyTotal(qtCurrency, Number(qt.subtotal)), valueX, ty, { align: "right" });
-  ty += 7;
-  if (qtDocDiscount > 0) {
-    const qtDiscPct = Number(qt.subtotal) > 0 ? Math.round(qtDocDiscount / Number(qt.subtotal) * 1000) / 10 : 0;
-    const qtDiscLabel = qtDiscPct > 0 ? `Discount (${qtDiscPct}%):` : "Discount:";
-    doc.setTextColor(180, 0, 0);
-    doc.text(qtDiscLabel, labelX, ty);
-    doc.text(`-${fmtMoneyTotal(qtCurrency, qtDocDiscount)}`, valueX, ty, { align: "right" });
-    doc.setTextColor(60, 60, 60);
+  if (!qtIsManpower) {
+    // Right: totals box
+    doc.setFillColor(244, 246, 250);
+    doc.roundedRect(labelX - 5, totalsY - 6, marginRight - labelX + 9, qtBoxH, 2, 2, "F");
+
+    doc.setFontSize(9.5); doc.setTextColor(60, 60, 60); doc.setFont(PDF_FONT, "normal");
+    doc.text("Subtotal:", labelX, ty);
+    doc.text(fmtMoneyTotal(qtCurrency, Number(qt.subtotal)), valueX, ty, { align: "right" });
     ty += 7;
+    if (qtDocDiscount > 0) {
+      const qtDiscPct = Number(qt.subtotal) > 0 ? Math.round(qtDocDiscount / Number(qt.subtotal) * 1000) / 10 : 0;
+      const qtDiscLabel = qtDiscPct > 0 ? `Discount (${qtDiscPct}%):` : "Discount:";
+      doc.setTextColor(180, 0, 0);
+      doc.text(qtDiscLabel, labelX, ty);
+      doc.text(`-${fmtMoneyTotal(qtCurrency, qtDocDiscount)}`, valueX, ty, { align: "right" });
+      doc.setTextColor(60, 60, 60);
+      ty += 7;
+    }
+    doc.text(qtGstLabel, labelX, ty);
+    doc.text(fmtMoneyTotal(qtCurrency, Number(qt.tax)), valueX, ty, { align: "right" });
+    ty += 3;
+    doc.setDrawColor(180, 180, 180); doc.setLineWidth(0.3);
+    doc.line(labelX, ty, marginRight, ty);
+    ty += 7;
+    doc.setFont(PDF_FONT, "bold"); doc.setFontSize(9.5); doc.setTextColor(24, 33, 47);
+    doc.text("Total Amount:", labelX, ty);
+    doc.text(fmtMoneyTotal(qtCurrency, Number(qt.totalAmount)), valueX, ty, { align: "right" });
   }
-  doc.text(qtGstLabel, labelX, ty);
-  doc.text(fmtMoneyTotal(qtCurrency, Number(qt.tax)), valueX, ty, { align: "right" });
-  ty += 3;
-  doc.setDrawColor(180, 180, 180); doc.setLineWidth(0.3);
-  doc.line(labelX, ty, marginRight, ty);
-  ty += 7;
-  doc.setFont(PDF_FONT, "bold"); doc.setFontSize(9.5); doc.setTextColor(24, 33, 47);
-  doc.text("Total Amount:", labelX, ty);
-  doc.text(fmtMoneyTotal(qtCurrency, Number(qt.totalAmount)), valueX, ty, { align: "right" });
 
   // Left: bank details + quotation T&C inline (same Y, left of totals)
   renderInlineDocInfo(doc, qtBlocks, marginLeft, totalsY, 125, FOOTER_RESERVE);
@@ -1785,7 +1881,7 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
     const sigW = 45;
     const sigH = 15;
     const sigX = marginRight - sigW;
-    const sigY = ty + 10;
+    const sigY = (qtIsManpower ? totalsY : ty) + 10;
     doc.addImage(sigImg, "PNG", sigX, sigY, sigW, sigH, "", "FAST");
     doc.setFont(PDF_FONT, "normal"); doc.setFontSize(8); doc.setTextColor(140, 140, 140);
     doc.text("Authorised Signature", sigX + sigW / 2, sigY + sigH + 4, { align: "center" });

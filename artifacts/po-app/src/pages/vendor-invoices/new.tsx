@@ -198,25 +198,31 @@ export default function VendorInvoiceNew() {
           employeeId: found.employeeId,
           employeeLabel: found.employeeLabel,
         }];
-    const workerKeys = new Set<string>();
+    const workersByType = {
+      normal: new Set<string>(),
+      ot15: new Set<string>(),
+      ot20: new Set<string>(),
+      restDay: new Set<string>(),
+      publicHoliday: new Set<string>(),
+    };
     const classified = { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 };
     for (const entry of entries as any[]) {
-      const workerKey = String(entry.employeeId || entry.employeeLabel || "").trim();
-      if (workerKey) workerKeys.add(workerKey);
+      const workerKey = String(entry.employeeId || entry.employeeLabel || found.employeeId || found.employeeLabel || "worker").trim();
       const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
       classified.normal += hours.normal;
       classified.ot15 += hours.ot15;
       classified.ot20 += hours.ot20;
       classified.restDay += hours.restDay;
       classified.publicHoliday += hours.publicHoliday;
+      if (hours.normal > 0) workersByType.normal.add(workerKey);
+      if (hours.ot15 > 0) workersByType.ot15.add(workerKey);
+      if (hours.ot20 > 0) workersByType.ot20.add(workerKey);
+      if (hours.restDay > 0) workersByType.restDay.add(workerKey);
+      if (hours.publicHoliday > 0) workersByType.publicHoliday.add(workerKey);
     }
-    if (workerKeys.size === 0 && (found.employeeId || found.employeeLabel)) {
-      workerKeys.add(String(found.employeeId || found.employeeLabel));
-    }
-    const workerCount = Math.max(1, workerKeys.size);
     const round2 = (n: number) => Math.round(n * 100) / 100;
     const nextItems: VendorInvoiceLineItem[] = [];
-    const pushLine = (designation: string, hours: number, rate: number) => {
+    const pushLine = (designation: string, hours: number, rate: number, workerCount: number) => {
       if (hours <= 0) return;
       nextItems.push({
         lineId: newViLineId(),
@@ -225,7 +231,7 @@ export default function VendorInvoiceNew() {
         sectionAlign: "left",
         partNumber: "",
         description: designation,
-        qty: workerCount,
+        qty: Math.max(1, workerCount),
         hours: String(round2(hours)),
         unitPrice: rate > 0 ? rate : 0,
         discount: 0,
@@ -234,11 +240,11 @@ export default function VendorInvoiceNew() {
       });
     };
     const ot20Rate = otRate > 0 ? Math.round(otRate * (2 / 1.5) * 100) / 100 : 0;
-    pushLine("Normal Hours", classified.normal, billing);
-    pushLine("OT 1.5x", classified.ot15, otRate);
-    pushLine("OT 2.0x", classified.ot20, ot20Rate || otRate);
-    pushLine("Rest Day", classified.restDay, otRate);
-    pushLine("Public Holiday", classified.publicHoliday, otRate);
+    pushLine("Normal Hours", classified.normal, billing, workersByType.normal.size);
+    pushLine("OT 1.5x", classified.ot15, otRate, workersByType.ot15.size);
+    pushLine("OT 2.0x", classified.ot20, ot20Rate || otRate, workersByType.ot20.size);
+    pushLine("Rest Day", classified.restDay, otRate, workersByType.restDay.size);
+    pushLine("Public Holiday", classified.publicHoliday, otRate, workersByType.publicHoliday.size);
     if (nextItems.length > 0) {
       setLineItems(nextItems);
       setItemsAutoFilled(true);

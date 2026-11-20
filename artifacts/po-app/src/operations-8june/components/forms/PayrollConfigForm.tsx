@@ -1131,17 +1131,12 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
       setSelectedTsPh(0);
       return;
     }
-    if (timesheetCustomers.length === 1) {
-      applyCustomerHoursRow(timesheetCustomers[0]);
-      return;
-    }
-    if (timesheetCustomers.length > 1) {
-      setSelectedCustomerPartyKey((current) => {
-        const still = timesheetCustomers.some((row) => String(row.partyId || row.customerName) === current);
-        if (still) return current;
-        setCustomerId("");
-        return "";
-      });
+    // Always load timesheet hours into Per Hour (never leave month weekdays 21 fallback)
+    if (timesheetCustomers.length > 0) {
+      const matched = timesheetCustomers.find(
+        (row) => String(row.partyId || row.customerName || "") === selectedCustomerPartyKey,
+      );
+      applyCustomerHoursRow(matched || timesheetCustomers[0]);
       return;
     }
     // fallback to deployment-linked customers

@@ -73,7 +73,8 @@ function buildPurchaseOrderCopyPrefill(doc: any) {
 export default function PurchaseOrderView() {
   const params = useParams();
   const id = Number(params.id);
-  const { setLocation } = useDocNav();
+  const { location, setLocation } = useDocNav();
+  const isManpowerRoute = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany, canManage } = useAuth();
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -168,6 +169,11 @@ export default function PurchaseOrderView() {
     formatCurrencySafe(value, (po as any)?.currency);
 
   const hasPOUom = !!(po && (po.items as any[]).some((item: any) => item.uom && String(item.uom).trim() !== ""));
+  const md = (po as any)?.manpowerDetails;
+  const isManpower = isManpowerRoute || !!(md && typeof md === "object" && (
+    md.source || md.customerRate || md.supplierRate || md.weekdayOtRate || md.otSupplierRate
+    || (Array.isArray(md.customerBillingRates) && md.customerBillingRates.length > 0)
+  ));
 
   const getStatusBadge = (status: string, compact = false) => {
     const size = compact ? "text-xs py-0 px-1.5" : "text-sm py-1";
@@ -469,6 +475,7 @@ export default function PurchaseOrderView() {
         </Card>
       </div>
 
+      {!isManpower && (
       <Card>
         <CardHeader>
           <CardTitle>Line Items</CardTitle>
@@ -542,6 +549,7 @@ export default function PurchaseOrderView() {
           </div>
         </div>
       </Card>
+      )}
 
       {po.notes && (
         <Card>

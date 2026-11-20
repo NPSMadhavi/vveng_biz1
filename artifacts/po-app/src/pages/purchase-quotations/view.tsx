@@ -30,7 +30,8 @@ function isoToReadable(dateStr: string | null | undefined): string {
 export default function PurchaseQuotationView() {
   const params = useParams();
   const id = Number(params.id);
-  const { setLocation } = useDocNav();
+  const { location, setLocation } = useDocNav();
+  const isManpower = location.split("?")[0].startsWith("/manpower/");
   const { toast } = useToast();
   const { selectedCompany, canManage } = useAuth();
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -142,11 +143,27 @@ export default function PurchaseQuotationView() {
   const tax = Number(doc.tax) || 0;
   const total = Number(doc.totalAmount) || 0;
   const discountAmt = Number((doc as any).discountAmount) || 0;
+  const md = (doc as any).manpowerDetails || {};
+  const showManpowerCols = isManpower || !!md.source || !!md.otSupplierRate || !!md.customerRate || !!md.supplierRate;
+  const gstStatusRaw = md.customerBillingRates?.[0]?.gst || md.customerRateGst || "";
+  const gstStatus =
+    gstStatusRaw === "Applicable" || gstStatusRaw === "Not Applicable"
+      ? gstStatusRaw
+      : tax > 0
+        ? "Applicable"
+        : "Not Applicable";
+  const otRateForRow = (unitPrice: number) => {
+    const raw = md.otSupplierRate || md.weekdayOtRate || md.customerRateOt15 || "";
+    const n = Number(String(raw).replace(/[^0-9.]/g, ""));
+    if (n > 0) return n;
+    const up = Number(unitPrice) || 0;
+    return up > 0 ? Math.round(up * 1.5 * 100) / 100 : 0;
+  };
   const regularQtItems = items.filter((item: any) => item.type !== "section");
   const hasItemDiscount = regularQtItems.some((item: any) => Number(item.discount) > 0);
   const hasQtUom = regularQtItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
   const hasQtPartNo = regularQtItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
-  const qtColCount = 2 + (hasQtPartNo ? 1 : 0) + (hasQtUom ? 1 : 0) + (hasItemDiscount ? 1 : 0) + 3;
+  const qtColCount = 2 + (hasQtPartNo ? 1 : 0) + (hasQtUom ? 1 : 0) + (hasItemDiscount ? 1 : 0) + 3 + (showManpowerCols ? 2 : 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-20">
@@ -280,8 +297,10 @@ export default function PurchaseQuotationView() {
                 <th className="px-6 py-3 text-right whitespace-nowrap">Qty</th>
                 {hasQtUom && <th className="px-6 py-3 text-center whitespace-nowrap">UOM</th>}
                 <th className="px-6 py-3 text-right whitespace-nowrap">Unit Price</th>
+                {showManpowerCols && <th className="px-6 py-3 text-right whitespace-nowrap">OT</th>}
                 {hasItemDiscount && <th className="px-6 py-3 text-right whitespace-nowrap">Disc %</th>}
                 <th className="px-6 py-3 text-right whitespace-nowrap">Amount</th>
+                {showManpowerCols && <th className="px-6 py-3 text-center whitespace-nowrap">GST</th>}
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -295,9 +314,16 @@ export default function PurchaseQuotationView() {
                 }
                 _n++;
                 const isFocItem = !!(item as any).isFoc;
+                const hours = Number(item.hours) || 0;
+                const hourly = String(item.uom || "").toLowerCase().startsWith("hour");
+                const unitPrice = Number(item.unitPrice) || 0;
+                const disc = Number(item.discount) || 0;
+                const qtyFactor = hourly ? (hours > 0 ? hours : 0) : (Number(item.qty) || 0);
+                const computedAmt = qtyFactor * unitPrice * (1 - disc / 100);
                 const qtDisplayAmount = isFocItem
-                  ? (Number(item.amount) > 0 ? Number(item.amount) : Number(item.qty) * Number(item.unitPrice) * (1 - (Number(item.discount) || 0) / 100))
-                  : (Number(item.amount) || (Number(item.qty) * Number(item.unitPrice)));
+                  ? (Number(item.amount) > 0 ? Number(item.amount) : computedAmt)
+                  : (Number(item.amount) > 0 ? Number(item.amount) : computedAmt);
+                const otVal = otRateForRow(unitPrice);
                 return (
                   <tr key={i} className="hover:bg-muted/30">
                     <td className="px-6 py-3 text-muted-foreground align-top">{_n}</td>
@@ -313,15 +339,24 @@ export default function PurchaseQuotationView() {
                     </td>
                     <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{item.qty}</td>
                     {hasQtUom && <td className="px-6 py-3 text-center text-muted-foreground">{item.uom || "—"}</td>}
-                    <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{fmt(Number(item.unitPrice) || 0)}</td>
-                    {hasItemDiscount && <td className="px-6 py-3 text-right text-muted-foreground">{Number(item.discount) > 0 ? `${item.discount}%` : "—"}</td>}
+                    <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{fmt(unitPrice)}</td>
+                    {showManpowerCols && (
+                      <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>
+                        {otVal > 0 ? fmt(otVal) : "—"}
+                      </td>
+                    )}
+                    {hasItemDiscount && <td className="px-6 py-3 text-right text-muted-foreground">{disc > 0 ? `${item.discount}%` : "—"}</td>}
                     <td className={`px-6 py-3 text-right align-top ${isFocItem ? "text-amber-600 font-medium" : ""}`}>{fmt(qtDisplayAmount)}</td>
+                    {showManpowerCols && (
+                      <td className="px-6 py-3 text-center align-top text-muted-foreground">{gstStatus}</td>
+                    )}
                   </tr>
                 );
               }); })()}
             </tbody>
           </table>
         </div>
+        {!showManpowerCols && (
         <div className="border-t p-6 flex justify-end bg-muted/10">
           <div className="w-72 space-y-2 text-sm">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{fmt(subtotal)}</span></div>
@@ -331,6 +366,7 @@ export default function PurchaseQuotationView() {
             <div className="flex justify-between font-semibold text-base border-t pt-2"><span>Total</span><span>{fmt(total)}</span></div>
           </div>
         </div>
+        )}
       </Card>
 
       <PdfPreviewModal

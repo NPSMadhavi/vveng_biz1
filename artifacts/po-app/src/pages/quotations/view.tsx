@@ -203,6 +203,11 @@ export default function QuotationView() {
   const hasQtHours = regularQtItems.some((item: any) => item.hours != null && String(item.hours).trim() !== "");
   const hasQtPartNo = regularQtItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
   const qtColCount = 2 + (hasQtPartNo ? 1 : 0) + (hasQtUom ? 1 : 0) + (hasQtHours ? 1 : 0) + (hasItemDiscount ? 1 : 0) + 3;
+  const md = (doc as any).manpowerDetails;
+  const isManpower = !!(md && typeof md === "object" && (
+    md.source || md.customerRate || md.supplierRate || md.weekdayOtRate || md.otSupplierRate
+    || (Array.isArray(md.customerBillingRates) && md.customerBillingRates.length > 0)
+  ));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 pb-20">
@@ -353,54 +358,7 @@ export default function QuotationView() {
         </Card>
       </div>
 
-      {(doc as any).manpowerDetails && (
-        <Card>
-          <CardHeader><CardTitle className="text-base">Manpower Requirements</CardTitle></CardHeader>
-          <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
-            {(doc as any).manpowerDetails.serviceStartDate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Service Start Date</span><span>{fmtDate((doc as any).manpowerDetails.serviceStartDate)}</span></div>}
-            {(doc as any).manpowerDetails.serviceEndDate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Service End Date</span><span>{fmtDate((doc as any).manpowerDetails.serviceEndDate)}</span></div>}
-            <div className="flex justify-between gap-4"><span className="text-muted-foreground">Manpower Source</span><span>{(doc as any).manpowerDetails.source === "supplier" ? "Supplier Manpower" : "Own Employees"}</span></div>
-            {(doc as any).manpowerDetails.designation && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Designation</span><span>{(doc as any).manpowerDetails.designation}</span></div>}
-            {(doc as any).manpowerDetails.workers && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Number of Workers</span><span>{(doc as any).manpowerDetails.workers}</span></div>}
-{(doc as any).manpowerDetails.hours && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Number of Hours</span><span>{(doc as any).manpowerDetails.hours}</span></div>}
-            {(doc as any).manpowerDetails.billingType && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Billing Type</span><span>{(doc as any).manpowerDetails.billingType}</span></div>}
-            {(doc as any).manpowerDetails.customerRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Customer Rate (SGD)</span><span>{(doc as any).manpowerDetails.customerRate}</span></div>}
-            {(doc as any).manpowerDetails.standardHours && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Standard Hours / Day</span><span>{(doc as any).manpowerDetails.standardHours}</span></div>}
-            {(doc as any).manpowerDetails.weekdayOtRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">OT Customer Rate</span><span>{(doc as any).manpowerDetails.weekdayOtRate}</span></div>}
-            {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.supplierRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Supplier Rate</span><span>{(doc as any).manpowerDetails.supplierRate}</span></div>}
-            {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.workingDates && <div className="flex justify-between gap-4"><span className="text-muted-foreground">Working Days</span><span>{(doc as any).manpowerDetails.workingDates}</span></div>}
-            {(doc as any).manpowerDetails.source === "supplier" && (doc as any).manpowerDetails.otSupplierRate && <div className="flex justify-between gap-4"><span className="text-muted-foreground">OT Supplier Rate</span><span>{(doc as any).manpowerDetails.otSupplierRate}</span></div>}
-          
-            {(() => {
-              const rates = Array.isArray((doc as any).manpowerDetails.customerBillingRates) && (doc as any).manpowerDetails.customerBillingRates.length
-                ? (doc as any).manpowerDetails.customerBillingRates
-                : [
-                    (doc as any).manpowerDetails.customerRate ? { category: "Normal Hour", rate: (doc as any).manpowerDetails.customerRate, gst: (doc as any).manpowerDetails.customerRateGst || "Applicable" } : null,
-                    ((doc as any).manpowerDetails.customerRateOt15 || (doc as any).manpowerDetails.weekdayOtRate) ? { category: "OT 1.5x", rate: (doc as any).manpowerDetails.customerRateOt15 || (doc as any).manpowerDetails.weekdayOtRate, gst: "Applicable" } : null,
-                  ].filter(Boolean);
-              if (!rates.length) return null;
-              return (
-              <div className="sm:col-span-2 space-y-2">
-                <div className="text-muted-foreground">Customer Billing Rates</div>
-                <div className="rounded-lg border overflow-hidden text-sm">
-                  <div className="grid grid-cols-3 bg-[#DBEAFE] px-3 py-2 font-semibold text-[#1E3A5F]">
-                    <span>Category</span><span>Rate (SGD / Hour)</span><span>GST</span>
-                  </div>
-                  {rates.map((row: any, idx: number) => (
-                    <div key={idx} className="grid grid-cols-3 border-t px-3 py-2">
-                      <span>{row.category || "—"}</span>
-                      <span>{row.rate != null && String(row.rate) !== "" ? "$" + Number(row.rate).toFixed(2) : "—"}</span>
-                      <span>{row.gst || "Applicable"}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              );
-            })()}
-          </CardContent>
-        </Card>
-      )}
-
+      {!isManpower && (
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -464,6 +422,7 @@ export default function QuotationView() {
           </div>
         </div>
       </Card>
+      )}
 
       <PdfPreviewModal
         open={previewOpen}

@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleDatePicker } from "@/components/ui/simple-date-picker";
+import { TimePickerInput } from "@/components/ui/time-picker-input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -268,7 +269,8 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   const [entries, setEntries] = useState<TimesheetEntry[]>(() => existing?.entries ?? []);
   const [employeeKey, setEmployeeKey] = useState("");
   const [workLocation, setWorkLocation] = useState(existing?.workLocation ?? "");
-  const [workDate, setWorkDate] = useState(existing?.workDate ?? todayIso());
+  const [workFrom, setWorkFrom] = useState(existing?.workDate ?? todayIso());
+  const [workTo, setWorkTo] = useState(existing?.workDate ?? todayIso());
   const [timeIn, setTimeIn] = useState("08:00");
   const [timeOut, setTimeOut] = useState("18:00");
   const [breakHours, setBreakHours] = useState("1");
@@ -425,8 +427,16 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       toast({ title: "Select employee", variant: "destructive" });
       return;
     }
-    if (!workDate) {
-      toast({ title: "Select work date", variant: "destructive" });
+    if (!workFrom) {
+      toast({ title: "Select Work From date", variant: "destructive" });
+      return;
+    }
+    if (!workTo) {
+      toast({ title: "Select Work To date", variant: "destructive" });
+      return;
+    }
+    if (workTo < workFrom) {
+      toast({ title: "Work To must be on or after Work From", variant: "destructive" });
       return;
     }
     const emp = employeeOptions.find((row) => row.id === employeeKey);
@@ -435,7 +445,9 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       employeeId: employeeKey,
       employeeLabel: emp?.label || employeeKey,
       workLocation: workLocation.trim(),
-      workDate,
+      workDate: workFrom,
+      workFrom,
+      workTo,
       timeIn,
       timeOut,
       breakHours,
@@ -444,7 +456,11 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       dayType,
     };
     setEntries((prev) => {
-      const withoutDup = prev.filter((row) => !(row.employeeId === next.employeeId && row.workDate === next.workDate));
+      const withoutDup = prev.filter((row) => !(
+        row.employeeId === next.employeeId
+        && (row.workFrom || row.workDate) === next.workFrom
+        && (row.workTo || row.workDate) === next.workTo
+      ));
       return [...withoutDup, next];
     });
     toast({ title: "Employee hours saved." });
@@ -639,7 +655,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
             <>
               <section className="space-y-4">
                 <ModalSectionHeader title="Employee Details" />
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                   <Field label="Employee">
                     <Select value={employeeKey || undefined} onValueChange={setEmployeeKey} disabled={!poId}>
                       <SelectTrigger className="w-full">
@@ -657,8 +673,21 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                   <Field label="Worksite">
                     <Input value={workLocation} onChange={(event) => setWorkLocation(event.target.value)} />
                   </Field>
-                  <Field label="Work Date">
-                    <SimpleDatePicker date={isoToDate(workDate)} setDate={(date) => setWorkDate(dateToIso(date))} />
+                  <Field label="Work From">
+                    <SimpleDatePicker
+                      date={isoToDate(workFrom)}
+                      setDate={(date) => {
+                        const next = dateToIso(date);
+                        setWorkFrom(next);
+                        if (workTo && next && workTo < next) setWorkTo(next);
+                      }}
+                    />
+                  </Field>
+                  <Field label="Work To">
+                    <SimpleDatePicker
+                      date={isoToDate(workTo)}
+                      setDate={(date) => setWorkTo(dateToIso(date))}
+                    />
                   </Field>
                 </div>
               </section>
@@ -667,10 +696,10 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                 <ModalSectionHeader title="Working Hours" />
                 <div className={formFieldGridClass}>
                   <Field label="Time In">
-                    <Input type="time" value={timeIn} onChange={(event) => setTimeIn(event.target.value)} />
+                    <TimePickerInput value={timeIn} onChange={setTimeIn} />
                   </Field>
                   <Field label="Time Out">
-                    <Input type="time" value={timeOut} onChange={(event) => setTimeOut(event.target.value)} />
+                    <TimePickerInput value={timeOut} onChange={setTimeOut} />
                   </Field>
                   <Field label="Break Hours">
                     <Input inputMode="decimal" value={breakHours} onChange={(event) => setBreakHours(event.target.value)} />
@@ -710,7 +739,8 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Employee</TableHead>
-                    <TableHead>Work Date</TableHead>
+                    <TableHead>Work From</TableHead>
+                    <TableHead>Work To</TableHead>
                     <TableHead>Worksite</TableHead>
                     <TableHead>Time In</TableHead>
                     <TableHead>Time Out</TableHead>
@@ -724,14 +754,15 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                 <TableBody>
                   {entries.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={readOnly ? 9 : 10} className="h-24 text-center text-muted-foreground">
+                      <TableCell colSpan={readOnly ? 10 : 11} className="h-24 text-center text-muted-foreground">
                         No employees saved yet.
                       </TableCell>
                     </TableRow>
                   ) : entries.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell className="font-medium">{row.employeeLabel}</TableCell>
-                      <TableCell>{formatDisplayDate(row.workDate)}</TableCell>
+                      <TableCell>{formatDisplayDate(row.workFrom || row.workDate)}</TableCell>
+                      <TableCell>{formatDisplayDate(row.workTo || row.workDate)}</TableCell>
                       <TableCell>{row.workLocation || "—"}</TableCell>
                       <TableCell>{row.timeIn}</TableCell>
                       <TableCell>{row.timeOut}</TableCell>

@@ -115,7 +115,8 @@ export function consolidateEmployeeMonthTimesheets(params: {
       return false;
     }
     const entries = entriesOf(sheet).filter((entry) =>
-      matchesEmployee(entry, params.employeeId, params.employeeCode) && monthKey(entry.workDate) === ym,
+      matchesEmployee(entry, params.employeeId, params.employeeCode)
+      && monthKey(entry.workFrom || entry.workTo || entry.workDate) === ym,
     );
     return entries.length > 0;
   });
@@ -129,7 +130,8 @@ export function consolidateEmployeeMonthTimesheets(params: {
     const billing = parseMoney(sheet.billingRate);
     const otRate = parseMoney(sheet.otBillingRate) || (billing > 0 ? billing * 1.5 : 0);
     const entries = entriesOf(sheet).filter((entry) =>
-      matchesEmployee(entry, params.employeeId, params.employeeCode) && monthKey(entry.workDate) === ym,
+      matchesEmployee(entry, params.employeeId, params.employeeCode)
+      && monthKey(entry.workFrom || entry.workTo || entry.workDate) === ym,
     );
 
     let row = byCustomer.get(partyKey);
@@ -155,10 +157,27 @@ export function consolidateEmployeeMonthTimesheets(params: {
     }
 
     for (const entry of entries) {
-      const date = String(entry.workDate || "").slice(0, 10);
-      if (date && !row.workDates.includes(date)) {
-        row.workDates.push(date);
-        row.workingDays = row.workDates.length;
+      const from = String(entry.workFrom || entry.workDate || "").slice(0, 10);
+      const to = String(entry.workTo || entry.workDate || from).slice(0, 10);
+      const datesToAdd = from && to && to >= from
+        ? (() => {
+            const out: string[] = [];
+            const start = new Date(`${from}T00:00:00`);
+            const end = new Date(`${to}T00:00:00`);
+            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+              const y = d.getFullYear();
+              const m = String(d.getMonth() + 1).padStart(2, "0");
+              const day = String(d.getDate()).padStart(2, "0");
+              out.push(`${y}-${m}-${day}`);
+            }
+            return out;
+          })()
+        : (from ? [from] : []);
+      for (const date of datesToAdd) {
+        if (date && !row.workDates.includes(date)) {
+          row.workDates.push(date);
+          row.workingDays = row.workDates.length;
+        }
       }
       const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
       row.normal = round2(row.normal + hours.normal);
