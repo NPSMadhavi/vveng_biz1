@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from "react";
+import { useLocation, useSearch } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -283,6 +284,8 @@ function convert12To24(time12: string, ampm: "AM" | "PM"): string {
 export default function SettingsBackupsPage() {
   const { toast } = useToast();
   const { isAdmin, selectedCompany } = useAuth();
+  const [location, navigate] = useLocation();
+  const searchString = useSearch();
   const qc = useQueryClient();
 
   // Search & Filter State
@@ -419,6 +422,17 @@ export default function SettingsBackupsPage() {
     setCreateModalOpen(true);
   };
 
+  // Veda / agent: open Create Backup modal when navigated with ?vedaCreate=1
+  useEffect(() => {
+    const params = new URLSearchParams(searchString.startsWith("?") ? searchString.slice(1) : searchString);
+    if (params.get("vedaCreate") !== "1") return;
+    openCreateBackupModal();
+    params.delete("vedaCreate");
+    const qs = params.toString();
+    navigate(qs ? `${location.split("?")[0]}?${qs}` : location.split("?")[0] || "/settings/backups", { replace: true });
+  }, [searchString, location, schedule, selectedCompany]);
+
+
   const handleBrowseFolder = async () => {
     setIsBrowsingFolder(true);
     // 1. Try backend native Windows folder picker helper
@@ -447,6 +461,36 @@ export default function SettingsBackupsPage() {
     });
     setIsBrowsingFolder(false);
   };
+
+
+  // Veda can trigger Browse Folder / close on the create-backup modal
+  const browseFolderRef = useRef(handleBrowseFolder);
+  browseFolderRef.current = handleBrowseFolder;
+  const createModalOpenRef = useRef(createModalOpen);
+  createModalOpenRef.current = createModalOpen;
+  const openCreateBackupModalRef = useRef(openCreateBackupModal);
+  openCreateBackupModalRef.current = openCreateBackupModal;
+
+  useEffect(() => {
+    const onAction = (e: Event) => {
+      const action = (e as CustomEvent<{ action?: string }>).detail?.action;
+      if (action === "browseFolder") {
+        if (!createModalOpenRef.current) {
+          openCreateBackupModalRef.current();
+          window.setTimeout(() => { void browseFolderRef.current(); }, 350);
+        } else {
+          void browseFolderRef.current();
+        }
+        return;
+      }
+      if (action === "close" && createModalOpenRef.current) {
+        setCreateModalOpen(false);
+      }
+    };
+    window.addEventListener("veda:form-action", onAction as EventListener);
+    return () => window.removeEventListener("veda:form-action", onAction as EventListener);
+  }, []);
+
 
   const pickLocalDownloadFolder = async () => {
     try {
@@ -941,6 +985,7 @@ export default function SettingsBackupsPage() {
               className="w-full bg-[#2563EB] hover:bg-[#1d4ed8] text-white gap-2 font-medium"
               disabled={createBackupMut.isPending || backupActive}
               onClick={openCreateBackupModal}
+              data-veda-action="create-backup-now"
             >
               {createBackupMut.isPending || backupActive ? (
                 <>
@@ -988,6 +1033,7 @@ export default function SettingsBackupsPage() {
               variant="outline"
               className="w-full gap-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50 font-medium"
               onClick={() => setScheduleModalOpen(true)}
+              data-veda-action="configure-schedule"
             >
               <CalendarClock className="h-4 w-4 text-emerald-600" />
               Configure Schedule
@@ -1019,6 +1065,7 @@ export default function SettingsBackupsPage() {
                 const el = document.getElementById("backup-history-section");
                 el?.scrollIntoView({ behavior: "smooth" });
               }}
+              data-veda-action="view-archives"
             >
               <FileCheck className="h-4 w-4 text-indigo-600" />
               View Archives Below
@@ -1047,6 +1094,7 @@ export default function SettingsBackupsPage() {
               variant="outline"
               className="w-full gap-2 border-amber-500 text-amber-700 hover:bg-amber-50 font-medium"
               onClick={() => openRestoreDialog()}
+              data-veda-action="restore-from-backup"
             >
               <RotateCcw className="h-4 w-4 text-amber-600" />
               Restore From Backup
@@ -1736,6 +1784,7 @@ export default function SettingsBackupsPage() {
                     variant="outline"
                     size="sm"
                     className="gap-1.5 text-xs whitespace-nowrap bg-white hover:bg-slate-50 border-slate-300"
+                    data-veda-action="browse-folder"
                     disabled={isBrowsingFolder}
                     onClick={handleBrowseFolder}
                   >
@@ -1957,6 +2006,7 @@ export default function SettingsBackupsPage() {
                 <Button
                   className="bg-[#2563EB] hover:bg-[#1d4ed8] text-white font-medium gap-1.5"
                   onClick={handleStartBackup}
+                  data-veda-action="create-download-backup"
                 >
                   <Archive className="h-4 w-4" />
                   Create & Download Backup

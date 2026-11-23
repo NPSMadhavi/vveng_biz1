@@ -170,7 +170,16 @@ export function consolidateEmployeeMonthTimesheets(params: {
       const from = String(entry.workFrom || entry.workDate || "").slice(0, 10);
       const to = String(entry.workTo || entry.workDate || from).slice(0, 10);
       const dates = expandWorkDates(from, to).filter((date) => monthKey(date) === ym);
-      const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+      const perDay = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+      const dayCount = Math.max(1, dates.length);
+      // Timesheet Normal/OT fields are per day; scale by Work From–To day count.
+      const hours: ClassifiedHours = {
+        normal: round2(perDay.normal * dayCount),
+        ot15: round2(perDay.ot15 * dayCount),
+        ot20: round2(perDay.ot20 * dayCount),
+        restDay: round2(perDay.restDay * dayCount),
+        publicHoliday: round2(perDay.publicHoliday * dayCount),
+      };
       const lineHours = hours.normal + hours.ot15 + hours.ot20 + hours.restDay + hours.publicHoliday;
       const key = `${partyKey}|${String(params.employeeId).trim()}|${from}|${to}`;
       const rank = statusRank(sheet.status);

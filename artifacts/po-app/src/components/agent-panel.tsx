@@ -9,6 +9,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/auth-context";
 import { queueVedaFormFill, dispatchVedaFormFill } from "@/hooks/useVedaFormFill";
 import { queueVedaFormAction, dispatchVedaFormAction } from "@/hooks/useVedaFormActions";
+import { clickUiControl, matchUiClickCommand } from "@/lib/veda-ui-click";
 import {
   dispatchOptimisticGuidedFill,
   guidedAnswerHint,
@@ -134,6 +135,7 @@ const TOOL_LABELS: Record<string, string> = {
   downloadCurrentDocument: "Downloading PDF",
   updateDocumentFields: "Updating document",
   navigateTo: "Navigating",
+  clickUiControl: "Clicking",
   openDirectoryForm: "Opening form",
   searchEmployees: "Searching employees",
   createEmployee: "Creating employee",
@@ -287,6 +289,9 @@ const PATH_ALIASES: Record<string, string> = {
   "/backups": "/settings/backups",
   "/backup": "/settings/backups",
   "/accounting/backups": "/settings/backups",
+  "/backups/create": "/settings/backups?vedaCreate=1",
+  "/backup/create": "/settings/backups?vedaCreate=1",
+  "/create-backup": "/settings/backups?vedaCreate=1",
   "/report-designer": "/report-templates",
   "/report-design": "/report-templates",
   "/report_templates": "/report-templates",
@@ -380,7 +385,7 @@ function guidedCreateKickoffHint(path: string, partyHint?: string): string {
   return `${navOnly} Start guided create: ask ONLY the first field now.`;
 }
 
-function matchExplicitFormAction(text: string): "save" | "preview" | "download" | "close" | null {
+function matchExplicitFormAction(text: string): "save" | "preview" | "download" | "close" | "browseFolder" | null {
   const t = normalizeVoiceTranscript(String(text || "")).toLowerCase().replace(/\s+/g, " ").trim();
   if (!t) return null;
   const clean = t
@@ -415,6 +420,15 @@ function matchExplicitFormAction(text: string): "save" | "preview" | "download" 
     clean === "download" || clean === "download pdf"
   ) {
     return "download";
+  }
+  // Backup modal: "click browse folder" / "browse folder" / "select folder"
+  if (
+    /\b(?:click|press|tap|open|use|hit)\s+(?:the\s+)?browse\s*folder\b/i.test(clean)
+    || /\b(?:click|press|tap)\s+(?:on\s+)?(?:the\s+)?(?:browse|folder)\s*button\b/i.test(clean)
+    || /^(?:browse\s*folder|select\s*(?:a\s+|the\s+)?folder|choose\s*(?:a\s+|the\s+)?folder|pick\s*(?:a\s+|the\s+)?folder)$/i.test(clean)
+    || /\bbrowse\s*folder\b/i.test(clean)
+  ) {
+    return "browseFolder";
   }
   return null;
 }
@@ -551,6 +565,7 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
     if (/\bexpenses?\b/.test(t)) return openNew("/accounting/expenses/new");
     if (/\bincome\b/.test(t)) return openNew("/accounting/income/new");
     if (/\b(journal\s*entries|journals?)\b/.test(t)) return openNew("/accounting/journal-entries/new");
+    if (/\bbackups?\b/.test(t)) return openNew("/settings/backups?vedaCreate=1");
     if (/\bwarehouses?\b/.test(t)) return openNew("/inventory/warehouses");
     if (/\bstock\s*transfers?\b/.test(t)) return openNew("/inventory/stock-transfer");
   }
@@ -732,6 +747,7 @@ const PATH_LABELS: Record<string, string> = {
   "/audit-log": "Audit Log",
   "/settings": "Settings",
   "/settings/backups": "Backup & Restore",
+  "/settings/backups?vedaCreate=1": "Create Backup",
   "/report-templates": "Report Templates",
 };
 
@@ -1466,6 +1482,9 @@ async function streamChat(
           }));
         }
         if (ev.type === "form_action" && ev.action) onFormAction?.(ev.action);
+        if (ev.type === "ui_click" && ev.label) {
+          clickUiControl(String(ev.label));
+        }
         if (ev.type === "document_updated") {
           onDocumentUpdated?.({
             docType: ev.docType,
@@ -2263,7 +2282,12 @@ export function AgentPanel() {
             continue;
           }
           queueVedaFormAction(explicitAction);
-          const actionMsg = explicitAction === "save" ? "Saving form now." : explicitAction === "preview" ? "Opening preview." : "Downloading PDF.";
+          const actionMsg =
+            explicitAction === "save" ? "Saving form now."
+            : explicitAction === "preview" ? "Opening preview."
+            : explicitAction === "download" ? "Downloading PDF."
+            : explicitAction === "browseFolder" ? "Opening folder browser."
+            : "Done.";
           setConvState("speaking");
           setConvText(actionMsg);
           ambientHistoryRef.current = [
@@ -2271,8 +2295,24 @@ export function AgentPanel() {
             { role: "user", content: command },
             { role: "assistant", content: actionMsg },
           ].slice(-16);
-          appendVoiceTurn(command, actionMsg, [explicitAction === "save" ? "submitCurrentForm" : explicitAction === "preview" ? "previewCurrentDocument" : "downloadCurrentDocument"]);
+          appendVoiceTurn(command, actionMsg, [explicitAction === "save" ? "submitCurrentForm" : explicitAction === "preview" ? "previewCurrentDocument" : explicitAction === "download" ? "downloadCurrentDocument" : explicitAction === "browseFolder" ? "browseFolder" : "formAction"]);
           await speakGuidedFast(actionMsg);
+          continue;
+        }
+
+        const clickLabel = matchUiClickCommand(command);
+        if (clickLabel) {
+          const clicked = clickUiControl(clickLabel);
+          const clickMsg = clicked.message;
+          setConvState("speaking");
+          setConvText(clickMsg);
+          ambientHistoryRef.current = [
+            ...ambientHistoryRef.current,
+            { role: "user", content: command },
+            { role: "assistant", content: clickMsg },
+          ].slice(-16);
+          appendVoiceTurn(command, clickMsg, clicked.ok ? ["clickUiControl"] : []);
+          await speakGuidedFast(clickMsg);
           continue;
         }
 
@@ -2905,13 +2945,33 @@ export function AgentPanel() {
       guidedDocRef.current = null;
       guidedFormPathRef.current = null;
       queueVedaFormAction(explicitAction);
-      const actionMsg = explicitAction === "save" ? "Saving form now." : explicitAction === "preview" ? "Opening preview." : "Downloading PDF.";
+      const actionMsg =
+            explicitAction === "save" ? "Saving form now."
+            : explicitAction === "preview" ? "Opening preview."
+            : explicitAction === "download" ? "Downloading PDF."
+            : explicitAction === "browseFolder" ? "Opening folder browser."
+            : "Done.";
       setMessages(p => [...p,
         { id: uid, role: "user", content: text.trim(), fromVoice },
-        { id: aid, role: "assistant", content: actionMsg, complete: true, toolCalls: [explicitAction === "save" ? "submitCurrentForm" : explicitAction === "preview" ? "previewCurrentDocument" : "downloadCurrentDocument"] },
+        { id: aid, role: "assistant", content: actionMsg, complete: true, toolCalls: [explicitAction === "save" ? "submitCurrentForm" : explicitAction === "preview" ? "previewCurrentDocument" : explicitAction === "download" ? "downloadCurrentDocument" : explicitAction === "browseFolder" ? "browseFolder" : "formAction"] },
       ]);
       setInput("");
       if (fromVoice) void speak(actionMsg);
+      return;
+    }
+
+    const clickLabel = matchUiClickCommand(text);
+    if (clickLabel) {
+      const uid = Date.now().toString();
+      const aid = `asst-${uid}`;
+      const clicked = clickUiControl(clickLabel);
+      const clickMsg = clicked.message;
+      setMessages(p => [...p,
+        { id: uid, role: "user", content: text.trim(), fromVoice },
+        { id: aid, role: "assistant", content: clickMsg, complete: true, toolCalls: clicked.ok ? ["clickUiControl"] : [] },
+      ]);
+      setInput("");
+      if (fromVoice) void speak(clickMsg);
       return;
     }
 

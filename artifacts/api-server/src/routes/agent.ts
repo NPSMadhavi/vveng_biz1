@@ -342,6 +342,25 @@ const AGENT_TOOLS = [
       },
     },
   },
+
+  {
+    type: "function",
+    function: {
+      name: "clickUiControl",
+      description: "Click any visible button, link, or control on the CURRENT page by its on-screen label — exactly like a manual user click. Use for Browse Folder, Create Backup Now, Create & Download Backup, Configure Schedule, Restore From Backup, Add, New, Edit, Delete, Confirm, Cancel, tabs, and any other labeled control. NEVER say you cannot click buttons or operate the UI. If the needed screen is not open, navigateTo first, then clickUiControl.",
+      parameters: {
+        type: "object",
+        properties: {
+          label: {
+            type: "string",
+            description: "Visible control text, e.g. 'Browse Folder', 'Create Backup Now', 'Create & Download Backup', 'Save', 'New Invoice'",
+          },
+          summary: { type: "string", description: "One-line summary, e.g. 'Clicking Browse Folder'" },
+        },
+        required: ["label", "summary"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -381,7 +400,7 @@ const AGENT_TOOLS = [
               "Directory: /customers, /customers?vedaNew=1, /vendors, /vendors?vedaNew=1, /sales-persons, /address-book. " +
               "Documents: /invoices, /invoices/new, /quotations, /quotations/new, /purchase-orders, /purchase-orders/new, /delivery-orders, /delivery-orders/new, /sales-orders, /sales-orders/new, /purchase-quotations, /purchase-quotations/new, /proforma-invoices, /proforma-invoices/new, /credit-notes, /credit-notes/new, /debit-notes, /debit-notes/new, /vendor-invoices, /vendor-invoices/new, /grn, /grn/new, /point-of-sale, /bill-of-materials. " +
               "Accounting: /accounting/chart-of-accounts, /accounting/journal-entries, /accounting/general-ledger, /accounting/trial-balance, /accounting/balance-sheet, /accounting/profit-loss, /accounting/cash-flow, /accounting/income, /accounting/expenses, /accounting/gst-f5, /accounting/gst-f7, /accounting/gst-io, /accounting/wht, /accounting/eci, /accounting/form-cs, /accounting/iaf, /accounting/ar, /accounting/ar-aging, /accounting/customer-statement, /accounting/ap, /accounting/ap-aging, /accounting/vendor-statement. " +
-              "System: /dashboard, /admin, /audit-log, /settings, /settings/backups, /report-templates. " +
+              "System: /dashboard, /admin, /audit-log, /settings, /settings/backups, /settings/backups?vedaCreate=1 (Create Backup), /report-templates. " +
               "Document details/edit: /invoices/:id, /quotations/:id, etc.",
           },
           prefill: {
@@ -1504,6 +1523,12 @@ async function executeTool(
       return { _formAction: true, action: "download", summary: args.summary };
     }
 
+    case "clickUiControl": {
+      const label = String(args.label || "").trim();
+      if (!label) return { error: "label is required (the on-screen button or link text)." };
+      return { _uiClick: true, label, summary: args.summary || `Clicking ${label}` };
+    }
+
     case "updateDocumentFields": {
       const { docType, id } = args;
       let fields = args.fields;
@@ -1754,6 +1779,8 @@ async function executeTool(
         "/user-management": "/admin",
         "/user_management": "/admin",
         "/backups": "/settings/backups",
+        "/create-backup": "/settings/backups?vedaCreate=1",
+        "/backups/create": "/settings/backups?vedaCreate=1",
         "/report-designer": "/report-templates",
         "/report_templates": "/report-templates",
         "/employee": "/employees",
@@ -2439,6 +2466,15 @@ async function emitExecutedTool(
     toolResult = { triggered: true, action: toolResult.action, summary: toolResult.summary };
   }
 
+  if (toolResult && toolResult._uiClick) {
+    res.write(`data: ${JSON.stringify({
+      type: "ui_click",
+      label: toolResult.label,
+      summary: toolResult.summary,
+    })}\n\n`);
+    toolResult = { triggered: true, clicked: toolResult.label, summary: toolResult.summary };
+  }
+
   if (toolResult && toolResult._documentUpdated) {
     res.write(`data: ${JSON.stringify({
       type: "document_updated",
@@ -2641,6 +2677,14 @@ Example: "change vendor Venkatesh to Ramu on this PO, save and download"
 2. On yes: searchPurchaseOrders → updateDocumentFields docType=po, id=..., fields={ vendorName: "Ramu" }
 3. downloadCurrentDocument if they asked
 Key MUST be vendorName / customerName. Never say it was changed unless updateDocumentFields returned success:true. Keep the reply to one short line.
+
+### Clicking buttons / doing everything a user can do manually (critical)
+- You operate BizOne the same way a manual user does: navigate pages, open forms, fill fields, click buttons, save, preview, download, browse folders, create backups, restore, etc.
+- NEVER say you are unable to click buttons, operate the UI, or open a folder browser. That is false.
+- When the user says "click X", "press X", "browse folder", or names any on-screen action: call clickUiControl with that exact label (e.g. label="Browse Folder", "Create Backup Now", "Create & Download Backup", "Configure Schedule", "Restore From Backup").
+- If the control is on another page: navigateTo first, then clickUiControl.
+- Backup create flow: navigateTo /settings/backups?vedaCreate=1 (opens Create Backup modal) → clickUiControl "Browse Folder" if they want a folder → clickUiControl "Create & Download Backup" to start.
+- Prefer clickUiControl for any unlabeled workflow step that is just a button on the current screen.
 
 ### Save, preview, and download the open document
 - User says "save", "save form", "submit", "save draft", or confirms saving → IMMEDIATELY call submitCurrentForm without delay or extra questions.

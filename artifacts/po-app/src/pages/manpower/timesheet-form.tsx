@@ -74,19 +74,46 @@ async function fetchJson<T>(url: string): Promise<T[]> {
   return Array.isArray(data) ? data : [];
 }
 
+/** Inclusive calendar days between Work From and Work To (e.g. 1 Nov–25 Nov = 25). */
+function countInclusiveDays(from?: string, to?: string): number {
+  const startIso = String(from || "").slice(0, 10);
+  const endIso = String(to || from || "").slice(0, 10);
+  if (!startIso) return 1;
+  if (!endIso || endIso < startIso) return 1;
+  const start = new Date(`${startIso}T00:00:00`);
+  const end = new Date(`${endIso}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 1;
+  const days = Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+  return Math.max(1, days);
+}
+
+function scaleEntryHours(row: Pick<TimesheetEntry, "workFrom" | "workTo" | "workDate" | "dayType" | "normalHours" | "overtimeHours">) {
+  const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
+  const base = classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
+  return {
+    days,
+    normal: base.normal * days,
+    ot15: base.ot15 * days,
+    ot20: base.ot20 * days,
+    restDay: base.restDay * days,
+    publicHoliday: base.publicHoliday * days,
+  };
+}
+
 function sumClassification(entries: TimesheetEntry[]) {
   return entries.reduce(
     (acc, row) => {
-      const c = classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
+      const c = scaleEntryHours(row);
       return {
         normal: acc.normal + c.normal,
         ot15: acc.ot15 + c.ot15,
         ot20: acc.ot20 + c.ot20,
         restDay: acc.restDay + c.restDay,
         publicHoliday: acc.publicHoliday + c.publicHoliday,
+        workingDays: acc.workingDays + c.days,
       };
     },
-    { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 },
+    { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0, workingDays: 0 },
   );
 }
 
@@ -176,8 +203,14 @@ function mapPurchaseOrders(docs: any[]): PoDoc[] {
 }
 
 function entryTotals(entries: TimesheetEntry[]) {
-  const normal = entries.reduce((sum, row) => sum + (Number(row.normalHours) || 0), 0);
-  const overtime = entries.reduce((sum, row) => sum + (Number(row.overtimeHours) || 0), 0);
+  const normal = entries.reduce((sum, row) => {
+    const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
+    return sum + (Number(row.normalHours) || 0) * days;
+  }, 0);
+  const overtime = entries.reduce((sum, row) => {
+    const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
+    return sum + (Number(row.overtimeHours) || 0) * days;
+  }, 0);
   const first = entries[0];
   return {
     normalHours: String(Math.round(normal * 100) / 100),
@@ -583,6 +616,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
 
   const approvalLabel = side === "customer" ? "Customer Approval" : "Vendor Approval";
   const classRows = [
+    { label: "Working Days", value: classification.workingDays },
     { label: "Normal Hours", value: classification.normal },
     { label: "OT 1.5x", value: classification.ot15 },
     { label: "OT 2.0x", value: classification.ot20 },
@@ -706,9 +740,11 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                   </Field>
                   <Field label="Normal Hours">
                     <Input inputMode="decimal" value={normalHours} onChange={(event) => setNormalHours(event.target.value)} />
+                    <p className="text-[11px] text-[#6B7280]">Per day — multiplied by Work From–To days</p>
                   </Field>
                   <Field label="Overtime Hours">
                     <Input inputMode="decimal" value={overtimeHours} onChange={(event) => setOvertimeHours(event.target.value)} />
+                    <p className="text-[11px] text-[#6B7280]">Per day — multiplied by Work From–To days</p>
                   </Field>
                   <Field label="Day Type">
                     <Select value={dayType} onValueChange={setDayType}>
@@ -744,8 +780,11 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                     <TableHead>Worksite</TableHead>
                     <TableHead>Time In</TableHead>
                     <TableHead>Time Out</TableHead>
-                    <TableHead className="text-right">Normal</TableHead>
-                    <TableHead className="text-right">OT</TableHead>
+                    <TableHead className="text-right">Days</TableHead>
+                    <TableHead className="text-right">Normal / day</TableHead>
+                    <TableHead className="text-right">OT / day</TableHead>
+                    <TableHead className="text-right">Normal Total</TableHead>
+                    <TableHead className="text-right">OT Total</TableHead>
                     <TableHead>Day Type</TableHead>
                     <TableHead className="text-right">Total Hours</TableHead>
                     {!readOnly && <TableHead className="w-16"> </TableHead>}
@@ -754,7 +793,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                 <TableBody>
                   {entries.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={readOnly ? 10 : 11} className="h-24 text-center text-muted-foreground">
+                      <TableCell colSpan={readOnly ? 13 : 14} className="h-24 text-center text-muted-foreground">
                         No employees saved yet.
                       </TableCell>
                     </TableRow>
@@ -766,12 +805,24 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                       <TableCell>{row.workLocation || "—"}</TableCell>
                       <TableCell>{row.timeIn}</TableCell>
                       <TableCell>{row.timeOut}</TableCell>
-                      <TableCell className="text-right tabular-nums">{row.normalHours}</TableCell>
-                      <TableCell className="text-right tabular-nums">{row.overtimeHours}</TableCell>
-                      <TableCell>{row.dayType}</TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">
-                        {Math.round(((Number(row.normalHours) || 0) + (Number(row.overtimeHours) || 0)) * 100) / 100}
-                      </TableCell>
+                      {(() => {
+                        const scaled = scaleEntryHours(row);
+                        const normalTotal = Math.round(scaled.normal * 100) / 100;
+                        const otTotal = Math.round((scaled.ot15 + scaled.ot20 + scaled.restDay + scaled.publicHoliday) * 100) / 100;
+                        return (
+                          <>
+                            <TableCell className="text-right tabular-nums">{scaled.days}</TableCell>
+                            <TableCell className="text-right tabular-nums">{row.normalHours}</TableCell>
+                            <TableCell className="text-right tabular-nums">{row.overtimeHours}</TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">{normalTotal}</TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">{otTotal}</TableCell>
+                            <TableCell>{row.dayType}</TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">
+                              {Math.round((normalTotal + otTotal) * 100) / 100}
+                            </TableCell>
+                          </>
+                        );
+                      })()}
                       {!readOnly && (
                         <TableCell>
                           <Button
@@ -794,7 +845,12 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
           </section>
 
           <section className="space-y-4">
-            <h3 className="text-base font-semibold text-[#111827]">Working Hours Classification</h3>
+            <div className="space-y-1">
+              <h3 className="text-base font-semibold text-[#111827]">Working Hours Classification</h3>
+              <p className="text-xs text-[#6B7280]">
+                Totals = daily hours × days in Work From–To (e.g. 8 normal × 25 days = 200).
+              </p>
+            </div>
             <div className="overflow-hidden rounded-lg border border-[#E5E7EB] bg-white">
               <table className="w-full text-sm">
                 <thead>
