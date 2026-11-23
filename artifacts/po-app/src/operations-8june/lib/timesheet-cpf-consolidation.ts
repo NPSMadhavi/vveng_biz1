@@ -29,7 +29,7 @@ export type EmployeeMonthConsolidation = {
   year: number;
   month: number;
   customers: CustomerHoursRow[];
-  totals: ClassifiedHours & { totalHours: number; wage: number };
+  totals: ClassifiedHours & { totalHours: number; wage: number; workingDays: number };
   timesheetIds: string[];
 };
 
@@ -91,9 +91,32 @@ function isApproved(status: Timesheet["status"]) {
   return status === "approved";
 }
 
+function statusRank(status: Timesheet["status"]) {
+  if (status === "approved") return 3;
+  if (status === "submitted") return 2;
+  if (status === "draft") return 1;
+  return 0;
+}
+
+function expandWorkDates(from: string, to: string): string[] {
+  if (!from) return [];
+  if (!to || to < from) return [from];
+  const out: string[] = [];
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${day}`);
+  }
+  return out;
+}
+
 /**
- * Consolidate all approved timesheets for one employee in one calendar month,
- * grouped by customer. CPF must use the employee-level monthly totals only once.
+ * Consolidate timesheets for one employee in one calendar month, grouped by customer.
+ * Duplicate entries for the same customer + date range (e.g. draft + approved copies)
+ * are collapsed so hours are not double-counted. CPF uses employee-level totals once.
  */
 export function consolidateEmployeeMonthTimesheets(params: {
   employeeId: string | number;
@@ -121,18 +144,56 @@ export function consolidateEmployeeMonthTimesheets(params: {
     return entries.length > 0;
   });
 
-  const byCustomer = new Map<string, CustomerHoursRow>();
-  const timesheetIds: string[] = [];
+  type PendingLine = {
+    sheet: Timesheet;
+    entry: TimesheetEntry;
+    partyKey: string;
+    from: string;
+    to: string;
+    dates: string[];
+    hours: ClassifiedHours;
+    lineHours: number;
+    rank: number;
+  };
+
+  // Dedupe by customer + employee + date range so re-saved / draft+approved copies
+  // do not double normal/actual hours (e.g. 8 → 16).
+  const bestByKey = new Map<string, PendingLine>();
 
   for (const sheet of matchedSheets) {
-    timesheetIds.push(sheet.id);
     const partyKey = String(sheet.partyId || sheet.partyName || "unknown");
-    const billing = parseMoney(sheet.billingRate);
-    const otRate = parseMoney(sheet.otBillingRate) || (billing > 0 ? billing * 1.5 : 0);
     const entries = entriesOf(sheet).filter((entry) =>
       matchesEmployee(entry, params.employeeId, params.employeeCode)
       && monthKey(entry.workFrom || entry.workTo || entry.workDate) === ym,
     );
+    for (const entry of entries) {
+      const from = String(entry.workFrom || entry.workDate || "").slice(0, 10);
+      const to = String(entry.workTo || entry.workDate || from).slice(0, 10);
+      const dates = expandWorkDates(from, to).filter((date) => monthKey(date) === ym);
+      const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+      const lineHours = hours.normal + hours.ot15 + hours.ot20 + hours.restDay + hours.publicHoliday;
+      const key = `${partyKey}|${String(params.employeeId).trim()}|${from}|${to}`;
+      const rank = statusRank(sheet.status);
+      const pending: PendingLine = { sheet, entry, partyKey, from, to, dates, hours, lineHours, rank };
+      const existing = bestByKey.get(key);
+      if (!existing) {
+        bestByKey.set(key, pending);
+        continue;
+      }
+      if (rank > existing.rank || (rank === existing.rank && lineHours >= existing.lineHours)) {
+        bestByKey.set(key, pending);
+      }
+    }
+  }
+
+  const byCustomer = new Map<string, CustomerHoursRow>();
+  const timesheetIds: string[] = [];
+
+  for (const line of bestByKey.values()) {
+    const { sheet, partyKey, dates, hours, lineHours } = line;
+    if (!timesheetIds.includes(sheet.id)) timesheetIds.push(sheet.id);
+    const billing = parseMoney(sheet.billingRate);
+    const otRate = parseMoney(sheet.otBillingRate) || (billing > 0 ? billing * 1.5 : 0);
 
     let row = byCustomer.get(partyKey);
     if (!row) {
@@ -155,45 +216,24 @@ export function consolidateEmployeeMonthTimesheets(params: {
     if (sheet.timesheetNo && !row.timesheetNos.includes(sheet.timesheetNo)) {
       row.timesheetNos.push(sheet.timesheetNo);
     }
-
-    for (const entry of entries) {
-      const from = String(entry.workFrom || entry.workDate || "").slice(0, 10);
-      const to = String(entry.workTo || entry.workDate || from).slice(0, 10);
-      const datesToAdd = from && to && to >= from
-        ? (() => {
-            const out: string[] = [];
-            const start = new Date(`${from}T00:00:00`);
-            const end = new Date(`${to}T00:00:00`);
-            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-              const y = d.getFullYear();
-              const m = String(d.getMonth() + 1).padStart(2, "0");
-              const day = String(d.getDate()).padStart(2, "0");
-              out.push(`${y}-${m}-${day}`);
-            }
-            return out;
-          })()
-        : (from ? [from] : []);
-      for (const date of datesToAdd) {
-        if (date && !row.workDates.includes(date)) {
-          row.workDates.push(date);
-          row.workingDays = row.workDates.length;
-        }
+    for (const date of dates) {
+      if (date && !row.workDates.includes(date)) {
+        row.workDates.push(date);
+        row.workingDays = row.workDates.length;
       }
-      const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
-      row.normal = round2(row.normal + hours.normal);
-      row.ot15 = round2(row.ot15 + hours.ot15);
-      row.ot20 = round2(row.ot20 + hours.ot20);
-      row.restDay = round2(row.restDay + hours.restDay);
-      row.publicHoliday = round2(row.publicHoliday + hours.publicHoliday);
-      const lineHours = hours.normal + hours.ot15 + hours.ot20 + hours.restDay + hours.publicHoliday;
-      row.totalHours = round2(row.totalHours + lineHours);
-      const lineWage =
-        hours.normal * billing +
-        hours.ot15 * otRate +
-        hours.ot20 * (otRate > 0 ? otRate * (2 / 1.5) : 0) +
-        (hours.restDay + hours.publicHoliday) * otRate;
-      row.wage = round2(row.wage + lineWage);
     }
+    row.normal = round2(row.normal + hours.normal);
+    row.ot15 = round2(row.ot15 + hours.ot15);
+    row.ot20 = round2(row.ot20 + hours.ot20);
+    row.restDay = round2(row.restDay + hours.restDay);
+    row.publicHoliday = round2(row.publicHoliday + hours.publicHoliday);
+    row.totalHours = round2(row.totalHours + lineHours);
+    const lineWage =
+      hours.normal * billing +
+      hours.ot15 * otRate +
+      hours.ot20 * (otRate > 0 ? otRate * (2 / 1.5) : 0) +
+      (hours.restDay + hours.publicHoliday) * otRate;
+    row.wage = round2(row.wage + lineWage);
   }
 
   const customers = [...byCustomer.values()].sort((a, b) => a.customerName.localeCompare(b.customerName));
@@ -206,8 +246,9 @@ export function consolidateEmployeeMonthTimesheets(params: {
       publicHoliday: round2(acc.publicHoliday + row.publicHoliday),
       totalHours: round2(acc.totalHours + row.totalHours),
       wage: round2(acc.wage + row.wage),
+      workingDays: acc.workingDays + (row.workingDays || 0),
     }),
-    { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0, totalHours: 0, wage: 0 },
+    { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0, totalHours: 0, wage: 0, workingDays: 0 },
   );
 
   return {

@@ -760,19 +760,33 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
     const partyKey = String(row.partyId || row.customerName || "");
     setSelectedCustomerPartyKey(partyKey);
     if (row.partyId) setCustomerId(String(row.partyId));
-    const days = row.workingDays > 0 ? row.workingDays : Math.max(1, Math.round(row.normal / HOURS_PER_WORKING_DAY) || 0);
+  };
+
+  /** Per Hour + CPF must use ALL customers combined (not only the clicked row). */
+  const applyAllCustomersHours = (rows: CustomerHoursRow[]) => {
+    if (!rows.length) return;
+    const days = rows.reduce((sum, row) => {
+      const rowDays = row.workingDays > 0
+        ? row.workingDays
+        : Math.max(1, Math.round(row.normal / HOURS_PER_WORKING_DAY) || 0);
+      return sum + rowDays;
+    }, 0);
+    const normal = Math.round(rows.reduce((sum, row) => sum + row.normal, 0) * 100) / 100;
+    const total = Math.round(rows.reduce((sum, row) => sum + row.totalHours, 0) * 100) / 100;
+    const ot15 = Math.round(rows.reduce((sum, row) => sum + row.ot15, 0) * 100) / 100;
+    const ot20 = Math.round(rows.reduce((sum, row) => sum + row.ot20, 0) * 100) / 100;
+    const rest = Math.round(rows.reduce((sum, row) => sum + row.restDay, 0) * 100) / 100;
+    const ph = Math.round(rows.reduce((sum, row) => sum + row.publicHoliday, 0) * 100) / 100;
+    const ot = Math.round((ot15 + ot20 + rest + ph) * 100) / 100;
     if (days > 0) {
       form.setValue("workingDays", days, { shouldDirty: true, shouldValidate: true });
     }
-    const normal = Math.round(row.normal * 100) / 100;
-    const total = Math.round(row.totalHours * 100) / 100;
     if (normal > 0) setNormalHours(String(normal));
     if (total > 0) setActualHours(String(total));
-    const ot = Math.round((row.ot15 + row.ot20 + row.restDay + row.publicHoliday) * 100) / 100;
-    setSelectedTsOt15(Math.round(row.ot15 * 100) / 100);
-    setSelectedTsOt20(Math.round(row.ot20 * 100) / 100);
-    setSelectedTsRest(Math.round(row.restDay * 100) / 100);
-    setSelectedTsPh(Math.round(row.publicHoliday * 100) / 100);
+    setSelectedTsOt15(ot15);
+    setSelectedTsOt20(ot20);
+    setSelectedTsRest(rest);
+    setSelectedTsPh(ph);
     form.setValue("overtimeRate", ot > 0 ? ot : undefined, { shouldDirty: true, shouldValidate: true });
   };
 
@@ -1131,12 +1145,14 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
       setSelectedTsPh(0);
       return;
     }
-    // Always load timesheet hours into Per Hour (never leave month weekdays 21 fallback)
+    // Always load COMBINED timesheet hours into Per Hour (all customers for the month)
     if (timesheetCustomers.length > 0) {
-      const matched = timesheetCustomers.find(
-        (row) => String(row.partyId || row.customerName || "") === selectedCustomerPartyKey,
-      );
-      applyCustomerHoursRow(matched || timesheetCustomers[0]);
+      applyAllCustomersHours(timesheetCustomers);
+      if (!selectedCustomerPartyKey) {
+        const first = timesheetCustomers[0];
+        setSelectedCustomerPartyKey(String(first.partyId || first.customerName || ""));
+        if (first.partyId) setCustomerId(String(first.partyId));
+      }
       return;
     }
     // fallback to deployment-linked customers
@@ -1582,7 +1598,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
               {selectedEmployee && !isAllEmployees && selectedPayrollMonth != null && (
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-[#111827]">
-                    Customers — click a customer to load per-hour / working days
+                    Customers — hours below are the sum of all customers; click to select assignment
                   </p>
                   {timesheetCustomers.length === 0 ? (
                     <div className="rounded-md border border-dashed border-[#E5E7EB] px-3 py-4 text-sm text-[#6B7280]">
@@ -1817,7 +1833,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       value={selectedPayrollMonth == null ? "" : String(hourlyWorkingDays)}
                       className={readOnlyInputClass}
                     />
-                    <p className="text-xs text-[#6B7280]">From selected customer timesheet (or weekdays in month)</p>
+                    <p className="text-xs text-[#6B7280]">From all customer timesheets combined (or weekdays in month)</p>
                   </div>
                   <div className="space-y-1.5">
                     <label className={payheadLabelClass}>Normal Working Hours</label>
@@ -1827,7 +1843,7 @@ export default function PayrollConfigForm({ onSuccess, onCancel, editData }: Pay
                       className={readOnlyInputClass}
                     />
                     <p className="text-xs text-[#6B7280]">
-                      {normalHours !== "" ? "From timesheet normal hours" : hourlyWorkingDays > 0 ? `${hourlyWorkingDays} working days × ${HOURS_PER_WORKING_DAY} hours` : "Select a month"}
+                      {normalHours !== "" ? "From all customer timesheets combined" : hourlyWorkingDays > 0 ? `${hourlyWorkingDays} working days × ${HOURS_PER_WORKING_DAY} hours` : "Select a month"}
                     </p>
                   </div>
                   <div className="space-y-1.5">
