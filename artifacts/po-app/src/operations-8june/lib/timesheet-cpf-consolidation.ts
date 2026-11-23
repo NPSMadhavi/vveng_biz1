@@ -144,21 +144,19 @@ export function consolidateEmployeeMonthTimesheets(params: {
     return entries.length > 0;
   });
 
-  type PendingLine = {
+  // Per calendar day hours (Normal/OT on the form are per day).
+  // Overlapping ranges (e.g. 1–25 Nov plus a single day inside that range) must not double-count.
+  type DayHours = {
     sheet: Timesheet;
-    entry: TimesheetEntry;
     partyKey: string;
-    from: string;
-    to: string;
-    dates: string[];
+    date: string;
     hours: ClassifiedHours;
     lineHours: number;
     rank: number;
+    spanDays: number; // prefer wider range when ranks/hours tie
   };
 
-  // Dedupe by customer + employee + date range so re-saved / draft+approved copies
-  // do not double normal/actual hours (e.g. 8 → 16).
-  const bestByKey = new Map<string, PendingLine>();
+  const bestByDay = new Map<string, DayHours>();
 
   for (const sheet of matchedSheets) {
     const partyKey = String(sheet.partyId || sheet.partyName || "unknown");
@@ -170,27 +168,47 @@ export function consolidateEmployeeMonthTimesheets(params: {
       const from = String(entry.workFrom || entry.workDate || "").slice(0, 10);
       const to = String(entry.workTo || entry.workDate || from).slice(0, 10);
       const dates = expandWorkDates(from, to).filter((date) => monthKey(date) === ym);
-      const perDay = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
-      const dayCount = Math.max(1, dates.length);
-      // Timesheet Normal/OT fields are per day; scale by Work From–To day count.
-      const hours: ClassifiedHours = {
-        normal: round2(perDay.normal * dayCount),
-        ot15: round2(perDay.ot15 * dayCount),
-        ot20: round2(perDay.ot20 * dayCount),
-        restDay: round2(perDay.restDay * dayCount),
-        publicHoliday: round2(perDay.publicHoliday * dayCount),
-      };
-      const lineHours = hours.normal + hours.ot15 + hours.ot20 + hours.restDay + hours.publicHoliday;
-      const key = `${partyKey}|${String(params.employeeId).trim()}|${from}|${to}`;
+      if (dates.length === 0) continue;
+
+      // Detect already-scaled totals mistakenly stored on a multi-day entry (e.g. 200 for 25 days).
+      const rawNormal = Number(entry.normalHours) || 0;
+      const rawOt = Number(entry.overtimeHours) || 0;
+      const span = Math.max(1, dates.length);
+      const looksPreScaled = span > 1 && rawNormal + rawOt > 24;
+      const perDay = looksPreScaled
+        ? classifyEntryHours(
+            entry.dayType,
+            round2(rawNormal / span),
+            round2(rawOt / span),
+          )
+        : classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+
       const rank = statusRank(sheet.status);
-      const pending: PendingLine = { sheet, entry, partyKey, from, to, dates, hours, lineHours, rank };
-      const existing = bestByKey.get(key);
-      if (!existing) {
-        bestByKey.set(key, pending);
-        continue;
-      }
-      if (rank > existing.rank || (rank === existing.rank && lineHours >= existing.lineHours)) {
-        bestByKey.set(key, pending);
+      for (const date of dates) {
+        const key = `${partyKey}|${String(params.employeeId).trim()}|${date}`;
+        const lineHours = perDay.normal + perDay.ot15 + perDay.ot20 + perDay.restDay + perDay.publicHoliday;
+        const pending: DayHours = {
+          sheet,
+          partyKey,
+          date,
+          hours: { ...perDay },
+          lineHours,
+          rank,
+          spanDays: span,
+        };
+        const existing = bestByDay.get(key);
+        if (!existing) {
+          bestByDay.set(key, pending);
+          continue;
+        }
+        // Prefer higher approval status; then higher daily hours; then wider original range
+        if (
+          rank > existing.rank
+          || (rank === existing.rank && lineHours > existing.lineHours)
+          || (rank === existing.rank && lineHours === existing.lineHours && span > existing.spanDays)
+        ) {
+          bestByDay.set(key, pending);
+        }
       }
     }
   }
@@ -198,8 +216,8 @@ export function consolidateEmployeeMonthTimesheets(params: {
   const byCustomer = new Map<string, CustomerHoursRow>();
   const timesheetIds: string[] = [];
 
-  for (const line of bestByKey.values()) {
-    const { sheet, partyKey, dates, hours, lineHours } = line;
+  for (const day of bestByDay.values()) {
+    const { sheet, partyKey, date, hours } = day;
     if (!timesheetIds.includes(sheet.id)) timesheetIds.push(sheet.id);
     const billing = parseMoney(sheet.billingRate);
     const otRate = parseMoney(sheet.otBillingRate) || (billing > 0 ? billing * 1.5 : 0);
@@ -225,17 +243,16 @@ export function consolidateEmployeeMonthTimesheets(params: {
     if (sheet.timesheetNo && !row.timesheetNos.includes(sheet.timesheetNo)) {
       row.timesheetNos.push(sheet.timesheetNo);
     }
-    for (const date of dates) {
-      if (date && !row.workDates.includes(date)) {
-        row.workDates.push(date);
-        row.workingDays = row.workDates.length;
-      }
+    if (date && !row.workDates.includes(date)) {
+      row.workDates.push(date);
+      row.workingDays = row.workDates.length;
     }
     row.normal = round2(row.normal + hours.normal);
     row.ot15 = round2(row.ot15 + hours.ot15);
     row.ot20 = round2(row.ot20 + hours.ot20);
     row.restDay = round2(row.restDay + hours.restDay);
     row.publicHoliday = round2(row.publicHoliday + hours.publicHoliday);
+    const lineHours = hours.normal + hours.ot15 + hours.ot20 + hours.restDay + hours.publicHoliday;
     row.totalHours = round2(row.totalHours + lineHours);
     const lineWage =
       hours.normal * billing +

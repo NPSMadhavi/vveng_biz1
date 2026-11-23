@@ -89,6 +89,20 @@ function countInclusiveDays(from?: string, to?: string): number {
 
 function scaleEntryHours(row: Pick<TimesheetEntry, "workFrom" | "workTo" | "workDate" | "dayType" | "normalHours" | "overtimeHours">) {
   const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
+  const rawN = Number(row.normalHours) || 0;
+  const rawO = Number(row.overtimeHours) || 0;
+  // If multi-day row already stores range totals (e.g. 200), do not multiply again.
+  if (days > 1 && rawN + rawO > 24) {
+    const base = classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
+    return {
+      days,
+      normal: base.normal,
+      ot15: base.ot15,
+      ot20: base.ot20,
+      restDay: base.restDay,
+      publicHoliday: base.publicHoliday,
+    };
+  }
   const base = classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
   return {
     days,
@@ -100,19 +114,54 @@ function scaleEntryHours(row: Pick<TimesheetEntry, "workFrom" | "workTo" | "work
   };
 }
 
+function expandEntryDates(from?: string, to?: string): string[] {
+  const startIso = String(from || "").slice(0, 10);
+  const endIso = String(to || from || "").slice(0, 10);
+  if (!startIso) return [];
+  if (!endIso || endIso < startIso) return [startIso];
+  const out: string[] = [];
+  const start = new Date(`${startIso}T00:00:00`);
+  const end = new Date(`${endIso}T00:00:00`);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${day}`);
+  }
+  return out;
+}
+
 function sumClassification(entries: TimesheetEntry[]) {
-  return entries.reduce(
-    (acc, row) => {
-      const c = scaleEntryHours(row);
-      return {
-        normal: acc.normal + c.normal,
-        ot15: acc.ot15 + c.ot15,
-        ot20: acc.ot20 + c.ot20,
-        restDay: acc.restDay + c.restDay,
-        publicHoliday: acc.publicHoliday + c.publicHoliday,
-        workingDays: acc.workingDays + c.days,
-      };
-    },
+  // Attribute per-day hours to each calendar date; overlapping ranges do not double-count.
+  const bestByDay = new Map<string, { normal: number; ot15: number; ot20: number; restDay: number; publicHoliday: number; line: number; span: number }>();
+  for (const row of entries) {
+    const dates = expandEntryDates(row.workFrom || row.workDate, row.workTo || row.workDate);
+    const span = Math.max(1, dates.length || countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate));
+    const rawN = Number(row.normalHours) || 0;
+    const rawO = Number(row.overtimeHours) || 0;
+    const looksPreScaled = span > 1 && rawN + rawO > 24;
+    const base = looksPreScaled
+      ? classifyEntryHours(row.dayType, Math.round((rawN / span) * 100) / 100, Math.round((rawO / span) * 100) / 100)
+      : classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
+    const line = base.normal + base.ot15 + base.ot20 + base.restDay + base.publicHoliday;
+    const dayList = dates.length > 0 ? dates : ["_"];
+    for (const date of dayList) {
+      const key = `${row.employeeId}|${date}`;
+      const existing = bestByDay.get(key);
+      if (!existing || line > existing.line || (line === existing.line && span > existing.span)) {
+        bestByDay.set(key, { ...base, line, span });
+      }
+    }
+  }
+  return [...bestByDay.values()].reduce(
+    (acc, c) => ({
+      normal: acc.normal + c.normal,
+      ot15: acc.ot15 + c.ot15,
+      ot20: acc.ot20 + c.ot20,
+      restDay: acc.restDay + c.restDay,
+      publicHoliday: acc.publicHoliday + c.publicHoliday,
+      workingDays: acc.workingDays + 1,
+    }),
     { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0, workingDays: 0 },
   );
 }
