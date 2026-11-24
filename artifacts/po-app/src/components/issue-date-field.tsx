@@ -1,4 +1,4 @@
-import { AlertTriangle, Info } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SyncBridgeDatePicker } from "@/components/ui/sync-bridge-date-picker";
 
@@ -24,7 +24,6 @@ function daysDiff(dateStr: string): number {
 export function IssueDateField({ value, onChange, label = "Document Date", className, hideHints = false }: IssueDateFieldProps) {
   const effectiveValue = value || today();
   const diff = daysDiff(effectiveValue);
-  const isBackdated = diff > 0;
   const isFuture = diff < 0;
   const isStale = diff > 30;
 
@@ -44,12 +43,7 @@ export function IssueDateField({ value, onChange, label = "Document Date", class
           Future dates are not recommended for issued documents.
         </p>
       )}
-      {!hideHints && isBackdated && !isStale && (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Info className="h-3 w-3 shrink-0" />
-          Backdated {diff} day{diff !== 1 ? "s" : ""} — acceptable if work/goods were supplied on this date.
-        </p>
-      )}
+
       {!hideHints && isStale && (
         <p className="flex items-center gap-1.5 text-xs text-amber-600">
           <AlertTriangle className="h-3 w-3 shrink-0" />

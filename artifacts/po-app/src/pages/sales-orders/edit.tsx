@@ -668,7 +668,22 @@ export default function SalesOrderEdit() {
                   )}
                 </div>
                 {isManpower ? (
-                  <ManpowerSalesDateFields control={form.control} />
+                  <ManpowerSalesDateFields control={form.control}>
+                    <FormField control={form.control} name="status" render={({ field }) => (
+                      <FormItem className="min-w-0">
+                        <FormLabel>Status</FormLabel>
+                        <select
+                          value={field.value}
+                          onChange={e => field.onChange(e.target.value)}
+                          className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                        >
+                          <option value="draft">Draft</option>
+                          <option value="confirmed">Confirmed</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                      </FormItem>
+                    )} />
+                  </ManpowerSalesDateFields>
                 ) : (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <FormField control={form.control} name="isPrivate" render={({ field }) => (
@@ -682,18 +697,6 @@ export default function SalesOrderEdit() {
                     </FormItem>
                   )} />
                 </div>
-                )}
-                {isManpower && (
-                <FormField control={form.control} name="status" render={({ field }) => (
-                  <FormItem className="max-w-xs">
-                    <FormLabel>Status</FormLabel>
-                    <select value={field.value} onChange={e => field.onChange(e.target.value)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring">
-                      <option value="draft">Draft</option>
-                      <option value="confirmed">Confirmed</option>
-                      <option value="cancelled">Cancelled</option>
-                    </select>
-                  </FormItem>
-                )} />
                 )}
               </CardContent>
             </Card>

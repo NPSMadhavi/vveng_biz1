@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, pool, accountsTable, journalEntriesTable, journalLinesTable, companiesTable, invoicesTable, vendorInvoicesTable, vendorsTable, settingsTable, invoicePaymentsTable, vendorPaymentsTable, customerDepositsTable, expensesTable, incomeRecordsTable } from "@workspace/db";
 import { eq, and, desc, sql, asc, inArray } from "drizzle-orm";
 import { logAudit } from "../lib/audit.js";
-import { DEFAULT_ACCOUNTS, ensureAccountsSeeded } from "../lib/accounts-seed.js";
+import { DEFAULT_ACCOUNTS, ensureAccountsSeeded, ensureNamedAccount } from "../lib/accounts-seed.js";
 import { getExchangeRateToSGD, getExchangeRateInfo } from "../lib/exchange-rate.js";
 import { backfillExpenseJEs } from "../lib/expense-auto-post.js";
 import { backfillAssetDepreciationJEs } from "../lib/asset-depreciation-auto-post.js";
@@ -432,6 +432,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
       eq(journalEntriesTable.companyId, companyId),
       eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'ledger_ob_adjust'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
       ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
     ));
@@ -455,15 +456,21 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
 
   const linesByAccount = await sumLinesByAccount(entryIds);
 
-  // Opening balance = posted activity before the From date (same basis as General Ledger).
+  // Opening balance = posted activity before From date + fy_opening + ledger_ob_adjust on/before From date.
+  const fy = fromDate ? await findFyForDate(companyId, fromDate) : await findCurrentFy(companyId);
+  const effectiveFrom = fromDate || fy?.startDate || null;
   let openingByAccount: Record<number, { debit: number; credit: number }> = {};
-  if (fromDate) {
+  if (effectiveFrom) {
     const obEntries = await db.select({ entryId: journalEntriesTable.id })
       .from(journalEntriesTable)
       .where(and(
         eq(journalEntriesTable.companyId, companyId),
         eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
-        sql`${journalEntriesTable.entryDate} < ${fromDate}`,
+        sql`(
+          (${journalEntriesTable.entryDate} < ${effectiveFrom} AND COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust'))
+          OR (${journalEntriesTable.refType} = 'fy_opening' AND ${journalEntriesTable.entryDate} <= ${effectiveFrom})
+          OR (${journalEntriesTable.refType} = 'ledger_ob_adjust' AND ${journalEntriesTable.entryDate} <= ${effectiveFrom})
+        )`,
       ));
     openingByAccount = await sumLinesByAccount(obEntries.map(e => e.entryId));
   }
@@ -1543,13 +1550,9 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
         eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
         fromDate
           ? sql`(
-              ${journalEntriesTable.entryDate} < ${fromDate}
-              OR (
-                ${journalEntriesTable.refType} = 'ledger_ob_adjust'
-                AND ${journalEntriesTable.refId} = ${accountId}
-                AND ${journalEntriesTable.entryDate} = ${fromDate}
-                AND ${journalEntriesTable.status} = 'posted'
-              )
+              (${journalEntriesTable.entryDate} < ${fromDate} AND COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust'))
+              OR (${journalEntriesTable.refType} = 'ledger_ob_adjust' AND ${journalEntriesTable.entryDate} <= ${fromDate} AND ${journalEntriesTable.status} = 'posted')
+              OR (${journalEntriesTable.refType} = 'fy_opening' AND ${journalEntriesTable.entryDate} <= ${fromDate} AND ${journalEntriesTable.status} = 'posted')
             )`
           : sql`TRUE`,
       ));
@@ -1714,18 +1717,26 @@ router.put("/general-ledger/opening-balance", async (req, res): Promise<void> =>
     .limit(1);
   if (!account) { res.status(404).json({ error: "Account not found" }); return; }
 
-  const [equityAcct] = await db.select().from(accountsTable)
+  let [equityAcct] = await db.select().from(accountsTable)
     .where(and(
       eq(accountsTable.companyId, companyId),
-      sql`(${accountsTable.code} = '3100' OR lower(${accountsTable.name}) LIKE '%retained earnings%')`,
-      sql`${accountsTable.code} <> '3200'`,
+      sql`(${accountsTable.code} = '1090' OR lower(${accountsTable.name}) LIKE '%opening balance offset%')`,
     ))
     .limit(1);
   if (!equityAcct) {
-    res.status(400).json({ error: "Retained Earnings account (3100) not found" }); return;
+    equityAcct = await ensureNamedAccount(companyId, {
+      code: "1090",
+      name: "Opening Balance Offset (Cash & Bank)",
+      type: "asset",
+      subType: "current_asset",
+      isSystem: true,
+    });
+  }
+  if (!equityAcct) {
+    res.status(400).json({ error: "Opening balance offset account (1090) not found" }); return;
   }
   if (equityAcct.id === accountId) {
-    res.status(400).json({ error: "Cannot set opening balance directly on Retained Earnings this way" }); return;
+    res.status(400).json({ error: "Cannot set opening balance directly on Opening Balance Offset this way" }); return;
   }
 
   // Current opening before any ledger_ob_adjust on fromDate

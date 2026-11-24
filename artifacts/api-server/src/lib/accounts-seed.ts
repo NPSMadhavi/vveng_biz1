@@ -51,6 +51,7 @@ export const DEFAULT_ACCOUNTS = [
   { code: "1010", name: "Cash at Bank - SGD",                         type: "asset",     subType: "current_asset",       isSystem: true  },
   { code: "1020", name: "Cash at Bank - Foreign Currency",            type: "asset",     subType: "current_asset",       isSystem: false },
   { code: "1030", name: "Petty Cash",                                 type: "asset",     subType: "current_asset",       isSystem: false },
+  { code: "1090", name: "Opening Balance Offset (Cash & Bank)",       type: "asset",     subType: "current_asset",       isSystem: true  },
   { code: "1100", name: "Accounts Receivable (Trade Debtors)",        type: "asset",     subType: "current_asset",       isSystem: true  },
   { code: "1110", name: "GST Input Tax Recoverable",                  type: "asset",     subType: "current_asset",       isSystem: true  },
   { code: "1120", name: "Other Receivables",                          type: "asset",     subType: "current_asset",       isSystem: false },

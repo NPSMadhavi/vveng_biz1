@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Dialog,
@@ -1164,7 +1164,7 @@ export function ManpowerSalesCustomerFields({ control }: { control: Control<any>
 
 export function ManpowerSalesDateFields({ control, children }: { control: Control<any>; children?: ReactNode }) {
   return (
-    <div className={"grid grid-cols-1 gap-4 " + (children ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.8fr)]" : "lg:grid-cols-1 max-w-sm")}>
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <FormField control={control} name="manpowerDetails.poDate" render={({ field }) => (
         <FormItem className="min-w-0">
           <FormLabel>PO Date</FormLabel>

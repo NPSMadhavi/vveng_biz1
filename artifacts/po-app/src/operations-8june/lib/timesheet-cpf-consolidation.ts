@@ -45,7 +45,7 @@ function parseMoney(value: unknown) {
 export function classifyEntryHours(dayType: string, normalHours: string | number, overtimeHours: string | number): ClassifiedHours {
   const n = Number(normalHours) || 0;
   const ot = Number(overtimeHours) || 0;
-  const total = round2(n + ot);
+  const total = Math.round((n + ot) * 100) / 100;
   const zero: ClassifiedHours = { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 };
   const type = String(dayType || "").toLowerCase();
   if (type.includes("rest")) return { ...zero, restDay: total };

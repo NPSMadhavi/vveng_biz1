@@ -87,8 +87,38 @@ function countInclusiveDays(from?: string, to?: string): number {
   return Math.max(1, days);
 }
 
-function scaleEntryHours(row: Pick<TimesheetEntry, "workFrom" | "workTo" | "workDate" | "dayType" | "normalHours" | "overtimeHours">) {
-  const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
+function getRangeDayBreakdown(from?: string, to?: string) {
+  const dates = expandEntryDates(from, to);
+  let weekdays = 0;
+  let weekendDays = 0;
+  for (const dStr of dates) {
+    const d = new Date(`${dStr}T00:00:00`);
+    const day = d.getDay(); // 0 is Sunday, 6 is Saturday
+    if (day === 0 || day === 6) {
+      weekendDays++;
+    } else {
+      weekdays++;
+    }
+  }
+  return { dates, totalDays: dates.length || 1, weekdays, weekendDays };
+}
+
+function scaleEntryHours(row: Pick<TimesheetEntry, "workFrom" | "workTo" | "workDate" | "dayType" | "normalHours" | "overtimeHours" | "days">) {
+  const breakdown = getRangeDayBreakdown(row.workFrom || row.workDate, row.workTo || row.workDate);
+  const isNormalWork = String(row.dayType || "").toLowerCase().includes("normal");
+  const isRest = String(row.dayType || "").toLowerCase().includes("rest");
+
+  let days: number;
+  if (row.days != null && Number.isFinite(row.days) && row.days > 0) {
+    days = row.days;
+  } else if (isNormalWork && breakdown.dates.length > 1) {
+    days = breakdown.weekdays; // 5 days per week (exclude Sat/Sun)
+  } else if (isRest && breakdown.dates.length > 1 && breakdown.weekendDays > 0) {
+    days = breakdown.weekendDays; // Sat & Sun
+  } else {
+    days = breakdown.totalDays;
+  }
+
   const rawN = Number(row.normalHours) || 0;
   const rawO = Number(row.overtimeHours) || 0;
   // If multi-day row already stores range totals (e.g. 200), do not multiply again.
@@ -133,23 +163,47 @@ function expandEntryDates(from?: string, to?: string): string[] {
 
 function sumClassification(entries: TimesheetEntry[]) {
   // Attribute per-day hours to each calendar date; overlapping ranges do not double-count.
-  const bestByDay = new Map<string, { normal: number; ot15: number; ot20: number; restDay: number; publicHoliday: number; line: number; span: number }>();
+  const bestByDay = new Map<string, { normal: number; ot15: number; ot20: number; restDay: number; publicHoliday: number; line: number; span: number; isWorkingDay: boolean }>();
   for (const row of entries) {
     const dates = expandEntryDates(row.workFrom || row.workDate, row.workTo || row.workDate);
     const span = Math.max(1, dates.length || countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate));
     const rawN = Number(row.normalHours) || 0;
     const rawO = Number(row.overtimeHours) || 0;
     const looksPreScaled = span > 1 && rawN + rawO > 24;
-    const base = looksPreScaled
-      ? classifyEntryHours(row.dayType, Math.round((rawN / span) * 100) / 100, Math.round((rawO / span) * 100) / 100)
-      : classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
-    const line = base.normal + base.ot15 + base.ot20 + base.restDay + base.publicHoliday;
+    const normN = looksPreScaled ? Math.round((rawN / span) * 100) / 100 : rawN;
+    const normO = looksPreScaled ? Math.round((rawO / span) * 100) / 100 : rawO;
+    const isNormal = String(row.dayType || "").toLowerCase().includes("normal");
+    const isRest = String(row.dayType || "").toLowerCase().includes("rest");
+    const isHoliday = String(row.dayType || "").toLowerCase().includes("public") || String(row.dayType || "").toLowerCase().includes("holiday");
+
     const dayList = dates.length > 0 ? dates : ["_"];
     for (const date of dayList) {
+      let dObj: Date | null = null;
+      if (date !== "_") {
+        dObj = new Date(`${date}T00:00:00`);
+      }
+      const isWeekend = dObj ? (dObj.getDay() === 0 || dObj.getDay() === 6) : false;
+
+      // If user selected Normal Working Day:
+      // Weekends (Sat/Sun) are off days — do not calculate normal or rest day hours!
+      if (isNormal && isWeekend) {
+        continue;
+      }
+
+      // If user row is a dedicated Rest Day / Public Holiday entry spanning a multi-day range:
+      // It applies to weekends/non-regular days
+      if ((isRest || isHoliday) && dates.length > 1 && !isWeekend) {
+        continue;
+      }
+
+      const base = classifyEntryHours(row.dayType, normN, normO);
+      const line = base.normal + base.ot15 + base.ot20 + base.restDay + base.publicHoliday;
+      const isWorkingDay = isNormal && !isWeekend;
+
       const key = `${row.employeeId}|${date}`;
       const existing = bestByDay.get(key);
       if (!existing || line > existing.line || (line === existing.line && span > existing.span)) {
-        bestByDay.set(key, { ...base, line, span });
+        bestByDay.set(key, { ...base, line, span, isWorkingDay });
       }
     }
   }
@@ -160,7 +214,7 @@ function sumClassification(entries: TimesheetEntry[]) {
       ot20: acc.ot20 + c.ot20,
       restDay: acc.restDay + c.restDay,
       publicHoliday: acc.publicHoliday + c.publicHoliday,
-      workingDays: acc.workingDays + 1,
+      workingDays: acc.workingDays + (c.isWorkingDay ? 1 : 0),
     }),
     { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0, workingDays: 0 },
   );
@@ -253,13 +307,16 @@ function mapPurchaseOrders(docs: any[]): PoDoc[] {
 
 function entryTotals(entries: TimesheetEntry[]) {
   const normal = entries.reduce((sum, row) => {
-    const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
-    return sum + (Number(row.normalHours) || 0) * days;
+    const scaled = scaleEntryHours(row);
+    const rawN = Number(row.normalHours) || 0;
+    return sum + rawN * (scaled.days || 1);
   }, 0);
   const overtime = entries.reduce((sum, row) => {
-    const days = countInclusiveDays(row.workFrom || row.workDate, row.workTo || row.workDate);
-    return sum + (Number(row.overtimeHours) || 0) * days;
+    const scaled = scaleEntryHours(row);
+    const rawO = Number(row.overtimeHours) || 0;
+    return sum + rawO * (scaled.days || 1);
   }, 0);
+  const restRow = entries.find((e) => String(e.dayType || "").toLowerCase().includes("rest"));
   const first = entries[0];
   return {
     normalHours: String(Math.round(normal * 100) / 100),
@@ -269,11 +326,13 @@ function entryTotals(entries: TimesheetEntry[]) {
       ? `${entries.length} employees`
       : (first?.employeeLabel || ""),
     workLocation: first?.workLocation || "",
-    workDate: first?.workDate || todayIso(),
+    workDate: first?.workDate || first?.workFrom || todayIso(),
+    workFrom: first?.workFrom || first?.workDate || todayIso(),
+    workTo: first?.workTo || first?.workDate || todayIso(),
     timeIn: first?.timeIn || "08:00",
     timeOut: first?.timeOut || "18:00",
     breakHours: first?.breakHours || "1",
-    dayType: first?.dayType || "Normal Working Day",
+    dayType: restRow?.dayType || first?.dayType || "Normal Working Day",
   };
 }
 
@@ -344,23 +403,25 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     return { counter, value: `${prefix}${counter}${suffix}` };
   }, [settings]);
 
+  const initialEntry = existing?.entries?.[0];
+  const initialRestEntry = existing?.entries?.find((e) => String(e.dayType || "").toLowerCase().includes("rest"));
   const [timesheetNo] = useState(() => existing?.timesheetNo ?? "");
-  const [project, setProject] = useState(existing?.project ?? "");
-  const [partyId, setPartyId] = useState(existing?.partyId ?? "");
-  const [poId, setPoId] = useState(existing?.poId ?? "");
+  const [project, setProject] = useState(() => existing?.project ?? "");
+  const [partyId, setPartyId] = useState(() => existing?.partyId ?? "");
+  const [poId, setPoId] = useState(() => existing?.poId ?? "");
   const [entries, setEntries] = useState<TimesheetEntry[]>(() => existing?.entries ?? []);
-  const [employeeKey, setEmployeeKey] = useState("");
-  const [workLocation, setWorkLocation] = useState(existing?.workLocation ?? "");
-  const [workFrom, setWorkFrom] = useState(existing?.workDate ?? todayIso());
-  const [workTo, setWorkTo] = useState(existing?.workDate ?? todayIso());
-  const [timeIn, setTimeIn] = useState("08:00");
-  const [timeOut, setTimeOut] = useState("18:00");
-  const [breakHours, setBreakHours] = useState("1");
-  const [normalHours, setNormalHours] = useState("8");
-  const [overtimeHours, setOvertimeHours] = useState("1");
-  const [dayType, setDayType] = useState("Normal Working Day");
-  const [remarks, setRemarks] = useState(existing?.remarks ?? "");
-  const [approvedBy, setApprovedBy] = useState(existing?.approvedBy ?? "");
+  const [employeeKey, setEmployeeKey] = useState(() => initialEntry?.employeeId || existing?.employeeId || "");
+  const [workLocation, setWorkLocation] = useState(() => initialEntry?.workLocation || existing?.workLocation || "");
+  const [workFrom, setWorkFrom] = useState(() => existing?.workFrom || initialEntry?.workFrom || existing?.workDate || initialEntry?.workDate || todayIso());
+  const [workTo, setWorkTo] = useState(() => existing?.workTo || initialEntry?.workTo || existing?.workDate || initialEntry?.workDate || todayIso());
+  const [timeIn, setTimeIn] = useState(() => initialEntry?.timeIn || existing?.timeIn || "08:00");
+  const [timeOut, setTimeOut] = useState(() => initialEntry?.timeOut || existing?.timeOut || "18:00");
+  const [breakHours, setBreakHours] = useState(() => initialEntry?.breakHours || existing?.breakHours || "1");
+  const [normalHours, setNormalHours] = useState(() => initialEntry?.normalHours || existing?.normalHours || "8");
+  const [overtimeHours, setOvertimeHours] = useState(() => initialEntry?.overtimeHours || existing?.overtimeHours || "1");
+  const [dayType, setDayType] = useState(() => (initialRestEntry ? "Rest Day" : (existing?.dayType === "Rest Day" ? "Rest Day" : (existing?.dayType || initialEntry?.dayType || "Normal Working Day"))));
+  const [remarks, setRemarks] = useState(() => existing?.remarks ?? "");
+  const [approvedBy, setApprovedBy] = useState(() => existing?.approvedBy ?? "");
   const [formStatus, setFormStatus] = useState<"draft" | "approved">(
     existing?.status === "approved" ? "approved" : "draft",
   );
@@ -368,6 +429,31 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [ackToken, setAckToken] = useState(existing?.approvalToken || "");
   const readOnly = Boolean(existing) && !isEdit;
+
+  useEffect(() => {
+    if (!existing) return;
+    const fe = existing.entries?.[0];
+    const re = existing.entries?.find((e) => String(e.dayType || "").toLowerCase().includes("rest"));
+    if (existing.partyId) setPartyId(existing.partyId);
+    if (existing.poId) setPoId(existing.poId);
+    if (existing.project) setProject(existing.project);
+    if (existing.remarks) setRemarks(existing.remarks);
+    if (existing.approvedBy) setApprovedBy(existing.approvedBy);
+    if (existing.entries && existing.entries.length > 0) setEntries(existing.entries);
+    const wf = existing.workFrom || fe?.workFrom || existing.workDate || fe?.workDate;
+    if (wf) setWorkFrom(wf);
+    const wt = existing.workTo || fe?.workTo || existing.workDate || fe?.workDate;
+    if (wt) setWorkTo(wt);
+    const empId = fe?.employeeId || existing.employeeId;
+    if (empId) setEmployeeKey(empId);
+    setDayType(re?.dayType || (existing.dayType === "Rest Day" ? "Rest Day" : (existing.dayType || fe?.dayType || "Normal Working Day")));
+    if (fe?.workLocation || existing.workLocation) setWorkLocation(fe?.workLocation || existing.workLocation || "");
+    if (fe?.timeIn || existing.timeIn) setTimeIn(fe?.timeIn || existing.timeIn || "08:00");
+    if (fe?.timeOut || existing.timeOut) setTimeOut(fe?.timeOut || existing.timeOut || "18:00");
+    if (fe?.breakHours || existing.breakHours) setBreakHours(fe?.breakHours || existing.breakHours || "1");
+    if (fe?.normalHours || existing.normalHours) setNormalHours(fe?.normalHours || existing.normalHours || "8");
+    if (fe?.overtimeHours || existing.overtimeHours) setOvertimeHours(fe?.overtimeHours || existing.overtimeHours || "1");
+  }, [existing]);
 
   const shownNo = existing?.timesheetNo || timesheetNo || runningNo.value;
   const selectedParty = parties.find((party) => String(party.id) === String(partyId)) ?? null;
@@ -478,7 +564,6 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     setBreakHours("1");
     setNormalHours("8");
     setOvertimeHours("1");
-    setDayType("Normal Working Day");
   }
 
   function onPartyChange(value: string) {
@@ -522,30 +607,95 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       return;
     }
     const emp = employeeOptions.find((row) => row.id === employeeKey);
-    const next: TimesheetEntry = {
-      id: `${Date.now()}-${employeeKey}`,
-      employeeId: employeeKey,
-      employeeLabel: emp?.label || employeeKey,
-      workLocation: workLocation.trim(),
-      workDate: workFrom,
-      workFrom,
-      workTo,
-      timeIn,
-      timeOut,
-      breakHours,
-      normalHours,
-      overtimeHours,
-      dayType,
-    };
+    const breakdown = getRangeDayBreakdown(workFrom, workTo);
+    const isRest = String(dayType || "").toLowerCase().includes("rest");
+    const isHoliday = String(dayType || "").toLowerCase().includes("public") || String(dayType || "").toLowerCase().includes("holiday");
+    const isMultiDay = breakdown.dates.length > 1;
+
+    const newEntries: TimesheetEntry[] = [];
+
+    if ((isRest || isHoliday) && isMultiDay && breakdown.weekdays > 0 && breakdown.weekendDays > 0) {
+      // User selected Rest Day (or Public Holiday) for a date range spanning weekdays & weekends:
+      // Show BOTH Normal Working Days and Rest Days (or Public Holiday) in the table!
+      const normalEntry: TimesheetEntry = {
+        id: `${Date.now()}-${employeeKey}-normal`,
+        employeeId: employeeKey,
+        employeeLabel: emp?.label || employeeKey,
+        workLocation: workLocation.trim(),
+        workDate: workFrom,
+        workFrom,
+        workTo,
+        timeIn,
+        timeOut,
+        breakHours,
+        normalHours,
+        overtimeHours,
+        dayType: "Normal Working Day",
+        days: breakdown.weekdays,
+      };
+
+      const specialEntry: TimesheetEntry = {
+        id: `${Date.now() + 1}-${employeeKey}-${isRest ? "rest" : "holiday"}`,
+        employeeId: employeeKey,
+        employeeLabel: emp?.label || employeeKey,
+        workLocation: workLocation.trim(),
+        workDate: workFrom,
+        workFrom,
+        workTo,
+        timeIn,
+        timeOut,
+        breakHours,
+        normalHours,
+        overtimeHours,
+        dayType: isRest ? "Rest Day" : "Public Holiday",
+        days: breakdown.weekendDays,
+      };
+
+      newEntries.push(specialEntry, normalEntry);
+      toast({ title: `Added ${breakdown.weekendDays} ${isRest ? "Rest" : "Holiday"} days and ${breakdown.weekdays} Normal days.` });
+    } else {
+      // Normal Working Day selected, or single day:
+      // If Normal Working Day: weekends are excluded (only 5 days/week counted). Rest Day is NOT added.
+      const isNormal = String(dayType || "").toLowerCase().includes("normal");
+      let entryDays: number;
+      if (isNormal) {
+        entryDays = isMultiDay ? breakdown.weekdays : (breakdown.weekdays > 0 ? 1 : 0);
+      } else if (isRest) {
+        entryDays = isMultiDay && breakdown.weekendDays > 0 ? breakdown.weekendDays : breakdown.totalDays;
+      } else {
+        entryDays = breakdown.totalDays;
+      }
+
+      const singleEntry: TimesheetEntry = {
+        id: `${Date.now()}-${employeeKey}`,
+        employeeId: employeeKey,
+        employeeLabel: emp?.label || employeeKey,
+        workLocation: workLocation.trim(),
+        workDate: workFrom,
+        workFrom,
+        workTo,
+        timeIn,
+        timeOut,
+        breakHours,
+        normalHours,
+        overtimeHours,
+        dayType,
+        days: entryDays,
+      };
+      newEntries.push(singleEntry);
+      toast({ title: `Employee hours saved (${entryDays} ${isNormal ? "normal working" : isRest ? "rest" : ""} days).` });
+    }
+
     setEntries((prev) => {
+      const newDayTypes = new Set(newEntries.map((e) => e.dayType));
       const withoutDup = prev.filter((row) => !(
-        row.employeeId === next.employeeId
-        && (row.workFrom || row.workDate) === next.workFrom
-        && (row.workTo || row.workDate) === next.workTo
+        row.employeeId === employeeKey
+        && (row.workFrom || row.workDate) === workFrom
+        && (row.workTo || row.workDate) === workTo
+        && newDayTypes.has(row.dayType)
       ));
-      return [...withoutDup, next];
+      return [...withoutDup, ...newEntries];
     });
-    toast({ title: "Employee hours saved." });
     resetEntryFields(true);
   }
 
@@ -567,6 +717,12 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       return;
     }
     const totals = entryTotals(entries);
+    const hasRest = entries.some((e) => String(e.dayType || "").toLowerCase().includes("rest"));
+    const hasHoliday = entries.some((e) => String(e.dayType || "").toLowerCase().includes("public") || String(e.dayType || "").toLowerCase().includes("holiday"));
+    const savedDayType = hasRest ? "Rest Day" : hasHoliday ? "Public Holiday" : (dayType || totals.dayType);
+    const savedWorkFrom = workFrom || totals.workFrom || entries[0]?.workFrom || totals.workDate;
+    const savedWorkTo = workTo || totals.workTo || entries[0]?.workTo || totals.workDate;
+
     const record: Timesheet = {
       id: saved?.id ?? existing?.id ?? `${Date.now()}`,
       companyId,
@@ -581,13 +737,15 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       partyName: selectedParty?.name || existing?.partyName || "",
       partyEmail: partyEmail(partyId),
       workLocation: totals.workLocation,
-      workDate: totals.workDate,
+      workDate: savedWorkFrom,
+      workFrom: savedWorkFrom,
+      workTo: savedWorkTo,
       timeIn: totals.timeIn,
       timeOut: totals.timeOut,
       breakHours: totals.breakHours,
       normalHours: totals.normalHours,
       overtimeHours: totals.overtimeHours,
-      dayType: totals.dayType,
+      dayType: savedDayType,
       remarks: remarks.trim(),
       submittedBy: user?.username || "Admin",
       approvedBy: approvedBy.trim(),
@@ -856,11 +1014,14 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                       <TableCell>{row.timeOut}</TableCell>
                       {(() => {
                         const scaled = scaleEntryHours(row);
-                        const normalTotal = Math.round(scaled.normal * 100) / 100;
-                        const otTotal = Math.round((scaled.ot15 + scaled.ot20 + scaled.restDay + scaled.publicHoliday) * 100) / 100;
+                        const days = scaled.days;
+                        const rawN = Number(row.normalHours) || 0;
+                        const rawO = Number(row.overtimeHours) || 0;
+                        const normalTotal = Math.round(rawN * days * 100) / 100;
+                        const otTotal = Math.round(rawO * days * 100) / 100;
                         return (
                           <>
-                            <TableCell className="text-right tabular-nums">{scaled.days}</TableCell>
+                            <TableCell className="text-right tabular-nums">{days}</TableCell>
                             <TableCell className="text-right tabular-nums">{row.normalHours}</TableCell>
                             <TableCell className="text-right tabular-nums">{row.overtimeHours}</TableCell>
                             <TableCell className="text-right tabular-nums font-medium">{normalTotal}</TableCell>

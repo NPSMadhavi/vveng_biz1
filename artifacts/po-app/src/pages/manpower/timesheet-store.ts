@@ -16,6 +16,7 @@ export type TimesheetEntry = {
   normalHours: string;
   overtimeHours: string;
   dayType: string;
+  days?: number;
 };
 
 export type Timesheet = {
@@ -37,6 +38,8 @@ export type Timesheet = {
   partyEmail: string;
   workLocation: string;
   workDate: string;
+  workFrom?: string;
+  workTo?: string;
   timeIn: string;
   timeOut: string;
   breakHours: string;
