@@ -266,7 +266,7 @@ export default function ChartOfAccounts() {
         {canManage && (
           <div className="flex items-center gap-2">
             <Button variant="outline" className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50" onClick={() => setObDialogOpen(true)}>
-              <Landmark className="h-4 w-4" /> Cash &amp; Bank Opening Balances
+              <Landmark className="h-4 w-4" /> Opening Balances
             </Button>
             <Button className="gap-2" onClick={openAdd}>
               <Plus className="h-4 w-4" /> Add Account

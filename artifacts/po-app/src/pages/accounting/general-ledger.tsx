@@ -118,6 +118,7 @@ export default function GeneralLedgerPage() {
   const [cachedAccounts, setCachedAccounts] = useState<GLAccount[]>([]);
   const [editingOpening, setEditingOpening] = useState(false);
   const [openingDraft, setOpeningDraft] = useState("");
+  const [openingSide, setOpeningSide] = useState<"Dr" | "Cr">("Dr");
   const [savingOpening, setSavingOpening] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery<GLData>({
@@ -154,7 +155,13 @@ export default function GeneralLedgerPage() {
 
   function startEditOpening() {
     if (!data) return;
-    setOpeningDraft(data.openingBalance.toFixed(2));
+    const bal = data.openingBalance;
+    const defaultSide: "Dr" | "Cr" =
+      bal > 0.005 ? "Dr"
+      : bal < -0.005 ? "Cr"
+      : ["liability", "equity", "revenue"].includes(data.account?.type || "") ? "Cr" : "Dr";
+    setOpeningSide(defaultSide);
+    setOpeningDraft(Math.abs(bal).toFixed(2));
     setEditingOpening(true);
   }
 
@@ -164,17 +171,18 @@ export default function GeneralLedgerPage() {
       return;
     }
     const parsed = Number(String(openingDraft).replace(/,/g, "").trim());
-    if (!Number.isFinite(parsed)) {
-      toast({ title: "Enter a valid opening balance", variant: "destructive" });
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      toast({ title: "Enter a valid non-negative opening balance", variant: "destructive" });
       return;
     }
+    const signedAmount = openingSide === "Cr" ? -Math.abs(parsed) : Math.abs(parsed);
     setSavingOpening(true);
     try {
       const r = await fetch("/api/general-ledger/opening-balance", {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId: selectedAccountId, from, amount: parsed }),
+        body: JSON.stringify({ accountId: selectedAccountId, from, amount: signedAmount }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || "Failed to save opening balance");
@@ -374,19 +382,36 @@ export default function GeneralLedgerPage() {
                 <div className="px-5 py-4">
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Opening Balance</p>
                   {editingOpening ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Input
                         type="number"
+                        min="0"
                         step="0.01"
                         value={openingDraft}
                         onChange={(e) => setOpeningDraft(e.target.value)}
-                        className="h-8 max-w-[160px] font-mono text-sm"
+                        className="h-8 max-w-[140px] font-mono text-sm"
                         autoFocus
                         onKeyDown={(e) => {
                           if (e.key === "Enter") void saveOpeningBalance();
                           if (e.key === "Escape") setEditingOpening(false);
                         }}
                       />
+                      <div className="inline-flex rounded-md border border-input overflow-hidden h-8">
+                        <button
+                          type="button"
+                          onClick={() => setOpeningSide("Dr")}
+                          className={cn("px-2.5 text-xs font-semibold transition-colors", openingSide === "Dr" ? "bg-[#1a365d] text-white" : "bg-background text-muted-foreground hover:bg-muted")}
+                        >
+                          Dr
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOpeningSide("Cr")}
+                          className={cn("px-2.5 text-xs font-semibold transition-colors border-l border-input", openingSide === "Cr" ? "bg-[#1a365d] text-white" : "bg-background text-muted-foreground hover:bg-muted")}
+                        >
+                          Cr
+                        </button>
+                      </div>
                       <Button type="button" size="icon" className="h-8 w-8 shrink-0" onClick={() => void saveOpeningBalance()} disabled={savingOpening}>
                         {savingOpening ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                       </Button>
@@ -397,7 +422,7 @@ export default function GeneralLedgerPage() {
                   ) : (
                     <div className="flex items-center gap-2">
                       <p className={cn("text-sm font-semibold font-mono tabular-nums", displayOpening < 0 ? "text-red-600" : "text-foreground")}>
-                        {fmtBal(displayOpening)}
+                        {fmtBalDrCr(displayOpening)}
                       </p>
                       <button
                         type="button"
@@ -409,12 +434,14 @@ export default function GeneralLedgerPage() {
                       </button>
                     </div>
                   )}
-                  <p className="mt-1 text-[10px] text-muted-foreground">Positive = debit · Negative = credit</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Dr = Debit (Assets/Expenses) · Cr = Credit (Liabilities/Equity/Income)
+                  </p>
                 </div>
                 <div className="px-5 py-4">
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Closing Balance</p>
                   <p className={cn("text-sm font-bold font-mono tabular-nums", displayClosing < 0 ? "text-red-600" : "text-foreground")}>
-                    {fmtBal(displayClosing)}
+                    {fmtBalDrCr(displayClosing)}
                   </p>
                 </div>
               </div>

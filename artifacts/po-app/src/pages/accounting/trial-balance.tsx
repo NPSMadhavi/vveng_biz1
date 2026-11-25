@@ -152,7 +152,7 @@ export default function TrialBalancePage() {
           {canManage && (
             <Button variant="outline" size="sm" onClick={() => setObDialogOpen(true)} className="border-blue-200 text-blue-700 hover:bg-blue-50 mb-0.5">
               <Landmark className="h-4 w-4 mr-2" />
-              Cash &amp; Bank Opening Balances
+              Opening Balances
             </Button>
           )}
           {hasData && (

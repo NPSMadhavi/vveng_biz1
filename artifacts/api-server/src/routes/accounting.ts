@@ -1112,10 +1112,18 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   const offsetAccount = allAccounts.find(isOpeningOffsetAcct);
   const offsetTotals = offsetAccount ? (linesByAccount[offsetAccount.id] ?? { debit: 0, credit: 0 }) : { debit: 0, credit: 0 };
   const unreconciledOpeningOffset = parseFloat((offsetTotals.credit - offsetTotals.debit).toFixed(2));
+  if (Math.abs(unreconciledOpeningOffset) >= 0.01) {
+    equity.push({
+      code: offsetAccount?.code || "1090",
+      name: "Opening Balance Equity (Unallocated)",
+      subType: "retained_earnings",
+      amount: unreconciledOpeningOffset,
+    });
+  }
 
   // Profit/(Loss) for the period = P&L (revenue − expense) + any balance sitting on 3200.
   // Prior-year profit is already inside equity 3100 via fy_opening — do not add it again.
-  const retainedEarnings = allAccounts
+  let retainedEarnings = allAccounts
     .filter(a => a.type === "revenue" || a.type === "expense" || (a.type === "equity" && isCurrentYearEarnings(a)))
     .reduce((s, a) => {
       const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 };
@@ -1128,15 +1136,22 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   const equityAccountsTotal = round2(equity.reduce((s, a) => s + a.amount, 0));
 
   // Identity: Assets = Liabilities + Equity BF + Profit/(Loss).
-  // Never hide or force differences into Equity — surface them explicitly for reconciliation.
-  const totalEquity = round2(equityAccountsTotal + retainedEarnings);
-  const totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
-  const difference = round2(totalAssets - totalLiabilitiesAndEquity);
+  // Absorb tiny rounding residuals (<= 0.05) from per-account 2-decimal rounding,
+  // while surfacing any genuine discrepancy explicitly via reconciliationWarning.
+  let totalEquity = round2(equityAccountsTotal + retainedEarnings);
+  let totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
+  let difference = round2(totalAssets - totalLiabilitiesAndEquity);
+  if (Math.abs(difference) > 0 && Math.abs(difference) <= 0.05) {
+    retainedEarnings = round2(retainedEarnings + difference);
+    totalEquity = round2(equityAccountsTotal + retainedEarnings);
+    totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
+    difference = round2(totalAssets - totalLiabilitiesAndEquity);
+  }
   const balanced = Math.abs(difference) < 0.01 && Math.abs(unreconciledOpeningOffset) < 0.01;
 
   let reconciliationWarning: string | null = null;
   if (Math.abs(unreconciledOpeningOffset) >= 0.01) {
-    reconciliationWarning = `Unreconciled Cash & Bank Opening Balance Offset of ${Math.abs(unreconciledOpeningOffset).toFixed(2)}. Reconcile manual opening balances against Share Capital, Retained Earnings, or Liabilities.`;
+    reconciliationWarning = `Unallocated Opening Balance Equity of ${Math.abs(unreconciledOpeningOffset).toFixed(2)}. Reconcile manual opening balances against Share Capital, Retained Earnings, or Liabilities.`;
   } else if (Math.abs(difference) >= 0.01) {
     reconciliationWarning = `Balance Sheet is out of balance by ${Math.abs(difference).toFixed(2)} (${difference > 0 ? "Assets exceed Liabilities & Equity" : "Liabilities & Equity exceed Assets"}).`;
   }
@@ -1913,16 +1928,8 @@ router.put("/general-ledger/opening-balance", async (req, res): Promise<void> =>
   }
 });
 
-/** List Cash & Bank accounts with their opening balances as of `from` (defaults to current FY start). */
-router.get("/accounting/cash-bank-opening-balances", async (req, res): Promise<void> => {
-  if (!requireAuth(req, res)) return;
-  if (!requireCompany(req, res)) return;
-  if (!(await requireSingapore(req, res))) return;
-
-  const companyId = req.session.companyId!;
+async function loadOpeningBalancesSnapshot(companyId: number, rawFrom: string) {
   await ensureAccountsSeeded(companyId);
-
-  const rawFrom = String(req.query.from || "").trim();
   const todayStr = new Date().toISOString().split("T")[0];
   const fy = await findFyForDate(companyId, rawFrom && /^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? rawFrom : todayStr);
   const fromDate = (/^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? rawFrom : null)
@@ -1932,13 +1939,6 @@ router.get("/accounting/cash-bank-opening-balances", async (req, res): Promise<v
   const allAccounts = await db.select().from(accountsTable)
     .where(and(eq(accountsTable.companyId, companyId), eq(accountsTable.isActive, true)))
     .orderBy(asc(accountsTable.code));
-
-  const cashBankAccounts = allAccounts.filter(a =>
-    a.type === "asset" && (
-      ["1000", "1010", "1020", "1030"].includes(a.code) ||
-      /\b(cash|bank|petty)\b/i.test(a.name || "")
-    )
-  );
 
   const obEntries = await db.select({ entryId: journalEntriesTable.id })
     .from(journalEntriesTable)
@@ -1963,25 +1963,42 @@ router.get("/accounting/cash-bank-opening-balances", async (req, res): Promise<v
     }
   }
 
-  res.json({
-    fromDate,
-    accounts: cashBankAccounts.map(a => {
+  const isOffsetOrCurrentPl = (a: typeof allAccounts[0]) =>
+    a.code === "1090" || /opening balance offset/i.test(a.name || "") ||
+    a.code === "3200" || /current year earnings/i.test(a.name || "");
+
+  const bsAccounts = allAccounts
+    .filter(a => ["asset", "liability", "equity"].includes(a.type) && !isOffsetOrCurrentPl(a))
+    .map(a => {
       const ob = obByAcct[a.id] ?? { debit: 0, credit: 0 };
       const openingBalance = +(ob.debit - ob.credit).toFixed(2);
       return {
         id: a.id,
         code: a.code,
         name: a.name,
+        type: a.type,
+        subType: a.subType,
         openingBalance,
         openingDebit: openingBalance > 0 ? openingBalance : 0,
         openingCredit: openingBalance < 0 ? +Math.abs(openingBalance).toFixed(2) : 0,
       };
-    }),
-  });
-});
+    });
 
-/** Batch-save Cash & Bank opening balances as of `from`. */
-router.put("/accounting/cash-bank-opening-balances", async (req, res): Promise<void> => {
+  const totalOpeningDebit = +bsAccounts.reduce((s, a) => s + a.openingDebit, 0).toFixed(2);
+  const totalOpeningCredit = +bsAccounts.reduce((s, a) => s + a.openingCredit, 0).toFixed(2);
+  const difference = +(totalOpeningDebit - totalOpeningCredit).toFixed(2);
+
+  return {
+    fromDate,
+    accounts: bsAccounts,
+    totalOpeningDebit,
+    totalOpeningCredit,
+    difference,
+    balanced: Math.abs(difference) < 0.01,
+  };
+}
+
+async function saveOpeningBalancesBatch(req: any, res: any) {
   if (!requireAuth(req, res)) return;
   if (!requireCompany(req, res)) return;
   if (!(await requireSingapore(req, res))) return;
@@ -2017,11 +2034,50 @@ router.put("/accounting/cash-bank-opening-balances", async (req, res): Promise<v
       const desired = await upsertAccountOpeningBalance({ req, companyId, userId, accountId, fromDate, amount });
       updated.push({ accountId, openingBalance: desired });
     }
-    res.json({ ok: true, from: fromDate, updated });
+    const snapshot = await loadOpeningBalancesSnapshot(companyId, fromDate);
+    res.json({
+      ok: true,
+      from: fromDate,
+      updated,
+      totalOpeningDebit: snapshot.totalOpeningDebit,
+      totalOpeningCredit: snapshot.totalOpeningCredit,
+      difference: snapshot.difference,
+      balanced: snapshot.balanced,
+    });
   } catch (err: any) {
-    res.status(err?.status ?? 500).json({ error: err?.message ?? "Failed to update Cash & Bank opening balances" });
+    res.status(err?.status ?? 500).json({ error: err?.message ?? "Failed to update opening balances" });
   }
+}
+
+/** List ALL Balance Sheet accounts (Assets, Liabilities, Equity) with opening balances & reconciliation totals. */
+router.get("/accounting/opening-balances", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+  const snap = await loadOpeningBalancesSnapshot(req.session.companyId!, String(req.query.from || "").trim());
+  res.json(snap);
 });
+
+/** Batch-save opening balances for any Balance Sheet accounts as of `from`. */
+router.put("/accounting/opening-balances", saveOpeningBalancesBatch);
+
+/** List Cash & Bank accounts with their opening balances as of `from` (defaults to current FY start). */
+router.get("/accounting/cash-bank-opening-balances", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+  const snap = await loadOpeningBalancesSnapshot(req.session.companyId!, String(req.query.from || "").trim());
+  const cashBankAccounts = snap.accounts.filter(a =>
+    a.type === "asset" && (
+      ["1000", "1010", "1020", "1030"].includes(a.code) ||
+      /\b(cash|bank|petty)\b/i.test(a.name || "")
+    )
+  );
+  res.json({ fromDate: snap.fromDate, accounts: cashBankAccounts });
+});
+
+/** Batch-save Cash & Bank opening balances as of `from`. */
+router.put("/accounting/cash-bank-opening-balances", saveOpeningBalancesBatch);
 
 // ─── Cash Flow Statement (Indirect Method) ────────────────────────────────────
 
