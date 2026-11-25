@@ -51,9 +51,12 @@ export const DEFAULT_ACCOUNTS = [
   { code: "1010", name: "Cash at Bank - SGD",                         type: "asset",     subType: "current_asset",       isSystem: true  },
   { code: "1020", name: "Cash at Bank - Foreign Currency",            type: "asset",     subType: "current_asset",       isSystem: false },
   { code: "1030", name: "Petty Cash",                                 type: "asset",     subType: "current_asset",       isSystem: false },
-  { code: "1090", name: "Opening Balance Offset (Cash & Bank)",       type: "asset",     subType: "current_asset",       isSystem: true  },
+  { code: "1090", name: "Opening Balance Offset (Cash & Bank)",       type: "equity",    subType: "retained_earnings",   isSystem: true  },
   { code: "1100", name: "Accounts Receivable (Trade Debtors)",        type: "asset",     subType: "current_asset",       isSystem: true  },
   { code: "1110", name: "GST Input Tax Recoverable",                  type: "asset",     subType: "current_asset",       isSystem: true  },
+  { code: "1111", name: "CGST Input Tax",                             type: "asset",     subType: "current_asset",       isSystem: false },
+  { code: "1112", name: "SGST Input Tax",                             type: "asset",     subType: "current_asset",       isSystem: false },
+  { code: "1113", name: "IGST Input Tax",                             type: "asset",     subType: "current_asset",       isSystem: false },
   { code: "1120", name: "Other Receivables",                          type: "asset",     subType: "current_asset",       isSystem: false },
   { code: "1200", name: "Inventory / Stock",                          type: "asset",     subType: "current_asset",       isSystem: false },
   { code: "1300", name: "Prepayments",                                type: "asset",     subType: "current_asset",       isSystem: false },
@@ -66,6 +69,9 @@ export const DEFAULT_ACCOUNTS = [
   { code: "1710", name: "Less: Accumulated Depreciation - Renovation",type: "asset",    subType: "fixed_asset",         isSystem: false },
   { code: "2000", name: "Accounts Payable (Trade Creditors)",         type: "liability", subType: "current_liability",   isSystem: true  },
   { code: "2010", name: "GST Output Tax Payable",                     type: "liability", subType: "current_liability",   isSystem: true  },
+  { code: "2011", name: "CGST Output Tax Payable",                    type: "liability", subType: "current_liability",   isSystem: false },
+  { code: "2012", name: "SGST Output Tax Payable",                    type: "liability", subType: "current_liability",   isSystem: false },
+  { code: "2013", name: "IGST Output Tax Payable",                    type: "liability", subType: "current_liability",   isSystem: false },
   { code: "2020", name: "Accrued Liabilities",                        type: "liability", subType: "current_liability",   isSystem: false },
   { code: "2030", name: "Deferred Revenue",                           type: "liability", subType: "current_liability",   isSystem: false },
   { code: "2035", name: "Customer Deposits / Advance Receipts",       type: "liability", subType: "current_liability",   isSystem: false },
@@ -77,6 +83,7 @@ export const DEFAULT_ACCOUNTS = [
   { code: "2300", name: "Other Long-term Liabilities",                type: "liability", subType: "long_term_liability", isSystem: false },
   { code: "3000", name: "Paid-up Share Capital",                      type: "equity",    subType: "share_capital",       isSystem: true  },
   { code: "3100", name: "Retained Earnings",                          type: "equity",    subType: "retained_earnings",   isSystem: true  },
+  { code: "3150", name: "Reserves and Surplus",                       type: "equity",    subType: "retained_earnings",   isSystem: false },
   { code: "3200", name: "Current Year Earnings",                      type: "equity",    subType: "retained_earnings",   isSystem: true  },
   { code: "4000", name: "Sales Revenue",                              type: "revenue",   subType: "sales",               isSystem: true  },
   { code: "4100", name: "Service Revenue",                            type: "revenue",   subType: "sales",               isSystem: false },
@@ -128,7 +135,18 @@ export async function ensureAccountsSeeded(companyId: number): Promise<void> {
       throw err;
     }
   }
-  if (existing.length > 0) return;
+  if (existing.length > 0) {
+    // Ensure 1090 Opening Balance Offset is equity (not asset) so Cash/Bank opening balances don't cancel out in Assets.
+    await db.update(accountsTable)
+      .set({ type: "equity", subType: "retained_earnings" })
+      .where(and(
+        eq(accountsTable.companyId, companyId),
+        eq(accountsTable.code, "1090"),
+        eq(accountsTable.type, "asset"),
+      ))
+      .catch(() => undefined);
+    return;
+  }
 
   await db.insert(accountsTable).values(
     DEFAULT_ACCOUNTS.map(a => ({ ...a, companyId }))

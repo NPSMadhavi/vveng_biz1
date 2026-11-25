@@ -123,7 +123,7 @@ function isGeneralTransaction(loc: string) {
 
 function getGroupForRoute(loc: string): string | null {
   if (loc.startsWith("/accounting/bank-reconciliation")) return null;
-  if (loc.startsWith("/assets")) return null;
+  if (loc.startsWith("/assets")) return "fixed_assets";
   if (isGeneralTransaction(loc) || loc.startsWith("/manpower")) return "documents";
   if (loc.startsWith("/projects")) return "projects";
   if (

@@ -2558,6 +2558,7 @@ export async function generateAPAgingReport_PDF(
 export interface TBPDFRow {
   code: string; name: string; type: string;
   totalDebit: number; totalCredit: number;
+  openingDebit?: number; openingCredit?: number;
   openingBalance?: number; closingBalance?: number; balance: number;
 }
 const TB_TYPE_ORDER = ["asset", "liability", "equity", "revenue", "expense"];
@@ -2589,30 +2590,35 @@ export async function generateTrialBalance_PDF(
     || Math.abs(r.closingBalance ?? r.balance) > 0.005;
 
   // Build table with section header rows
-  const tableHeaders = ["Code", "Account Name", "Opening Balance (SGD)", "Debit (SGD)", "Credit (SGD)", "Closing Balance (SGD)"];
+  const tableHeaders = ["Code", "Account Name", "Opening Debit (SGD)", "Opening Credit (SGD)", "Debit (SGD)", "Credit (SGD)", "Closing Balance (SGD)"];
   const tableBody: any[][] = [];
 
   TB_TYPE_ORDER.forEach(type => {
     const typeRows = rows.filter(r => r.type === type && rowActive(r));
     if (typeRows.length === 0) return;
     // Section header row (full width via colSpan trick — we'll style it)
-    tableBody.push([`— ${TB_TYPE_LABEL[type].toUpperCase()} —`, "", "", "", "", ""]);
+    tableBody.push([`— ${TB_TYPE_LABEL[type].toUpperCase()} —`, "", "", "", "", "", ""]);
     typeRows.forEach(r => {
+      const opDr = r.openingDebit ?? ((r.openingBalance || 0) > 0 ? (r.openingBalance || 0) : 0);
+      const opCr = r.openingCredit ?? ((r.openingBalance || 0) < 0 ? Math.abs(r.openingBalance || 0) : 0);
       tableBody.push([
         r.code, r.name,
-        fmtSigned(r.openingBalance || 0),
+        opDr > 0.005 ? fmtNum(opDr) : "—",
+        opCr > 0.005 ? fmtNum(opCr) : "—",
         r.totalDebit > 0.005 ? fmtNum(r.totalDebit) : "—",
         r.totalCredit > 0.005 ? fmtNum(r.totalCredit) : "—",
         fmtSigned(r.closingBalance ?? r.balance),
       ]);
     });
   });
-  const grandOpening = rows.reduce((s, r) => s + (r.openingBalance || 0), 0);
+  const grandOpeningDebit = rows.reduce((s, r) => s + (r.openingDebit ?? ((r.openingBalance || 0) > 0 ? (r.openingBalance || 0) : 0)), 0);
+  const grandOpeningCredit = rows.reduce((s, r) => s + (r.openingCredit ?? ((r.openingBalance || 0) < 0 ? Math.abs(r.openingBalance || 0) : 0)), 0);
   const grandClosing = rows.reduce((s, r) => s + (r.closingBalance ?? r.balance), 0);
   // Grand total row
   tableBody.push([
     "GRAND TOTAL", "",
-    fmtSigned(grandOpening),
+    fmtNum(grandOpeningDebit),
+    fmtNum(grandOpeningCredit),
     fmtNum(grandDebit), fmtNum(grandCredit),
     fmtSigned(grandClosing),
   ]);
@@ -2628,11 +2634,12 @@ export async function generateTrialBalance_PDF(
     alternateRowStyles: { fillColor: [245, 247, 249] },
     styles: { cellPadding: 3, font: PDF_FONT },
     columnStyles: {
-      0: { cellWidth: 22 }, 1: { cellWidth: "auto" as const },
-      2: { halign: "right" as const, cellWidth: 42 },
-      3: { halign: "right" as const, cellWidth: 36 },
-      4: { halign: "right" as const, cellWidth: 36 },
-      5: { halign: "right" as const, cellWidth: 42 },
+      0: { cellWidth: 20 }, 1: { cellWidth: "auto" as const },
+      2: { halign: "right" as const, cellWidth: 34 },
+      3: { halign: "right" as const, cellWidth: 34 },
+      4: { halign: "right" as const, cellWidth: 32 },
+      5: { halign: "right" as const, cellWidth: 32 },
+      6: { halign: "right" as const, cellWidth: 38 },
     },
     didParseCell: (data: any) => {
       if (data.section !== "body") return;

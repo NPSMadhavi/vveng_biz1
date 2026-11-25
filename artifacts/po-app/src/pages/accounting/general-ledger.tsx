@@ -26,6 +26,7 @@ interface GLTransaction {
   journalEntryId: number;
   date: string;
   reference: string | null;
+  voucherType?: string;
   description: string | null;
   debit: number;
   credit: number;
@@ -73,6 +74,11 @@ function fmtAmt(n: number) {
 function fmtBal(n: number) {
   const s = new Intl.NumberFormat("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(n));
   return n < 0 ? `(${s})` : s;
+}
+function fmtBalDrCr(n: number) {
+  const s = new Intl.NumberFormat("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(n));
+  if (Math.abs(n) < 0.005) return "0.00";
+  return n > 0 ? `${s} Dr` : `${s} Cr`;
 }
 function fmtDate(d: string | null) {
   if (!d) return "—";
@@ -420,28 +426,34 @@ export default function GeneralLedgerPage() {
                   <thead>
                     <tr className="border-b-2 border-border bg-muted/40">
                       <th className="text-left px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-28">Date</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-28">Reference</th>
-                      <th className="text-left px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider">Description</th>
-                      <th className="text-right px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-36">Debit</th>
-                      <th className="text-right px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-36">Credit</th>
-                      <th className="text-right px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-36">Balance</th>
+                      <th className="text-left px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider">Particulars</th>
+                      <th className="text-left px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-28">Voucher Type</th>
+                      <th className="text-left px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-28">Voucher No.</th>
+                      <th className="text-right px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-32">Debit</th>
+                      <th className="text-right px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-32">Credit</th>
+                      <th className="text-right px-4 py-3 text-xs font-bold text-muted-foreground uppercase tracking-wider w-40">Balance</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr className="border-b border-border bg-muted/20">
                       <td className="px-4 py-2.5 text-xs text-muted-foreground italic">{fmtDate(from)}</td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground italic">B/F</td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground italic">Opening Balance</td>
-                      <td className="px-4 py-2.5 text-right text-xs text-muted-foreground/50 font-mono tabular-nums">—</td>
-                      <td className="px-4 py-2.5 text-right text-xs text-muted-foreground/50 font-mono tabular-nums">—</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground italic">Opening</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground italic">OB-001</td>
+                      <td className="px-4 py-2.5 text-right text-xs font-mono tabular-nums text-foreground">
+                        {displayOpening > 0.005 ? fmtAmt(displayOpening) : "0.00"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-xs font-mono tabular-nums text-foreground">
+                        {displayOpening < -0.005 ? fmtAmt(Math.abs(displayOpening)) : "0.00"}
+                      </td>
                       <td className={cn("px-4 py-2.5 text-right text-xs font-mono tabular-nums font-semibold", displayOpening < 0 ? "text-red-600" : "text-foreground")}>
-                        {fmtBal(displayOpening)}
+                        {fmtBalDrCr(displayOpening)}
                       </td>
                     </tr>
 
                     {adjustedTransactions.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="text-center py-12 text-sm text-muted-foreground">
+                        <td colSpan={7} className="text-center py-12 text-sm text-muted-foreground">
                           No transactions for this account in this period.
                         </td>
                       </tr>
@@ -454,25 +466,32 @@ export default function GeneralLedgerPage() {
                         onClick={() => openTransaction(tx)}
                       >
                         <td className="px-4 py-2.5 text-sm text-muted-foreground">{fmtDate(tx.date)}</td>
-                        <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{tx.reference || "—"}</td>
                         <td className="px-4 py-2.5 text-sm text-foreground max-w-xs truncate">{tx.description || "—"}</td>
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground">{tx.voucherType || "Journal"}</td>
+                        <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{tx.reference || "—"}</td>
                         <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-foreground">
-                          {fmtAmt(tx.debit) ?? <span className="text-muted-foreground/40">—</span>}
+                          {fmtAmt(tx.debit) ?? <span className="text-muted-foreground/40">0.00</span>}
                         </td>
                         <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-foreground">
-                          {fmtAmt(tx.credit) ?? <span className="text-muted-foreground/40">—</span>}
+                          {fmtAmt(tx.credit) ?? <span className="text-muted-foreground/40">0.00</span>}
                         </td>
                         <td className={cn("text-right px-4 py-2.5 font-mono text-sm tabular-nums font-semibold", tx.balance < 0 ? "text-red-600" : "text-foreground")}>
-                          {fmtBal(tx.balance)}
+                          {fmtBalDrCr(tx.balance)}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr className="bg-[#1a365d] text-white">
-                      <td colSpan={5} className="px-4 py-3 text-xs font-bold uppercase tracking-wider opacity-70">Closing Balance</td>
+                      <td colSpan={4} className="px-4 py-3 text-xs font-bold uppercase tracking-wider opacity-80">Totals &amp; Closing Balance</td>
+                      <td className="text-right px-4 py-3 font-mono text-sm font-bold tabular-nums text-white">
+                        {fmtBal(adjustedTransactions.reduce((s, t) => s + t.debit, 0))}
+                      </td>
+                      <td className="text-right px-4 py-3 font-mono text-sm font-bold tabular-nums text-white">
+                        {fmtBal(adjustedTransactions.reduce((s, t) => s + t.credit, 0))}
+                      </td>
                       <td className={cn("text-right px-4 py-3 font-mono text-base font-bold tabular-nums", displayClosing < 0 ? "text-red-300" : "text-white")}>
-                        {fmtBal(displayClosing)}
+                        {fmtBalDrCr(displayClosing)}
                       </td>
                     </tr>
                   </tfoot>

@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
-import { Download, Loader2, Package, Users, ChevronDown, ChevronUp, ChevronRight, FileText, Building2 } from "lucide-react";
+import { Download, Loader2, Package, Users, ChevronDown, ChevronUp, ChevronRight, FileText, Building2, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { generateBalanceSheet_PDF } from "@/lib/pdf";
 import type { Asset } from "@shared/schema";
@@ -17,11 +17,15 @@ import { useFollowWorkingYear } from "@/components/financial-year-controls";
 interface AcctLine { code: string; name: string; subType: string | null; amount: number }
 interface BSData {
   asOf: string;
+  isIndia?: boolean;
   assets: AcctLine[]; totalAssets: number;
   liabilities: AcctLine[]; totalLiabilities: number;
   equity: AcctLine[]; retainedEarnings: number; totalEquity: number;
   totalLiabilitiesAndEquity: number;
   balanced: boolean;
+  difference?: number;
+  unreconciledOpeningOffset?: number;
+  reconciliationWarning?: string | null;
 }
 
 function fmtAmt(n: number) {
@@ -352,9 +356,11 @@ export default function BalanceSheetPage() {
   const curAssets = data?.assets.filter(a => !isNonCurrentOrFixed(a)) ?? [];
   const curLiab   = data?.liabilities.filter(a => a.subType !== "non_current_liability") ?? [];
   const ncLiab    = data?.liabilities.filter(a => a.subType === "non_current_liability") ?? [];
-  // Both black bars must always show the same figure (Assets = Liabilities + Equity).
-  const grandTotal = data
+  const grandTotalAssets = data
     ? parseFloat(Number(data.totalAssets).toFixed(2))
+    : 0;
+  const grandTotalLiabEq = data
+    ? parseFloat(Number(data.totalLiabilitiesAndEquity).toFixed(2))
     : 0;
 
   async function handleDownloadPDF() {
@@ -363,10 +369,10 @@ export default function BalanceSheetPage() {
     try {
       await generateBalanceSheet_PDF(
         selectedCompany as any, asOf,
-        data.assets, grandTotal,
+        data.assets, grandTotalAssets,
         data.liabilities, data.totalLiabilities,
         data.equity, data.retainedEarnings, data.totalEquity,
-        grandTotal, true
+        grandTotalLiabEq, data.balanced
       );
     } finally {
       setPdfLoading(false);
@@ -450,6 +456,19 @@ export default function BalanceSheetPage() {
           />
         </div>
       </div>
+
+      {data && (!data.balanced || data.reconciliationWarning) && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-semibold">Opening Balance Reconciliation Warning</p>
+            <p className="text-xs text-amber-900">
+              {data.reconciliationWarning ||
+                `Assets (${fmtAmt(grandTotalAssets)}) do not equal Equity & Liabilities (${fmtAmt(grandTotalLiabEq)}). Difference: ${fmtAmt(data.difference ?? (grandTotalAssets - grandTotalLiabEq))}.`}
+            </p>
+          </div>
+        </div>
+      )}
 
       {isLoading && <div className="text-center py-16 text-sm text-gray-400">Loading…</div>}
       {isError   && <div className="text-center py-16 text-sm text-red-500">{(error as Error).message}</div>}
@@ -572,13 +591,13 @@ export default function BalanceSheetPage() {
               </div>
               <div className="mt-auto shrink-0 flex items-baseline justify-between px-5 py-3 bg-gray-900">
                 <span className="text-xs font-bold uppercase tracking-widest text-gray-300">Total Assets</span>
-                <span className="font-mono text-base font-bold text-white tabular-nums ml-6">{fmtAmt(grandTotal)}</span>
+                <span className="font-mono text-base font-bold text-white tabular-nums ml-6">{fmtAmt(grandTotalAssets)}</span>
               </div>
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex flex-col h-full min-h-0">
               <div className="px-5 py-3 border-b border-gray-200 bg-white shrink-0">
-                <h2 className="text-sm font-bold uppercase tracking-widest text-gray-800">Liabilities &amp; Equity</h2>
+                <h2 className="text-sm font-bold uppercase tracking-widest text-gray-800">Equity &amp; Liabilities</h2>
               </div>
               <div className="flex-1 flex flex-col min-h-0">
               <Section
@@ -929,8 +948,8 @@ export default function BalanceSheetPage() {
               </div>
 
               <div className="mt-auto shrink-0 flex items-baseline justify-between px-5 py-3 bg-gray-900">
-                <span className="text-xs font-bold uppercase tracking-widest text-gray-300">Total Liabilities &amp; Equity</span>
-                <span className="font-mono text-base font-bold text-white tabular-nums ml-6">{fmtAmt(grandTotal)}</span>
+                <span className="text-xs font-bold uppercase tracking-widest text-gray-300">Total Equity &amp; Liabilities</span>
+                <span className={cn("font-mono text-base font-bold tabular-nums ml-6", data.balanced ? "text-white" : "text-red-300")}>{fmtAmt(grandTotalLiabEq)}</span>
               </div>
             </div>
           </div>

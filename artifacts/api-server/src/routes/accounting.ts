@@ -8,7 +8,7 @@ import { backfillExpenseJEs } from "../lib/expense-auto-post.js";
 import { backfillAssetDepreciationJEs } from "../lib/asset-depreciation-auto-post.js";
 import { backfillVendorInvoiceJEs, repointManpowerVendorCostOfServices } from "../lib/vendor-invoice-auto-post.js";
 import { backfillPayrollJEs, toIsoDate } from "../lib/payroll-auto-post.js";
-import { isSingaporeCountry } from "../lib/singapore.js";
+import { isSingaporeCountry, isIndiaCountry, isAccountingSupportedCountry } from "../lib/singapore.js";
 import { assertPeriodWritable, findFyForDate } from "../lib/financial-year.js";
 import { ensureIncomeSchema } from "./income.js";
 import { ensureExpensesSchema } from "./expenses.js";
@@ -42,8 +42,8 @@ async function requireSingapore(req: any, res: any): Promise<boolean> {
   const companyId = req.session.companyId;
   if (!companyId) { res.status(400).json({ error: "No company selected" }); return false; }
   const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
-  if (!company || !isSingaporeCountry(company.country)) {
-    res.status(403).json({ error: "Accounting features are only available for Singapore companies." });
+  if (!company || !isAccountingSupportedCountry(company.country)) {
+    res.status(403).json({ error: "Accounting features are only available for Singapore and India companies." });
     return false;
   }
   return true;
@@ -203,21 +203,21 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
       SET entry_date = '2026-09-30',
           description = REPLACE(description, 'Tue Sep 01 to Wed Sep 30', '2026-09-01 to 2026-09-30')
       WHERE company_id = ${companyId} AND entry_date ILIKE '%Sep 30%'
-    `).catch(() => {});
+    `).catch(() => { });
 
     await db.execute(sql`
       UPDATE journal_entries
       SET entry_date = '2026-10-31',
           description = REPLACE(description, 'Thu Oct 01 to Sat Oct 31', '2026-10-01 to 2026-10-31')
       WHERE company_id = ${companyId} AND entry_date ILIKE '%Oct 31%'
-    `).catch(() => {});
+    `).catch(() => { });
 
     await db.execute(sql`
       UPDATE journal_entries
       SET entry_date = '2026-08-31',
           description = REPLACE(description, 'Sat Aug 01 to Mon Aug 31', '2026-08-01 to 2026-08-31')
       WHERE company_id = ${companyId} AND entry_date ILIKE '%Aug 31%'
-    `).catch(() => {});
+    `).catch(() => { });
   } catch (err) {
     req.log?.warn?.({ err }, "cleanup malformed entry_date failed");
   }
@@ -235,7 +235,7 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
         OR description ILIKE 'REVERSAL:%'
         OR description ILIKE 'REVERSAL —%'
       )
-  `).catch(() => {});
+  `).catch(() => { });
 
   // Live posted originals only — no soft-deleted / VOID reverse rows.
   const entries = await db.select()
@@ -255,7 +255,7 @@ router.get("/journal-entries", async (req, res): Promise<void> => {
       await db.update(journalEntriesTable)
         .set({ entryDate: norm })
         .where(eq(journalEntriesTable.id, entry.id))
-        .catch(() => {});
+        .catch(() => { });
     }
   }
 
@@ -289,7 +289,7 @@ router.get("/journal-entries/:id", async (req, res): Promise<void> => {
   }
 
   const lines = await db.select({
-    line:    journalLinesTable,
+    line: journalLinesTable,
     account: accountsTable,
   })
     .from(journalLinesTable)
@@ -301,7 +301,7 @@ router.get("/journal-entries/:id", async (req, res): Promise<void> => {
     ...withPath,
     lines: lines.map(r => ({
       ...r.line,
-      debit:  parseFloat(r.line.debit ?? "0"),
+      debit: parseFloat(r.line.debit ?? "0"),
       credit: parseFloat(r.line.credit ?? "0"),
       accountCode: r.account.code,
       accountName: r.account.name,
@@ -317,12 +317,12 @@ router.post("/journal-entries", async (req, res): Promise<void> => {
 
   const companyId = req.session.companyId!;
   const { entryDate, description, lines } = req.body as {
-    entryDate:   string;
+    entryDate: string;
     description: string;
     lines: Array<{ accountId: number; description?: string; debit: number; credit: number }>;
   };
 
-  if (!entryDate)        { res.status(400).json({ error: "Entry date is required" }); return; }
+  if (!entryDate) { res.status(400).json({ error: "Entry date is required" }); return; }
   const periodCheck = await assertPeriodWritable(companyId, entryDate);
   if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
   if (!description?.trim()) { res.status(400).json({ error: "Description is required" }); return; }
@@ -330,7 +330,7 @@ router.post("/journal-entries", async (req, res): Promise<void> => {
     res.status(400).json({ error: "At least 2 journal lines are required" }); return;
   }
 
-  const totalDebit  = lines.reduce((s, l) => s + (Number(l.debit)  || 0), 0);
+  const totalDebit = lines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
   const totalCredit = lines.reduce((s, l) => s + (Number(l.credit) || 0), 0);
   if (Math.abs(totalDebit - totalCredit) > 0.001) {
     res.status(400).json({ error: `Journal entry is not balanced. Debits: ${totalDebit.toFixed(2)}, Credits: ${totalCredit.toFixed(2)}` });
@@ -358,10 +358,10 @@ router.post("/journal-entries", async (req, res): Promise<void> => {
     await db.insert(journalLinesTable).values(
       lines.map(l => ({
         journalEntryId: entry.id,
-        accountId:      l.accountId,
-        description:    l.description || null,
-        debit:          l.debit  > 0 ? l.debit.toFixed(2)  : "0",
-        credit:         l.credit > 0 ? l.credit.toFixed(2) : "0",
+        accountId: l.accountId,
+        description: l.description || null,
+        debit: l.debit > 0 ? l.debit.toFixed(2) : "0",
+        credit: l.credit > 0 ? l.credit.toFixed(2) : "0",
       }))
     );
 
@@ -407,8 +407,8 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   await ensureAccountsSeeded(companyId);
   try {
@@ -424,7 +424,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
     .orderBy(asc(accountsTable.code));
 
   const entriesQuery = db.select({
-    entryId:   journalEntriesTable.id,
+    entryId: journalEntriesTable.id,
     entryDate: journalEntriesTable.entryDate,
   })
     .from(journalEntriesTable)
@@ -434,7 +434,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'ledger_ob_adjust'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
+      ...(toDate ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`] : []),
     ));
 
   const entries = await entriesQuery;
@@ -448,7 +448,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
       .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${ids.join(",")}]::int[]`)})`);
     for (const line of lines) {
       if (!map[line.accountId]) map[line.accountId] = { debit: 0, credit: 0 };
-      map[line.accountId].debit  += parseFloat(line.debit  ?? "0");
+      map[line.accountId].debit += parseFloat(line.debit ?? "0");
       map[line.accountId].credit += parseFloat(line.credit ?? "0");
     }
     return map;
@@ -457,7 +457,7 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
   const linesByAccount = await sumLinesByAccount(entryIds);
 
   // Opening balance = posted activity before From date + fy_opening + ledger_ob_adjust on/before From date.
-  const fy = fromDate ? await findFyForDate(companyId, fromDate) : await findCurrentFy(companyId);
+  const fy = await findFyForDate(companyId, fromDate || new Date().toISOString().split("T")[0]);
   const effectiveFrom = fromDate || fy?.startDate || null;
   let openingByAccount: Record<number, { debit: number; credit: number }> = {};
   if (effectiveFrom) {
@@ -479,35 +479,43 @@ router.get("/trial-balance", async (req, res): Promise<void> => {
     const totals = linesByAccount[a.id] ?? { debit: 0, credit: 0 };
     const ob = openingByAccount[a.id] ?? { debit: 0, credit: 0 };
     const openingBalance = ob.debit - ob.credit;
+    const openingDebit = openingBalance > 0 ? +openingBalance.toFixed(2) : 0;
+    const openingCredit = openingBalance < 0 ? +Math.abs(openingBalance).toFixed(2) : 0;
     const closingBalance = openingBalance + totals.debit - totals.credit;
     return {
-      id:              a.id,
-      code:            a.code,
-      name:            a.name,
-      type:            a.type,
-      subType:         a.subType,
-      totalDebit:      totals.debit,
-      totalCredit:     totals.credit,
-      openingBalance:  +openingBalance.toFixed(2),
-      closingBalance:  +closingBalance.toFixed(2),
-      balance:         +closingBalance.toFixed(2),
+      id: a.id,
+      code: a.code,
+      name: a.name,
+      type: a.type,
+      subType: a.subType,
+      totalDebit: totals.debit,
+      totalCredit: totals.credit,
+      openingDebit,
+      openingCredit,
+      openingBalance: +openingBalance.toFixed(2),
+      closingBalance: +closingBalance.toFixed(2),
+      balance: +closingBalance.toFixed(2),
     };
   });
 
-  const grandDebit   = rows.reduce((s, r) => s + r.totalDebit,  0);
-  const grandCredit  = rows.reduce((s, r) => s + r.totalCredit, 0);
+  const grandDebit = rows.reduce((s, r) => s + r.totalDebit, 0);
+  const grandCredit = rows.reduce((s, r) => s + r.totalCredit, 0);
+  const grandOpeningDebit = rows.reduce((s, r) => s + r.openingDebit, 0);
+  const grandOpeningCredit = rows.reduce((s, r) => s + r.openingCredit, 0);
   const grandOpening = rows.reduce((s, r) => s + r.openingBalance, 0);
   const grandClosing = rows.reduce((s, r) => s + r.closingBalance, 0);
 
   res.json({
     fromDate: fromDate || null,
-    toDate:   toDate   || null,
+    toDate: toDate || null,
     rows,
     grandDebit,
     grandCredit,
+    grandOpeningDebit: +grandOpeningDebit.toFixed(2),
+    grandOpeningCredit: +grandOpeningCredit.toFixed(2),
     grandOpening: +grandOpening.toFixed(2),
     grandClosing: +grandClosing.toFixed(2),
-    balanced: Math.abs(grandDebit - grandCredit) < 0.01,
+    balanced: Math.abs(grandOpeningDebit - grandOpeningCredit) < 0.01 && Math.abs(grandDebit - grandCredit) < 0.01,
   });
 });
 
@@ -519,8 +527,8 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   await hideJournalsForDeletedSources(companyId).catch(() => undefined);
   await repointManpowerVendorCostOfServices(companyId);
@@ -542,8 +550,9 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust')`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
+      ...(toDate ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`] : []),
     ));
 
   const entryIds = entries.map(e => e.entryId);
@@ -555,7 +564,7 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
       .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${entryIds.join(",")}]::int[]`)})`);
     for (const l of lines) {
       if (!linesByAccount[l.accountId]) linesByAccount[l.accountId] = { debit: 0, credit: 0 };
-      linesByAccount[l.accountId].debit  += parseFloat(l.debit  ?? "0");
+      linesByAccount[l.accountId].debit += parseFloat(l.debit ?? "0");
       linesByAccount[l.accountId].credit += parseFloat(l.credit ?? "0");
     }
   }
@@ -571,23 +580,23 @@ router.get("/profit-loss", async (req, res): Promise<void> => {
     return { code: acct.code, name: acct.name, subType: acct.subType, amount: parseFloat(netAmount(acct).toFixed(2)) };
   }
 
-  const revenue         = accounts.filter(a => a.type === "revenue" && a.subType === "sales").map(mapAcct);
-  const otherIncome     = accounts.filter(a => a.type === "revenue" && a.subType === "other_income").map(mapAcct);
-  const otherRevenue    = accounts.filter(a => a.type === "revenue" && a.subType !== "sales" && a.subType !== "other_income").map(mapAcct);
-  const costOfSales     = accounts.filter(a => a.type === "expense" && a.subType === "cost_of_sales").map(mapAcct);
+  const revenue = accounts.filter(a => a.type === "revenue" && a.subType === "sales").map(mapAcct);
+  const otherIncome = accounts.filter(a => a.type === "revenue" && a.subType === "other_income").map(mapAcct);
+  const otherRevenue = accounts.filter(a => a.type === "revenue" && a.subType !== "sales" && a.subType !== "other_income").map(mapAcct);
+  const costOfSales = accounts.filter(a => a.type === "expense" && a.subType === "cost_of_sales").map(mapAcct);
   const operatingExpenses = accounts.filter(a => a.type === "expense" && a.subType === "operating_expense" && a.code !== "7300").map(mapAcct);
-  const otherExpenses   = accounts.filter(a => a.type === "expense" && a.subType !== "cost_of_sales" && a.subType !== "operating_expense" && a.code !== "7300").map(mapAcct);
-  const incomeTaxAcct   = accounts.find(a => a.code === "7300");
+  const otherExpenses = accounts.filter(a => a.type === "expense" && a.subType !== "cost_of_sales" && a.subType !== "operating_expense" && a.code !== "7300").map(mapAcct);
+  const incomeTaxAcct = accounts.find(a => a.code === "7300");
 
-  const totalRevenue          = revenue.reduce((s, a) => s + a.amount, 0);
-  const totalOtherIncome      = otherIncome.reduce((s, a) => s + a.amount, 0) + otherRevenue.reduce((s, a) => s + a.amount, 0);
-  const totalCostOfSales      = costOfSales.reduce((s, a) => s + a.amount, 0);
-  const grossProfit           = totalRevenue + totalOtherIncome - totalCostOfSales;
+  const totalRevenue = revenue.reduce((s, a) => s + a.amount, 0);
+  const totalOtherIncome = otherIncome.reduce((s, a) => s + a.amount, 0) + otherRevenue.reduce((s, a) => s + a.amount, 0);
+  const totalCostOfSales = costOfSales.reduce((s, a) => s + a.amount, 0);
+  const grossProfit = totalRevenue + totalOtherIncome - totalCostOfSales;
   const totalOperatingExpenses = operatingExpenses.reduce((s, a) => s + a.amount, 0) + otherExpenses.reduce((s, a) => s + a.amount, 0);
-  const operatingProfit       = grossProfit - totalOperatingExpenses;
-  const incomeTax             = incomeTaxAcct ? parseFloat(netAmount(incomeTaxAcct).toFixed(2)) : 0;
+  const operatingProfit = grossProfit - totalOperatingExpenses;
+  const incomeTax = incomeTaxAcct ? parseFloat(netAmount(incomeTaxAcct).toFixed(2)) : 0;
   // Matches balance-sheet period earnings: all revenue/expense accounts
-  const netProfit             = operatingProfit - incomeTax;
+  const netProfit = operatingProfit - incomeTax;
 
   res.json({
     period: { from: fromDate, to: toDate },
@@ -614,40 +623,40 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
 
   try {
     const companyId = req.session.companyId!;
-    const fromDate  = (req.query.from as string) || null;
-    const toDate    = (req.query.to   as string) || null;
+    const fromDate = (req.query.from as string) || null;
+    const toDate = (req.query.to as string) || null;
 
     await ensureAccountsSeeded(companyId);
     await ensureIncomeSchema();
     await ensureExpensesSchema();
 
-    const [company]  = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
+    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
     const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
-    const gstRate    = parseFloat((settings as any)?.gstRate ?? "9");
+    const gstRate = parseFloat((settings as any)?.gstRate ?? "9");
 
     // ─ Box 1 + Box 6: standard-rated sales invoices (non-draft, non-void, GST > 0) ─
     const invRows = await db.select({
-      id:             invoicesTable.id,
-      invNumber:      invoicesTable.invNumber,
-      customerName:   invoicesTable.customerName,
-      issueDate:      invoicesTable.issueDate,
-      subtotal:       invoicesTable.subtotal,
+      id: invoicesTable.id,
+      invNumber: invoicesTable.invNumber,
+      customerName: invoicesTable.customerName,
+      issueDate: invoicesTable.issueDate,
+      subtotal: invoicesTable.subtotal,
       discountAmount: invoicesTable.discountAmount,
-      tax:            invoicesTable.tax,
-      totalAmount:    invoicesTable.totalAmount,
-      currency:       invoicesTable.currency,
-      exchangeRate:   (invoicesTable as any).exchangeRate,
-      status:         invoicesTable.status,
+      tax: invoicesTable.tax,
+      totalAmount: invoicesTable.totalAmount,
+      currency: invoicesTable.currency,
+      exchangeRate: (invoicesTable as any).exchangeRate,
+      status: invoicesTable.status,
     })
-    .from(invoicesTable)
-    .where(and(
-      eq(invoicesTable.companyId, companyId),
-      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
-      sql`${invoicesTable.status} NOT IN ('draft', 'void')`,
-      sql`CAST(${invoicesTable.tax} AS numeric) > 0`,
-      ...(fromDate ? [sql`${invoicesTable.issueDate} >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`${invoicesTable.issueDate} <= ${toDate}`]   : []),
-    ));
+      .from(invoicesTable)
+      .where(and(
+        eq(invoicesTable.companyId, companyId),
+        sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
+        sql`${invoicesTable.status} NOT IN ('draft', 'void')`,
+        sql`CAST(${invoicesTable.tax} AS numeric) > 0`,
+        ...(fromDate ? [sql`${invoicesTable.issueDate} >= ${fromDate}`] : []),
+        ...(toDate ? [sql`${invoicesTable.issueDate} <= ${toDate}`] : []),
+      ));
 
     const invBox1 = invRows.reduce((s, r) => {
       const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
@@ -660,25 +669,25 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
 
     // ─ Box 1/2/3/6: confirmed income records (non-trade income) ─
     const incomeRows = await db.select({
-      id:           incomeRecordsTable.id,
-      payerName:    incomeRecordsTable.payerName,
-      description:  incomeRecordsTable.description,
-      category:     incomeRecordsTable.category,
-      incomeDate:   incomeRecordsTable.incomeDate,
-      amount:       incomeRecordsTable.amount,
-      gstAmount:    incomeRecordsTable.gstAmount,
+      id: incomeRecordsTable.id,
+      payerName: incomeRecordsTable.payerName,
+      description: incomeRecordsTable.description,
+      category: incomeRecordsTable.category,
+      incomeDate: incomeRecordsTable.incomeDate,
+      amount: incomeRecordsTable.amount,
+      gstAmount: incomeRecordsTable.gstAmount,
       gstTreatment: incomeRecordsTable.gstTreatment,
-      currency:     incomeRecordsTable.currency,
+      currency: incomeRecordsTable.currency,
       exchangeRate: (incomeRecordsTable as any).exchangeRate,
     })
-    .from(incomeRecordsTable)
-    .where(and(
-      eq(incomeRecordsTable.companyId, companyId),
-      sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`,
-      eq(incomeRecordsTable.status, "confirmed"),
-      ...(fromDate ? [sql`${incomeRecordsTable.incomeDate} >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`${incomeRecordsTable.incomeDate} <= ${toDate}`]   : []),
-    ));
+      .from(incomeRecordsTable)
+      .where(and(
+        eq(incomeRecordsTable.companyId, companyId),
+        sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`,
+        eq(incomeRecordsTable.status, "confirmed"),
+        ...(fromDate ? [sql`${incomeRecordsTable.incomeDate} >= ${fromDate}`] : []),
+        ...(toDate ? [sql`${incomeRecordsTable.incomeDate} <= ${toDate}`] : []),
+      ));
 
     const incomeBox1 = incomeRows.filter(r => r.gstTreatment === "standard_rated").reduce((s, r) => {
       const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
@@ -711,23 +720,23 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
     //   Box 5 = zero-rated (ZR) + exempt (ES) purchases
     //   Box 7 = claimable input tax = GST on SR purchases
     const viRows = await db.select({
-      id:           vendorInvoicesTable.id,
-      piNumber:     vendorInvoicesTable.piNumber,
-      vendorName:   vendorInvoicesTable.vendorName,
-      piDate:       vendorInvoicesTable.piDate,
-      totalAmount:  vendorInvoicesTable.totalAmount,
-      gstAmount:    vendorInvoicesTable.gstAmount,
+      id: vendorInvoicesTable.id,
+      piNumber: vendorInvoicesTable.piNumber,
+      vendorName: vendorInvoicesTable.vendorName,
+      piDate: vendorInvoicesTable.piDate,
+      totalAmount: vendorInvoicesTable.totalAmount,
+      gstAmount: vendorInvoicesTable.gstAmount,
       gstTreatment: vendorInvoicesTable.gstTreatment,
-      currency:     vendorInvoicesTable.currency,
+      currency: vendorInvoicesTable.currency,
       exchangeRate: (vendorInvoicesTable as any).exchangeRate,
     })
-    .from(vendorInvoicesTable)
-    .where(and(
-      eq(vendorInvoicesTable.companyId, companyId),
-      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
-      ...(fromDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`]   : []),
-    ));
+      .from(vendorInvoicesTable)
+      .where(and(
+        eq(vendorInvoicesTable.companyId, companyId),
+        sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
+        ...(fromDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`] : []),
+        ...(toDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`] : []),
+      ));
 
     // Segment vendor invoices by GST treatment
     // Only standard-rated purchases contribute to the F5:
@@ -738,37 +747,37 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
 
     // Box 4: net amount (excl. GST) of SR purchases — converted to SGD via exchange rate
     const viBox4 = viSR.reduce((s, r) => {
-      const fx  = parseFloat(String(r.exchangeRate ?? "1")) || 1;
+      const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
       const net = parseFloat((parseFloat(r.totalAmount ?? "0") - parseFloat(r.gstAmount ?? "0")).toFixed(2));
       return s + net * fx;
     }, 0);
     // Box 7 contribution from vendor invoices: GST amount on SR purchases — converted to SGD
     const viBox7 = viSR.reduce((s, r) => {
-      const fx  = parseFloat(String(r.exchangeRate ?? "1")) || 1;
+      const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
       const gst = parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2));
       return s + gst * fx;
     }, 0);
 
     // ─ Confirmed expenses with GST claimable → also contribute to Box 4 (net) + Box 7 (GST) ─
     const expenseRows = await db.select({
-      id:          expensesTable.id,
-      vendorName:  expensesTable.vendorName,
+      id: expensesTable.id,
+      vendorName: expensesTable.vendorName,
       description: expensesTable.description,
-      category:    expensesTable.category,
+      category: expensesTable.category,
       expenseDate: expensesTable.expenseDate,
-      amount:      expensesTable.amount,
-      gstAmount:   expensesTable.gstAmount,
-      currency:    expensesTable.currency,
+      amount: expensesTable.amount,
+      gstAmount: expensesTable.gstAmount,
+      currency: expensesTable.currency,
     })
-    .from(expensesTable)
-    .where(and(
-      eq(expensesTable.companyId,    companyId),
-      sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
-      eq(expensesTable.status,       "confirmed"),
-      eq(expensesTable.gstClaimable, true),
-      ...(fromDate ? [sql`${expensesTable.expenseDate} >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`${expensesTable.expenseDate} <= ${toDate}`]   : []),
-    ));
+      .from(expensesTable)
+      .where(and(
+        eq(expensesTable.companyId, companyId),
+        sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
+        eq(expensesTable.status, "confirmed"),
+        eq(expensesTable.gstClaimable, true),
+        ...(fromDate ? [sql`${expensesTable.expenseDate} >= ${fromDate}`] : []),
+        ...(toDate ? [sql`${expensesTable.expenseDate} <= ${toDate}`] : []),
+      ));
 
     const expenseBox4 = expenseRows.reduce((s, r) => s + parseFloat(r.amount ?? "0"), 0);
     const expenseBox7 = expenseRows.reduce((s, r) => s + parseFloat(r.gstAmount ?? "0"), 0);
@@ -782,7 +791,7 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
     const box8 = box6 - totalBox7;
 
     res.json({
-      period:  { from: fromDate, to: toDate },
+      period: { from: fromDate, to: toDate },
       company: { name: company?.name, gstRegistrationNo: company?.registrationNo, address: company?.address },
       gstRate,
       box1: parseFloat(box1.toFixed(2)),
@@ -794,71 +803,71 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
       box7: parseFloat(totalBox7.toFixed(2)),
       box8: parseFloat(box8.toFixed(2)),
       invoices: invRows.map(r => {
-        const fx  = parseFloat(String(r.exchangeRate ?? "1")) || 1;
+        const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
         const net = parseFloat((parseFloat(r.subtotal ?? "0") - parseFloat(r.discountAmount ?? "0")).toFixed(2));
         const gst = parseFloat(parseFloat(r.tax ?? "0").toFixed(2));
         const tot = parseFloat(parseFloat(r.totalAmount ?? "0").toFixed(2));
         return {
-          id:           r.id,
-          invNumber:    r.invNumber,
+          id: r.id,
+          invNumber: r.invNumber,
           customerName: r.customerName,
-          issueDate:    r.issueDate,
-          currency:     r.currency ?? "SGD",
+          issueDate: r.issueDate,
+          currency: r.currency ?? "SGD",
           exchangeRate: fx,
-          status:       r.status,
-          netAmount:    net,
-          gstAmount:    gst,
-          totalAmount:  tot,
+          status: r.status,
+          netAmount: net,
+          gstAmount: gst,
+          totalAmount: tot,
           netAmountSGD: parseFloat((net * fx).toFixed(2)),
           gstAmountSGD: parseFloat((gst * fx).toFixed(2)),
           totalAmountSGD: parseFloat((tot * fx).toFixed(2)),
         };
       }),
       vendorInvoices: viRows.map(r => {
-        const fx  = parseFloat(String(r.exchangeRate ?? "1")) || 1;
+        const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
         const net = parseFloat((parseFloat(r.totalAmount ?? "0") - parseFloat(r.gstAmount ?? "0")).toFixed(2));
         const gst = parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2));
         const tot = parseFloat(parseFloat(r.totalAmount ?? "0").toFixed(2));
         return {
-          id:           r.id,
-          piNumber:     r.piNumber,
-          vendorName:   r.vendorName,
-          piDate:       r.piDate,
-          currency:     r.currency ?? "SGD",
+          id: r.id,
+          piNumber: r.piNumber,
+          vendorName: r.vendorName,
+          piDate: r.piDate,
+          currency: r.currency ?? "SGD",
           exchangeRate: fx,
           gstTreatment: r.gstTreatment ?? "standard_rated",
-          netAmount:    net,
-          gstAmount:    gst,
-          totalAmount:  tot,
+          netAmount: net,
+          gstAmount: gst,
+          totalAmount: tot,
           netAmountSGD: parseFloat((net * fx).toFixed(2)),
           gstAmountSGD: parseFloat((gst * fx).toFixed(2)),
           totalAmountSGD: parseFloat((tot * fx).toFixed(2)),
         };
       }),
       expenses: expenseRows.map(r => ({
-        id:          r.id,
-        vendorName:  r.vendorName,
+        id: r.id,
+        vendorName: r.vendorName,
         description: r.description,
-        category:    r.category,
+        category: r.category,
         expenseDate: r.expenseDate,
-        amount:      parseFloat(parseFloat(r.amount ?? "0").toFixed(2)),
-        gstAmount:   parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2)),
-        currency:    r.currency,
+        amount: parseFloat(parseFloat(r.amount ?? "0").toFixed(2)),
+        gstAmount: parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2)),
+        currency: r.currency,
       })),
       incomeRecords: incomeRows.map(r => {
         const fx = parseFloat(r.exchangeRate ?? "1") || 1;
         return {
-          id:           r.id,
-          payerName:    r.payerName,
-          description:  r.description,
-          category:     r.category,
-          incomeDate:   r.incomeDate,
-          amount:       parseFloat(parseFloat(r.amount ?? "0").toFixed(2)),
-          gstAmount:    parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2)),
-          amountSGD:    parseFloat((parseFloat(r.amount ?? "0") * fx).toFixed(2)),
+          id: r.id,
+          payerName: r.payerName,
+          description: r.description,
+          category: r.category,
+          incomeDate: r.incomeDate,
+          amount: parseFloat(parseFloat(r.amount ?? "0").toFixed(2)),
+          gstAmount: parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2)),
+          amountSGD: parseFloat((parseFloat(r.amount ?? "0") * fx).toFixed(2)),
           gstAmountSGD: parseFloat((parseFloat(r.gstAmount ?? "0") * fx).toFixed(2)),
           gstTreatment: r.gstTreatment,
-          currency:     r.currency,
+          currency: r.currency,
           exchangeRate: fx,
         };
       }),
@@ -887,18 +896,18 @@ router.get("/ar-aging", async (req, res): Promise<void> => {
     paymentTerms: invoicesTable.paymentTerms,
     salesPerson: (invoicesTable as any).salesPerson,
   })
-  .from(invoicesTable)
-  .where(and(
-    eq(invoicesTable.companyId, companyId),
-    sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
-    sql`${invoicesTable.status} NOT IN ('draft', 'void', 'paid')`,
-    sql`COALESCE(${invoicesTable.issueDate}, to_char(${invoicesTable.createdAt}::date, 'YYYY-MM-DD')) <= ${asOf}`,
-  ));
+    .from(invoicesTable)
+    .where(and(
+      eq(invoicesTable.companyId, companyId),
+      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
+      sql`${invoicesTable.status} NOT IN ('draft', 'void', 'paid')`,
+      sql`COALESCE(${invoicesTable.issueDate}, to_char(${invoicesTable.createdAt}::date, 'YYYY-MM-DD')) <= ${asOf}`,
+    ));
 
   function termsDays(pt: string | null): number {
     const s = (pt ?? "").toLowerCase();
     if (s.includes("cod") || s.includes("advance")) return 0;
-    if (s.includes("7"))  return 7;
+    if (s.includes("7")) return 7;
     if (s.includes("14")) return 14;
     return 30;
   }
@@ -906,18 +915,18 @@ router.get("/ar-aging", async (req, res): Promise<void> => {
   const byCustomer: Record<string, { customerName: string; salesPerson?: string; current: number; b1_30: number; b31_60: number; b61_90: number; b91plus: number; total: number; invoices: any[] }> = {};
 
   for (const inv of rows) {
-    const name   = inv.customerName || "Unknown";
+    const name = inv.customerName || "Unknown";
     const amount = parseFloat(inv.totalAmount ?? "0");
-    const dueMs  = new Date((inv.issueDate || asOf) + "T00:00:00").getTime() + termsDays(inv.paymentTerms) * 86_400_000;
-    const days   = Math.floor((asOfMs - dueMs) / 86_400_000);
+    const dueMs = new Date((inv.issueDate || asOf) + "T00:00:00").getTime() + termsDays(inv.paymentTerms) * 86_400_000;
+    const days = Math.floor((asOfMs - dueMs) / 86_400_000);
     const sp = (inv as any).salesPerson || undefined;
     if (!byCustomer[name]) byCustomer[name] = { customerName: name, salesPerson: sp, current: 0, b1_30: 0, b31_60: 0, b61_90: 0, b91plus: 0, total: 0, invoices: [] };
     if (!byCustomer[name].salesPerson && sp) byCustomer[name].salesPerson = sp;
-    if      (days <= 0)  byCustomer[name].current  += amount;
-    else if (days <= 30) byCustomer[name].b1_30    += amount;
-    else if (days <= 60) byCustomer[name].b31_60   += amount;
-    else if (days <= 90) byCustomer[name].b61_90   += amount;
-    else                 byCustomer[name].b91plus  += amount;
+    if (days <= 0) byCustomer[name].current += amount;
+    else if (days <= 30) byCustomer[name].b1_30 += amount;
+    else if (days <= 60) byCustomer[name].b31_60 += amount;
+    else if (days <= 90) byCustomer[name].b61_90 += amount;
+    else byCustomer[name].b91plus += amount;
     byCustomer[name].total += amount;
     byCustomer[name].invoices.push({ id: inv.id, invNumber: inv.invNumber, issueDate: inv.issueDate, amount, daysPastDue: days, salesPerson: sp });
   }
@@ -941,7 +950,7 @@ router.get("/ap-aging", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const asOf   = (req.query.asOf as string) || new Date().toISOString().split("T")[0];
+  const asOf = (req.query.asOf as string) || new Date().toISOString().split("T")[0];
   const asOfMs = new Date(asOf + "T00:00:00").getTime();
   const rows = await db.select({
     id: vendorInvoicesTable.id, piNumber: vendorInvoicesTable.piNumber,
@@ -951,30 +960,30 @@ router.get("/ap-aging", async (req, res): Promise<void> => {
     status: vendorInvoicesTable.status,
     salesPerson: vendorInvoicesTable.salesPerson,
   })
-  .from(vendorInvoicesTable)
-  .where(and(
-    eq(vendorInvoicesTable.companyId, companyId),
-    sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
-    sql`${vendorInvoicesTable.status} != 'paid'`,
-    sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}::date, 'YYYY-MM-DD')) <= ${asOf}`,
-  ));
+    .from(vendorInvoicesTable)
+    .where(and(
+      eq(vendorInvoicesTable.companyId, companyId),
+      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
+      sql`${vendorInvoicesTable.status} != 'paid'`,
+      sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}::date, 'YYYY-MM-DD')) <= ${asOf}`,
+    ));
 
   const byVendor: Record<string, { vendorName: string; salesPerson?: string; current: number; b1_30: number; b31_60: number; b61_90: number; b91plus: number; total: number; invoices: any[] }> = {};
 
   for (const vi of rows) {
-    const name    = vi.vendorName || "Unknown";
+    const name = vi.vendorName || "Unknown";
     const balance = parseFloat(vi.totalAmount ?? "0") - parseFloat(vi.paidAmount ?? "0");
     if (balance < 0.005) continue;
     const dueMs = new Date((vi.dueDate || vi.piDate || asOf) + "T00:00:00").getTime();
-    const days  = Math.floor((asOfMs - dueMs) / 86_400_000);
+    const days = Math.floor((asOfMs - dueMs) / 86_400_000);
     const spMatch = (vi as any).salesPerson || vi.notes?.match(/sales\s*person:\s*([^\n;]+)/i)?.[1]?.trim();
     if (!byVendor[name]) byVendor[name] = { vendorName: name, salesPerson: spMatch || undefined, current: 0, b1_30: 0, b31_60: 0, b61_90: 0, b91plus: 0, total: 0, invoices: [] };
     if (!byVendor[name].salesPerson && spMatch) byVendor[name].salesPerson = spMatch;
-    if      (days <= 0)  byVendor[name].current  += balance;
-    else if (days <= 30) byVendor[name].b1_30    += balance;
-    else if (days <= 60) byVendor[name].b31_60   += balance;
-    else if (days <= 90) byVendor[name].b61_90   += balance;
-    else                 byVendor[name].b91plus  += balance;
+    if (days <= 0) byVendor[name].current += balance;
+    else if (days <= 30) byVendor[name].b1_30 += balance;
+    else if (days <= 60) byVendor[name].b31_60 += balance;
+    else if (days <= 90) byVendor[name].b61_90 += balance;
+    else byVendor[name].b91plus += balance;
     byVendor[name].total += balance;
     byVendor[name].invoices.push({ id: vi.id, piNumber: vi.piNumber, piDate: vi.piDate, balance: +balance.toFixed(2), daysPastDue: days, status: vi.status, salesPerson: spMatch || undefined });
   }
@@ -1051,13 +1060,13 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
       .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${ids.join(",")}]::int[]`)})`);
     for (const l of lines) {
       if (!linesByAccount[l.accountId]) linesByAccount[l.accountId] = { debit: 0, credit: 0 };
-      linesByAccount[l.accountId].debit  += parseFloat(l.debit  ?? "0");
+      linesByAccount[l.accountId].debit += parseFloat(l.debit ?? "0");
       linesByAccount[l.accountId].credit += parseFloat(l.credit ?? "0");
     }
   }
 
-  const bal    = (a: typeof allAccounts[0]) => { const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 }; return a.type === "asset" ? t.debit - t.credit : t.credit - t.debit; };
-  const mapA   = (a: typeof allAccounts[0]) => ({ code: a.code, name: a.name, subType: a.subType, amount: parseFloat(bal(a).toFixed(2)) });
+  const bal = (a: typeof allAccounts[0]) => { const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 }; return a.type === "asset" ? t.debit - t.credit : t.credit - t.debit; };
+  const mapA = (a: typeof allAccounts[0]) => ({ code: a.code, name: a.name, subType: a.subType, amount: parseFloat(bal(a).toFixed(2)) });
 
   // Orphan journal lines (account deleted/missing) — keep as suspense so A = L + E still holds.
   const knownAccountIds = new Set(allAccounts.map(a => a.id));
@@ -1071,7 +1080,17 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   }
   const orphanNet = orphanDebit - orphanCredit; // asset-style
 
-  const assets      = allAccounts.filter(a => a.type === "asset").map(mapA);
+  const [companyInfo] = await db.select({ country: companiesTable.country })
+    .from(companiesTable)
+    .where(eq(companiesTable.id, companyId))
+    .limit(1);
+
+  const isOpeningOffsetAcct = (a: typeof allAccounts[0]) =>
+    a.code === "1090" || /opening balance offset/i.test(a.name || "");
+
+  const assets = allAccounts
+    .filter(a => a.type === "asset" && !isOpeningOffsetAcct(a))
+    .map(mapA);
   if (Math.abs(orphanNet) > 0.005) {
     assets.push({
       code: "SUSP",
@@ -1083,15 +1102,20 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   const liabilities = allAccounts.filter(a => a.type === "liability").map(mapA);
   // Equity lines already include carried Retained Earnings (3100) from fy_opening.
   // Hide Current Year Earnings (3200) account row — YTD P&L is shown as Profit/(Loss) for the Period.
+  // Exclude 1090 Opening Balance Offset (Cash & Bank) — never display it as Equity on the Balance Sheet.
   const isCurrentYearEarnings = (a: typeof allAccounts[0]) =>
     a.code === "3200" || /current year earnings/i.test(a.name || "");
   const equity = allAccounts
-    .filter(a => a.type === "equity" && !isCurrentYearEarnings(a))
+    .filter(a => a.type === "equity" && !isCurrentYearEarnings(a) && !isOpeningOffsetAcct(a))
     .map(mapA);
+
+  const offsetAccount = allAccounts.find(isOpeningOffsetAcct);
+  const offsetTotals = offsetAccount ? (linesByAccount[offsetAccount.id] ?? { debit: 0, credit: 0 }) : { debit: 0, credit: 0 };
+  const unreconciledOpeningOffset = parseFloat((offsetTotals.credit - offsetTotals.debit).toFixed(2));
 
   // Profit/(Loss) for the period = P&L (revenue − expense) + any balance sitting on 3200.
   // Prior-year profit is already inside equity 3100 via fy_opening — do not add it again.
-  let retainedEarnings = allAccounts
+  const retainedEarnings = allAccounts
     .filter(a => a.type === "revenue" || a.type === "expense" || (a.type === "equity" && isCurrentYearEarnings(a)))
     .reduce((s, a) => {
       const t = linesByAccount[a.id] ?? { debit: 0, credit: 0 };
@@ -1104,29 +1128,34 @@ router.get("/balance-sheet", async (req, res): Promise<void> => {
   const equityAccountsTotal = round2(equity.reduce((s, a) => s + a.amount, 0));
 
   // Identity: Assets = Liabilities + Equity BF + Profit/(Loss).
-  // Absorb any residual (orphan signs, rounding, mis-typed accounts) into period P&L
-  // so the two grand totals on the page always match.
-  let totalEquity = round2(equityAccountsTotal + retainedEarnings);
-  let totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
-  const plug = round2(totalAssets - totalLiabilitiesAndEquity);
-  if (Math.abs(plug) >= 0.005) {
-    retainedEarnings = round2(retainedEarnings + plug);
-    totalEquity = round2(equityAccountsTotal + retainedEarnings);
-    totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
+  // Never hide or force differences into Equity — surface them explicitly for reconciliation.
+  const totalEquity = round2(equityAccountsTotal + retainedEarnings);
+  const totalLiabilitiesAndEquity = round2(totalLiabilities + totalEquity);
+  const difference = round2(totalAssets - totalLiabilitiesAndEquity);
+  const balanced = Math.abs(difference) < 0.01 && Math.abs(unreconciledOpeningOffset) < 0.01;
+
+  let reconciliationWarning: string | null = null;
+  if (Math.abs(unreconciledOpeningOffset) >= 0.01) {
+    reconciliationWarning = `Unreconciled Cash & Bank Opening Balance Offset of ${Math.abs(unreconciledOpeningOffset).toFixed(2)}. Reconcile manual opening balances against Share Capital, Retained Earnings, or Liabilities.`;
+  } else if (Math.abs(difference) >= 0.01) {
+    reconciliationWarning = `Balance Sheet is out of balance by ${Math.abs(difference).toFixed(2)} (${difference > 0 ? "Assets exceed Liabilities & Equity" : "Liabilities & Equity exceed Assets"}).`;
   }
 
   res.json({
     asOf,
+    isIndia: isIndiaCountry(companyInfo?.country),
     financialYearId: fy?.id ?? null,
     financialYearLabel: fy?.label ?? null,
     assets, totalAssets,
-    liabilities, totalLiabilities: totalLiabilities,
+    liabilities, totalLiabilities,
     equity,
     retainedEarnings: round2(retainedEarnings),
     totalEquity,
-    totalLiabilitiesAndEquity: totalAssets, // always identical to Total Assets
-    balanced: true,
-    balancingPlug: Math.abs(plug) >= 0.005 ? plug : 0,
+    totalLiabilitiesAndEquity,
+    balanced,
+    difference,
+    unreconciledOpeningOffset,
+    reconciliationWarning,
   });
 });
 
@@ -1138,7 +1167,7 @@ router.post("/backfill-expense-jes", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const userId    = req.session.userId!;
+  const userId = req.session.userId!;
 
   const posted = await backfillExpenseJEs(companyId, userId);
   res.json({ posted, message: posted === 0 ? "All confirmed expenses already have journal entries." : `Posted ${posted} new journal entr${posted === 1 ? "y" : "ies"}.` });
@@ -1152,14 +1181,14 @@ router.get("/customer-statement", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const customer  = (req.query.customer as string) || "";
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const customer = (req.query.customer as string) || "";
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   const dateFilter = [
     sql`${invoicesTable.status} NOT IN ('draft', 'void')`,
     ...(fromDate ? [sql`${invoicesTable.issueDate} >= ${fromDate}`] : []),
-    ...(toDate   ? [sql`${invoicesTable.issueDate} <= ${toDate}`]   : []),
+    ...(toDate ? [sql`${invoicesTable.issueDate} <= ${toDate}`] : []),
   ];
 
   // Helper: sum confirmed payments per invoice id
@@ -1176,9 +1205,9 @@ router.get("/customer-statement", async (req, res): Promise<void> => {
   // Summary across all customers (for "no customer selected" overview)
   const allRows = await db.select({
     customerName: invoicesTable.customerName,
-    id:           invoicesTable.id,
-    totalAmount:  invoicesTable.totalAmount,
-    status:       invoicesTable.status,
+    id: invoicesTable.id,
+    totalAmount: invoicesTable.totalAmount,
+    status: invoicesTable.status,
   })
     .from(invoicesTable)
     .where(and(eq(invoicesTable.companyId, companyId), sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`, ...dateFilter))
@@ -1192,8 +1221,8 @@ router.get("/customer-statement", async (req, res): Promise<void> => {
     const name = r.customerName ?? "Unknown";
     if (!summaryMap[name]) summaryMap[name] = { billed: 0, paid: 0, invoices: 0 };
     const total = parseFloat(r.totalAmount ?? "0");
-    summaryMap[name].billed   += total;
-    summaryMap[name].paid     += (allPaid[r.id] ?? 0);
+    summaryMap[name].billed += total;
+    summaryMap[name].paid += (allPaid[r.id] ?? 0);
     summaryMap[name].invoices += 1;
   }
   const customerSummary = Object.entries(summaryMap)
@@ -1212,32 +1241,32 @@ router.get("/customer-statement", async (req, res): Promise<void> => {
     issueDate: invoicesTable.issueDate, totalAmount: invoicesTable.totalAmount,
     status: invoicesTable.status, paymentTerms: invoicesTable.paymentTerms,
   })
-  .from(invoicesTable)
-  .where(and(
-    eq(invoicesTable.companyId, companyId),
-    sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
-    sql`LOWER(${invoicesTable.customerName}) = LOWER(${customer})`,
-    ...dateFilter,
-  ))
-  .orderBy(asc(invoicesTable.issueDate), asc(invoicesTable.id));
+    .from(invoicesTable)
+    .where(and(
+      eq(invoicesTable.companyId, companyId),
+      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
+      sql`LOWER(${invoicesTable.customerName}) = LOWER(${customer})`,
+      ...dateFilter,
+    ))
+    .orderBy(asc(invoicesTable.issueDate), asc(invoicesTable.id));
 
   const paidMap = await getPaidByInvoice(invRows.map(r => r.id));
 
   const totalBilled = invRows.reduce((s, i) => s + parseFloat(i.totalAmount ?? "0"), 0);
-  const totalPaid   = invRows.reduce((s, i) => s + (paidMap[i.id] ?? 0), 0);
+  const totalPaid = invRows.reduce((s, i) => s + (paidMap[i.id] ?? 0), 0);
 
   res.json({
     customer, customerNames, customerSummary: [],
     entries: invRows.map(inv => ({
       id: inv.id, invNumber: inv.invNumber, issueDate: inv.issueDate,
-      amount:     +parseFloat(inv.totalAmount ?? "0").toFixed(2),
+      amount: +parseFloat(inv.totalAmount ?? "0").toFixed(2),
       paidAmount: +(paidMap[inv.id] ?? 0).toFixed(2),
-      balance:    +Math.max(0, parseFloat(inv.totalAmount ?? "0") - (paidMap[inv.id] ?? 0)).toFixed(2),
+      balance: +Math.max(0, parseFloat(inv.totalAmount ?? "0") - (paidMap[inv.id] ?? 0)).toFixed(2),
       status: inv.status, paymentTerms: inv.paymentTerms,
     })),
     totalBilled: +totalBilled.toFixed(2),
-    totalPaid:   +totalPaid.toFixed(2),
-    balance:     +Math.max(0, totalBilled - totalPaid).toFixed(2),
+    totalPaid: +totalPaid.toFixed(2),
+    balance: +Math.max(0, totalBilled - totalPaid).toFixed(2),
   });
 });
 
@@ -1251,113 +1280,113 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   try {
-  const companyId  = req.session.companyId!;
-  const fromDate   = (req.query.from  as string) || null;
-  const toDate     = (req.query.to    as string) || null;
-  const origFromDate = (req.query.origFrom as string) || null;
-  const origToDate   = (req.query.origTo   as string) || null;
+    const companyId = req.session.companyId!;
+    const fromDate = (req.query.from as string) || null;
+    const toDate = (req.query.to as string) || null;
+    const origFromDate = (req.query.origFrom as string) || null;
+    const origToDate = (req.query.origTo as string) || null;
 
-  await ensureAccountsSeeded(companyId);
+    await ensureAccountsSeeded(companyId);
 
-  const [company]  = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
-  const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
-  const gstRate    = parseFloat((settings as any)?.gstRate ?? "9");
+    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
+    const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
+    const gstRate = parseFloat((settings as any)?.gstRate ?? "9");
 
-  async function computeF5Boxes(fDate: string | null, tDate: string | null) {
-    // Sales invoices — apply exchange rate so amounts are always in SGD
-    const invRows = await db.select({
-      subtotal: invoicesTable.subtotal,
-      discountAmount: invoicesTable.discountAmount,
-      tax: invoicesTable.tax,
-      exchangeRate: invoicesTable.exchangeRate,
-    })
-    .from(invoicesTable)
-    .where(and(
-      eq(invoicesTable.companyId, companyId),
-      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
-      sql`${invoicesTable.status} NOT IN ('draft','void')`,
-      sql`CAST(${invoicesTable.tax} AS numeric) > 0`,
-      ...(fDate ? [sql`${invoicesTable.issueDate} >= ${fDate}`] : []),
-      ...(tDate ? [sql`${invoicesTable.issueDate} <= ${tDate}`] : []),
-    ));
-    const box1 = invRows.reduce((s, r) => {
-      const fx = parseFloat(r.exchangeRate ?? "1") || 1;
-      return s + (parseFloat(r.subtotal ?? "0") - parseFloat(r.discountAmount ?? "0")) * fx;
-    }, 0);
-    const box6 = invRows.reduce((s, r) => {
-      const fx = parseFloat(r.exchangeRate ?? "1") || 1;
-      return s + parseFloat(r.tax ?? "0") * fx;
-    }, 0);
-
-    // Vendor invoices — apply exchange rate; use net amount (excl. GST) for box4
-    const viRows = await db.select({
-      totalAmount: vendorInvoicesTable.totalAmount,
-      gstAmount:   vendorInvoicesTable.gstAmount,
-      gstTreatment: vendorInvoicesTable.gstTreatment,
-      exchangeRate: vendorInvoicesTable.exchangeRate,
-    })
-      .from(vendorInvoicesTable)
-      .where(and(
-        eq(vendorInvoicesTable.companyId, companyId),
-        sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
-        ...(fDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) >= ${fDate}`] : []),
-        ...(tDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${tDate}`] : []),
-      ));
-    const box4 = viRows.reduce((s, r) => {
-      if (r.gstTreatment && r.gstTreatment !== "standard_rated") return s;
-      const fx  = parseFloat(r.exchangeRate ?? "1") || 1;
-      const net = parseFloat(r.totalAmount ?? "0") - parseFloat(r.gstAmount ?? "0");
-      return s + net * fx;
-    }, 0);
-    const box7raw = viRows.reduce((s, r) => {
-      if (r.gstTreatment && r.gstTreatment !== "standard_rated") return s;
-      const fx  = parseFloat(r.exchangeRate ?? "1") || 1;
-      return s + parseFloat(r.gstAmount ?? "0") * fx;
-    }, 0);
-
-    // Also include journal-line box7 contributions for manually-entered entries
-    const [gstInputAcct] = await db.select().from(accountsTable)
-      .where(and(eq(accountsTable.companyId, companyId), eq(accountsTable.code, "1110"))).limit(1);
-    let box7je = 0;
-    if (gstInputAcct) {
-      const entries = await db.select({ entryId: journalEntriesTable.id }).from(journalEntriesTable)
-        .where(and(eq(journalEntriesTable.companyId, companyId), eq(journalEntriesTable.status, "posted"),
-          sql`${journalEntriesTable.refType} IS NULL`,  // manual entries only — avoid double-counting
-          ...(fDate ? [sql`${journalEntriesTable.entryDate} >= ${fDate}`] : []),
-          ...(tDate ? [sql`${journalEntriesTable.entryDate} <= ${tDate}`] : []),
+    async function computeF5Boxes(fDate: string | null, tDate: string | null) {
+      // Sales invoices — apply exchange rate so amounts are always in SGD
+      const invRows = await db.select({
+        subtotal: invoicesTable.subtotal,
+        discountAmount: invoicesTable.discountAmount,
+        tax: invoicesTable.tax,
+        exchangeRate: invoicesTable.exchangeRate,
+      })
+        .from(invoicesTable)
+        .where(and(
+          eq(invoicesTable.companyId, companyId),
+          sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
+          sql`${invoicesTable.status} NOT IN ('draft','void')`,
+          sql`CAST(${invoicesTable.tax} AS numeric) > 0`,
+          ...(fDate ? [sql`${invoicesTable.issueDate} >= ${fDate}`] : []),
+          ...(tDate ? [sql`${invoicesTable.issueDate} <= ${tDate}`] : []),
         ));
-      const eIds = entries.map(e => e.entryId);
-      if (eIds.length > 0) {
-        const lines = await db.select().from(journalLinesTable)
-          .where(and(eq(journalLinesTable.accountId, gstInputAcct.id), sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${eIds.join(",")}]::int[]`)})`));
-        box7je = lines.reduce((s, l) => s + parseFloat(l.debit ?? "0"), 0);
+      const box1 = invRows.reduce((s, r) => {
+        const fx = parseFloat(r.exchangeRate ?? "1") || 1;
+        return s + (parseFloat(r.subtotal ?? "0") - parseFloat(r.discountAmount ?? "0")) * fx;
+      }, 0);
+      const box6 = invRows.reduce((s, r) => {
+        const fx = parseFloat(r.exchangeRate ?? "1") || 1;
+        return s + parseFloat(r.tax ?? "0") * fx;
+      }, 0);
+
+      // Vendor invoices — apply exchange rate; use net amount (excl. GST) for box4
+      const viRows = await db.select({
+        totalAmount: vendorInvoicesTable.totalAmount,
+        gstAmount: vendorInvoicesTable.gstAmount,
+        gstTreatment: vendorInvoicesTable.gstTreatment,
+        exchangeRate: vendorInvoicesTable.exchangeRate,
+      })
+        .from(vendorInvoicesTable)
+        .where(and(
+          eq(vendorInvoicesTable.companyId, companyId),
+          sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
+          ...(fDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) >= ${fDate}`] : []),
+          ...(tDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${tDate}`] : []),
+        ));
+      const box4 = viRows.reduce((s, r) => {
+        if (r.gstTreatment && r.gstTreatment !== "standard_rated") return s;
+        const fx = parseFloat(r.exchangeRate ?? "1") || 1;
+        const net = parseFloat(r.totalAmount ?? "0") - parseFloat(r.gstAmount ?? "0");
+        return s + net * fx;
+      }, 0);
+      const box7raw = viRows.reduce((s, r) => {
+        if (r.gstTreatment && r.gstTreatment !== "standard_rated") return s;
+        const fx = parseFloat(r.exchangeRate ?? "1") || 1;
+        return s + parseFloat(r.gstAmount ?? "0") * fx;
+      }, 0);
+
+      // Also include journal-line box7 contributions for manually-entered entries
+      const [gstInputAcct] = await db.select().from(accountsTable)
+        .where(and(eq(accountsTable.companyId, companyId), eq(accountsTable.code, "1110"))).limit(1);
+      let box7je = 0;
+      if (gstInputAcct) {
+        const entries = await db.select({ entryId: journalEntriesTable.id }).from(journalEntriesTable)
+          .where(and(eq(journalEntriesTable.companyId, companyId), eq(journalEntriesTable.status, "posted"),
+            sql`${journalEntriesTable.refType} IS NULL`,  // manual entries only — avoid double-counting
+            ...(fDate ? [sql`${journalEntriesTable.entryDate} >= ${fDate}`] : []),
+            ...(tDate ? [sql`${journalEntriesTable.entryDate} <= ${tDate}`] : []),
+          ));
+        const eIds = entries.map(e => e.entryId);
+        if (eIds.length > 0) {
+          const lines = await db.select().from(journalLinesTable)
+            .where(and(eq(journalLinesTable.accountId, gstInputAcct.id), sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${eIds.join(",")}]::int[]`)})`));
+          box7je = lines.reduce((s, l) => s + parseFloat(l.debit ?? "0"), 0);
+        }
       }
+      const box7 = box7raw + box7je;
+      return { box1, box2: 0, box3: 0, box4, box5: 0, box6, box7, box8: box6 - box7 };
     }
-    const box7 = box7raw + box7je;
-    return { box1, box2: 0, box3: 0, box4, box5: 0, box6, box7, box8: box6 - box7 };
-  }
 
-  const [original, amended] = await Promise.all([
-    computeF5Boxes(origFromDate, origToDate),
-    computeF5Boxes(fromDate, toDate),
-  ]);
+    const [original, amended] = await Promise.all([
+      computeF5Boxes(origFromDate, origToDate),
+      computeF5Boxes(fromDate, toDate),
+    ]);
 
-  const delta = {
-    box1: amended.box1 - original.box1, box2: 0, box3: 0,
-    box4: amended.box4 - original.box4, box5: 0,
-    box6: amended.box6 - original.box6, box7: amended.box7 - original.box7,
-    box8: amended.box8 - original.box8,
-  };
+    const delta = {
+      box1: amended.box1 - original.box1, box2: 0, box3: 0,
+      box4: amended.box4 - original.box4, box5: 0,
+      box6: amended.box6 - original.box6, box7: amended.box7 - original.box7,
+      box8: amended.box8 - original.box8,
+    };
 
-  res.json({
-    originalPeriod: { from: origFromDate, to: origToDate },
-    amendedPeriod:  { from: fromDate,     to: toDate     },
-    company: { name: company?.name, gstRegistrationNo: company?.registrationNo, address: company?.address },
-    gstRate,
-    original: { box1: +original.box1.toFixed(2), box2: 0, box3: 0, box4: +original.box4.toFixed(2), box5: 0, box6: +original.box6.toFixed(2), box7: +original.box7.toFixed(2), box8: +original.box8.toFixed(2) },
-    amended:  { box1: +amended.box1.toFixed(2),  box2: 0, box3: 0, box4: +amended.box4.toFixed(2),  box5: 0, box6: +amended.box6.toFixed(2),  box7: +amended.box7.toFixed(2),  box8: +amended.box8.toFixed(2) },
-    delta:    { box1: +delta.box1.toFixed(2),    box2: 0, box3: 0, box4: +delta.box4.toFixed(2),    box5: 0, box6: +delta.box6.toFixed(2),    box7: +delta.box7.toFixed(2),    box8: +delta.box8.toFixed(2) },
-  });
+    res.json({
+      originalPeriod: { from: origFromDate, to: origToDate },
+      amendedPeriod: { from: fromDate, to: toDate },
+      company: { name: company?.name, gstRegistrationNo: company?.registrationNo, address: company?.address },
+      gstRate,
+      original: { box1: +original.box1.toFixed(2), box2: 0, box3: 0, box4: +original.box4.toFixed(2), box5: 0, box6: +original.box6.toFixed(2), box7: +original.box7.toFixed(2), box8: +original.box8.toFixed(2) },
+      amended: { box1: +amended.box1.toFixed(2), box2: 0, box3: 0, box4: +amended.box4.toFixed(2), box5: 0, box6: +amended.box6.toFixed(2), box7: +amended.box7.toFixed(2), box8: +amended.box8.toFixed(2) },
+      delta: { box1: +delta.box1.toFixed(2), box2: 0, box3: 0, box4: +delta.box4.toFixed(2), box5: 0, box6: +delta.box6.toFixed(2), box7: +delta.box7.toFixed(2), box8: +delta.box8.toFixed(2) },
+    });
   } catch (err: any) {
     req.log?.error({ err }, "GST F7 failed");
     res.status(500).json({ error: err?.message || "Failed to load GST F7 data" });
@@ -1371,21 +1400,21 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
   if (!requireCompany(req, res)) return;
 
   const companyId = req.session.companyId!;
-  const vendor    = (req.query.vendor as string) || "";
-  const fromDate  = (req.query.from   as string) || null;
-  const toDate    = (req.query.to     as string) || null;
+  const vendor = (req.query.vendor as string) || "";
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   const dateFilter = [
     ...(fromDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) >= ${fromDate}`] : []),
-    ...(toDate   ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${toDate}`]   : []),
+    ...(toDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${toDate}`] : []),
   ];
 
   // Summary across all vendors (used for the "no vendor selected" overview table)
   const allRows = await db.select({
-    vendorName:  vendorInvoicesTable.vendorName,
+    vendorName: vendorInvoicesTable.vendorName,
     totalAmount: vendorInvoicesTable.totalAmount,
-    paidAmount:  vendorInvoicesTable.paidAmount,
-    status:      vendorInvoicesTable.status,
+    paidAmount: vendorInvoicesTable.paidAmount,
+    status: vendorInvoicesTable.status,
   })
     .from(vendorInvoicesTable)
     .where(and(eq(vendorInvoicesTable.companyId, companyId), sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`, ...dateFilter))
@@ -1397,9 +1426,9 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
     const name = r.vendorName ?? "Unknown";
     if (!summaryMap[name]) summaryMap[name] = { billed: 0, paid: 0, invoices: 0 };
     const total = parseFloat(r.totalAmount ?? "0");
-    const paid  = parseFloat(r.paidAmount  ?? "0");
-    summaryMap[name].billed   += total;
-    summaryMap[name].paid     += paid;
+    const paid = parseFloat(r.paidAmount ?? "0");
+    summaryMap[name].billed += total;
+    summaryMap[name].paid += paid;
     summaryMap[name].invoices += 1;
   }
   const vendorSummary = Object.entries(summaryMap)
@@ -1425,7 +1454,7 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
 
   const totalBilled = piRows.reduce((s, r) => s + parseFloat(r.totalAmount ?? "0"), 0);
   // Fix: use paidAmount column (not status=paid filter) so partial payments are included
-  const totalPaid   = piRows.reduce((s, r) => s + parseFloat(r.paidAmount  ?? "0"), 0);
+  const totalPaid = piRows.reduce((s, r) => s + parseFloat(r.paidAmount ?? "0"), 0);
 
   res.json({
     vendor, vendorNames, vendorSummary: [],
@@ -1437,8 +1466,8 @@ router.get("/vendor-statement", async (req, res): Promise<void> => {
       status: r.status, currency: r.currency,
     })),
     totalBilled: +totalBilled.toFixed(2),
-    totalPaid:   +totalPaid.toFixed(2),
-    balance:     +Math.max(0, totalBilled - totalPaid).toFixed(2),
+    totalPaid: +totalPaid.toFixed(2),
+    balance: +Math.max(0, totalBilled - totalPaid).toFixed(2),
   });
 });
 
@@ -1518,8 +1547,8 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   const parsedAccountId = req.query.accountId ? parseInt(req.query.accountId as string, 10) : NaN;
   const accountCode = String(req.query.accountCode || "").trim();
   let accountId = Number.isFinite(parsedAccountId) ? parsedAccountId : null;
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   await ensureAccountsSeeded(companyId);
 
@@ -1560,7 +1589,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
     if (obIds.length > 0) {
       const obLines = await db.select().from(journalLinesTable)
         .where(and(eq(journalLinesTable.accountId, accountId), sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${obIds.join(",")}]::int[]`)})`));
-      openingDebit  = obLines.reduce((s, l) => s + parseFloat(l.debit  ?? "0"), 0);
+      openingDebit = obLines.reduce((s, l) => s + parseFloat(l.debit ?? "0"), 0);
       openingCredit = obLines.reduce((s, l) => s + parseFloat(l.credit ?? "0"), 0);
     }
   }
@@ -1582,7 +1611,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
       sql`COALESCE(${journalEntriesTable.refType}, '') <> 'ledger_ob_adjust'`,
       ...(fromDate ? [sql`${journalEntriesTable.entryDate} >= ${fromDate}`] : []),
-      ...(toDate   ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`]   : []),
+      ...(toDate ? [sql`${journalEntriesTable.entryDate} <= ${toDate}`] : []),
     ))
     .orderBy(asc(journalEntriesTable.entryDate), asc(journalEntriesTable.id));
 
@@ -1601,13 +1630,13 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   const [invoicePayments, vendorPayments] = await Promise.all([
     invoicePaymentIds.length
       ? db.select({ id: invoicePaymentsTable.id, invoiceId: invoicePaymentsTable.invoiceId })
-          .from(invoicePaymentsTable)
-          .where(inArray(invoicePaymentsTable.id, invoicePaymentIds))
+        .from(invoicePaymentsTable)
+        .where(inArray(invoicePaymentsTable.id, invoicePaymentIds))
       : Promise.resolve([] as { id: number; invoiceId: number }[]),
     vendorPaymentIds.length
       ? db.select({ id: vendorPaymentsTable.id, vendorInvoiceId: vendorPaymentsTable.vendorInvoiceId })
-          .from(vendorPaymentsTable)
-          .where(inArray(vendorPaymentsTable.id, vendorPaymentIds))
+        .from(vendorPaymentsTable)
+        .where(inArray(vendorPaymentsTable.id, vendorPaymentIds))
       : Promise.resolve([] as { id: number; vendorInvoiceId: number }[]),
   ]);
   const invoiceIdByPayment = new Map(invoicePayments.map(p => [p.id, p.invoiceId]));
@@ -1639,12 +1668,36 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
   const manpowerInvoiceIds = new Set(glInvoices.filter((row) => row.manpowerDetails).map((row) => row.id));
   const manpowerVendorIds = new Set(glVendorInvoices.filter((row) => row.manpowerDetails).map((row) => row.id));
 
+  const voucherTypeLabel = (refType: string | null | undefined): string => {
+    switch (refType) {
+      case "invoice_payment":
+      case "income":
+      case "customer_deposit":
+        return "Receipt";
+      case "vendor_payment":
+      case "expense":
+      case "payroll":
+        return "Payment";
+      case "invoice":
+        return "Sales";
+      case "vendor_invoice":
+        return "Purchase";
+      case "contra":
+        return "Contra";
+      case "fy_opening":
+      case "ledger_ob_adjust":
+        return "Opening";
+      default:
+        return "Journal";
+    }
+  };
+
   let running = openingBalance;
   const transactions = entries
     .filter(e => linesByEntry[e.entryId])
     .map(e => {
       const l = linesByEntry[e.entryId];
-      const debit  = parseFloat(l.debit  ?? "0");
+      const debit = parseFloat(l.debit ?? "0");
       const credit = parseFloat(l.credit ?? "0");
       running += debit - credit;
       const linkedDocId = e.refType === "invoice_payment"
@@ -1662,6 +1715,7 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
         journalEntryId: e.entryId,
         date: e.entryDate,
         reference: e.reference,
+        voucherType: voucherTypeLabel(e.refType),
         description: e.description || l.description,
         debit: +debit.toFixed(2),
         credit: +credit.toFixed(2),
@@ -1672,51 +1726,20 @@ router.get("/general-ledger", async (req, res): Promise<void> => {
       };
     });
 
+  const roundedOpening = +openingBalance.toFixed(2);
   res.json({
     account: { id: account.id, code: account.code, name: account.name, type: account.type, subType: account.subType },
     accounts: accounts.map(a => ({ id: a.id, code: a.code, name: a.name, type: a.type })),
-    openingBalance: +openingBalance.toFixed(2),
+    openingBalance: roundedOpening,
+    openingDebit: roundedOpening > 0 ? roundedOpening : 0,
+    openingCredit: roundedOpening < 0 ? +Math.abs(roundedOpening).toFixed(2) : 0,
     closingBalance: +running.toFixed(2),
     transactions,
   });
 });
 
-/** Set Account Ledger opening balance for a period start (from date). Persists as balanced JE. */
-router.put("/general-ledger/opening-balance", async (req, res): Promise<void> => {
-  if (!requireAuth(req, res)) return;
-  if (!requireCompany(req, res)) return;
-  if (!(await requireSingapore(req, res))) return;
-  if (!canManageAccounts(req)) {
-    res.status(403).json({ error: "Only admin or accountant can edit opening balance" });
-    return;
-  }
-
-  const companyId = req.session.companyId!;
-  const userId = req.session.userId!;
-  const accountId = parseInt(String(req.body?.accountId ?? ""), 10);
-  const fromDate = String(req.body?.from || "").trim();
-  const amount = Number(req.body?.amount);
-
-  if (!Number.isFinite(accountId) || accountId <= 0) {
-    res.status(400).json({ error: "accountId is required" }); return;
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
-    res.status(400).json({ error: "from date (YYYY-MM-DD) is required" }); return;
-  }
-  if (!Number.isFinite(amount)) {
-    res.status(400).json({ error: "amount is required (debit − credit)" }); return;
-  }
-
-  const periodCheck = await assertPeriodWritable(companyId, fromDate);
-  if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
-
+async function ensureOpeningBalanceOffsetAccount(companyId: number) {
   await ensureAccountsSeeded(companyId);
-
-  const [account] = await db.select().from(accountsTable)
-    .where(and(eq(accountsTable.id, accountId), eq(accountsTable.companyId, companyId)))
-    .limit(1);
-  if (!account) { res.status(404).json({ error: "Account not found" }); return; }
-
   let [equityAcct] = await db.select().from(accountsTable)
     .where(and(
       eq(accountsTable.companyId, companyId),
@@ -1727,25 +1750,55 @@ router.put("/general-ledger/opening-balance", async (req, res): Promise<void> =>
     equityAcct = await ensureNamedAccount(companyId, {
       code: "1090",
       name: "Opening Balance Offset (Cash & Bank)",
-      type: "asset",
-      subType: "current_asset",
+      type: "equity",
+      subType: "retained_earnings",
       isSystem: true,
     });
+  } else if (equityAcct.type !== "equity") {
+    const [updated] = await db.update(accountsTable)
+      .set({ type: "equity", subType: "retained_earnings" })
+      .where(eq(accountsTable.id, equityAcct.id))
+      .returning();
+    if (updated) equityAcct = updated;
   }
-  if (!equityAcct) {
-    res.status(400).json({ error: "Opening balance offset account (1090) not found" }); return;
-  }
+  return equityAcct;
+}
+
+/**
+ * Set an account's opening balance as of `fromDate` by posting/replacing a balanced
+ * `ledger_ob_adjust` journal entry against Opening Balance Offset (Equity 1090).
+ */
+async function upsertAccountOpeningBalance(params: {
+  req: any;
+  companyId: number;
+  userId: number;
+  accountId: number;
+  fromDate: string;
+  amount: number;
+}) {
+  const { req, companyId, userId, accountId, fromDate, amount } = params;
+  const equityAcct = await ensureOpeningBalanceOffsetAccount(companyId);
+  if (!equityAcct) throw Object.assign(new Error("Opening balance offset account (1090) not found"), { status: 400 });
   if (equityAcct.id === accountId) {
-    res.status(400).json({ error: "Cannot set opening balance directly on Opening Balance Offset this way" }); return;
+    throw Object.assign(new Error("Cannot set opening balance directly on Opening Balance Offset this way"), { status: 400 });
   }
 
-  // Current opening before any ledger_ob_adjust on fromDate
+  const [account] = await db.select().from(accountsTable)
+    .where(and(eq(accountsTable.id, accountId), eq(accountsTable.companyId, companyId)))
+    .limit(1);
+  if (!account) throw Object.assign(new Error("Account not found"), { status: 404 });
+
+  // Base opening before any ledger_ob_adjust on fromDate (includes fy_opening <= fromDate + prior activity < fromDate)
   const priorEntries = await db.select({ entryId: journalEntriesTable.id })
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
-      sql`${journalEntriesTable.entryDate} < ${fromDate}`,
+      sql`(
+        (${journalEntriesTable.entryDate} < ${fromDate} AND COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust'))
+        OR (${journalEntriesTable.refType} = 'fy_opening' AND ${journalEntriesTable.entryDate} <= ${fromDate})
+        OR (${journalEntriesTable.refType} = 'ledger_ob_adjust' AND ${journalEntriesTable.entryDate} < ${fromDate})
+      )`,
     ));
   const priorIds = priorEntries.map(e => e.entryId);
   let baseDebit = 0, baseCredit = 0;
@@ -1820,7 +1873,154 @@ router.put("/general-ledger/opening-balance", async (req, res): Promise<void> =>
     });
   }
 
-  res.json({ ok: true, accountId, from: fromDate, openingBalance: desired });
+  return desired;
+}
+
+/** Set Account Ledger opening balance for a period start (from date). Persists as balanced JE. */
+router.put("/general-ledger/opening-balance", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+  if (!canManageAccounts(req)) {
+    res.status(403).json({ error: "Only admin or accountant can edit opening balance" });
+    return;
+  }
+
+  const companyId = req.session.companyId!;
+  const userId = req.session.userId!;
+  const accountId = parseInt(String(req.body?.accountId ?? ""), 10);
+  const fromDate = String(req.body?.from || "").trim();
+  const amount = Number(req.body?.amount);
+
+  if (!Number.isFinite(accountId) || accountId <= 0) {
+    res.status(400).json({ error: "accountId is required" }); return;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    res.status(400).json({ error: "from date (YYYY-MM-DD) is required" }); return;
+  }
+  if (!Number.isFinite(amount)) {
+    res.status(400).json({ error: "amount is required (debit − credit)" }); return;
+  }
+
+  const periodCheck = await assertPeriodWritable(companyId, fromDate);
+  if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
+
+  try {
+    const desired = await upsertAccountOpeningBalance({ req, companyId, userId, accountId, fromDate, amount });
+    res.json({ ok: true, accountId, from: fromDate, openingBalance: desired });
+  } catch (err: any) {
+    res.status(err?.status ?? 500).json({ error: err?.message ?? "Failed to update opening balance" });
+  }
+});
+
+/** List Cash & Bank accounts with their opening balances as of `from` (defaults to current FY start). */
+router.get("/accounting/cash-bank-opening-balances", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+
+  const companyId = req.session.companyId!;
+  await ensureAccountsSeeded(companyId);
+
+  const rawFrom = String(req.query.from || "").trim();
+  const todayStr = new Date().toISOString().split("T")[0];
+  const fy = await findFyForDate(companyId, rawFrom && /^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? rawFrom : todayStr);
+  const fromDate = (/^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? rawFrom : null)
+    || fy?.startDate
+    || `${new Date().getFullYear()}-01-01`;
+
+  const allAccounts = await db.select().from(accountsTable)
+    .where(and(eq(accountsTable.companyId, companyId), eq(accountsTable.isActive, true)))
+    .orderBy(asc(accountsTable.code));
+
+  const cashBankAccounts = allAccounts.filter(a =>
+    a.type === "asset" && (
+      ["1000", "1010", "1020", "1030"].includes(a.code) ||
+      /\b(cash|bank|petty)\b/i.test(a.name || "")
+    )
+  );
+
+  const obEntries = await db.select({ entryId: journalEntriesTable.id })
+    .from(journalEntriesTable)
+    .where(and(
+      eq(journalEntriesTable.companyId, companyId),
+      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+      sql`(
+        (${journalEntriesTable.entryDate} < ${fromDate} AND COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust'))
+        OR (${journalEntriesTable.refType} = 'fy_opening' AND ${journalEntriesTable.entryDate} <= ${fromDate})
+        OR (${journalEntriesTable.refType} = 'ledger_ob_adjust' AND ${journalEntriesTable.entryDate} <= ${fromDate})
+      )`,
+    ));
+  const obIds = obEntries.map(e => e.entryId);
+  const obByAcct: Record<number, { debit: number; credit: number }> = {};
+  if (obIds.length > 0) {
+    const lines = await db.select().from(journalLinesTable)
+      .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${obIds.join(",")}]::int[]`)})`);
+    for (const l of lines) {
+      if (!obByAcct[l.accountId]) obByAcct[l.accountId] = { debit: 0, credit: 0 };
+      obByAcct[l.accountId].debit += parseFloat(l.debit ?? "0");
+      obByAcct[l.accountId].credit += parseFloat(l.credit ?? "0");
+    }
+  }
+
+  res.json({
+    fromDate,
+    accounts: cashBankAccounts.map(a => {
+      const ob = obByAcct[a.id] ?? { debit: 0, credit: 0 };
+      const openingBalance = +(ob.debit - ob.credit).toFixed(2);
+      return {
+        id: a.id,
+        code: a.code,
+        name: a.name,
+        openingBalance,
+        openingDebit: openingBalance > 0 ? openingBalance : 0,
+        openingCredit: openingBalance < 0 ? +Math.abs(openingBalance).toFixed(2) : 0,
+      };
+    }),
+  });
+});
+
+/** Batch-save Cash & Bank opening balances as of `from`. */
+router.put("/accounting/cash-bank-opening-balances", async (req, res): Promise<void> => {
+  if (!requireAuth(req, res)) return;
+  if (!requireCompany(req, res)) return;
+  if (!(await requireSingapore(req, res))) return;
+  if (!canManageAccounts(req)) {
+    res.status(403).json({ error: "Only admin or accountant can edit opening balances" });
+    return;
+  }
+
+  const companyId = req.session.companyId!;
+  const userId = req.session.userId!;
+  const fromDate = String(req.body?.from || "").trim();
+  const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+    res.status(400).json({ error: "from date (YYYY-MM-DD) is required" }); return;
+  }
+  if (entries.length === 0) {
+    res.status(400).json({ error: "entries array is required" }); return;
+  }
+
+  const periodCheck = await assertPeriodWritable(companyId, fromDate);
+  if (!periodCheck.ok) { res.status(periodCheck.status).json({ error: periodCheck.error }); return; }
+
+  try {
+    const updated: Array<{ accountId: number; openingBalance: number }> = [];
+    for (const item of entries) {
+      const accountId = parseInt(String(item?.accountId ?? ""), 10);
+      const amount = Number(item?.amount);
+      if (!Number.isFinite(accountId) || accountId <= 0 || !Number.isFinite(amount)) {
+        res.status(400).json({ error: "Each entry must have a valid accountId and numeric amount" });
+        return;
+      }
+      const desired = await upsertAccountOpeningBalance({ req, companyId, userId, accountId, fromDate, amount });
+      updated.push({ accountId, openingBalance: desired });
+    }
+    res.json({ ok: true, from: fromDate, updated });
+  } catch (err: any) {
+    res.status(err?.status ?? 500).json({ error: err?.message ?? "Failed to update Cash & Bank opening balances" });
+  }
 });
 
 // ─── Cash Flow Statement (Indirect Method) ────────────────────────────────────
@@ -1831,8 +2031,8 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   if (!fromDate || !toDate) {
     res.status(400).json({ error: "from and to dates are required" });
@@ -1855,19 +2055,22 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
-      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
+      sql`COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust')`,
       sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
       sql`${journalEntriesTable.entryDate} <= ${toDate}`,
     ));
   const periodIds = periodEntries.map(e => e.entryId);
 
-  // ── Pre-period entries (before fromDate) — for opening cash balance ──────
+  // ── Pre-period entries (before fromDate + FY/manual opening on/before fromDate) — for opening cash balance ──────
   const preEntries = await db.select({ entryId: journalEntriesTable.id })
     .from(journalEntriesTable)
     .where(and(
       eq(journalEntriesTable.companyId, companyId),
       eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
-      sql`${journalEntriesTable.entryDate} < ${fromDate}`,
+      sql`(
+        (${journalEntriesTable.entryDate} < ${fromDate} AND COALESCE(${journalEntriesTable.refType}, '') NOT IN ('fy_opening', 'ledger_ob_adjust'))
+        OR (COALESCE(${journalEntriesTable.refType}, '') IN ('fy_opening', 'ledger_ob_adjust') AND ${journalEntriesTable.entryDate} <= ${fromDate})
+      )`,
     ));
   const preIds = preEntries.map(e => e.entryId);
 
@@ -1878,7 +2081,7 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
       .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${periodIds.join(",")}]::int[]`)})`);
     for (const l of lines) {
       if (!periodMov[l.accountId]) periodMov[l.accountId] = { debit: 0, credit: 0 };
-      periodMov[l.accountId].debit  += parseFloat(l.debit  ?? "0");
+      periodMov[l.accountId].debit += parseFloat(l.debit ?? "0");
       periodMov[l.accountId].credit += parseFloat(l.credit ?? "0");
     }
   }
@@ -1889,7 +2092,7 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
       .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${preIds.join(",")}]::int[]`)})`);
     for (const l of lines) {
       if (!preMov[l.accountId]) preMov[l.accountId] = { debit: 0, credit: 0 };
-      preMov[l.accountId].debit  += parseFloat(l.debit  ?? "0");
+      preMov[l.accountId].debit += parseFloat(l.debit ?? "0");
       preMov[l.accountId].credit += parseFloat(l.credit ?? "0");
     }
   }
@@ -1926,30 +2129,30 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
       totalExpense += exp;
     }
   }
-  const netProfit            = +(totalRevenue - totalExpense).toFixed(2);
-  const addBackDepreciation  = +depreciation.toFixed(2);
+  const netProfit = +(totalRevenue - totalExpense).toFixed(2);
+  const addBackDepreciation = +depreciation.toFixed(2);
 
   // ── Working Capital Changes ─────────────────────────────────────────────────
   const wc = {
-    changeAR:               cfBs("1100"),
+    changeAR: cfBs("1100"),
     changeOtherReceivables: cfBs("1120"),
-    changeGstInput:         cfBs("1110"),
-    changeInventory:        cfBs("1200"),
-    changePrepayments:      cfBs("1300"),
-    changeDeposits:         cfBs("1400"),
-    changeAP:               cfBs("2000"),
-    changeGstOutput:        cfBs("2010"),
-    changeAccruals:         cfBs("2020"),
-    changeStaffPayable:     cfBs("2040"),
-    changeCPF:              cfBs("2050"),
+    changeGstInput: cfBs("1110"),
+    changeInventory: cfBs("1200"),
+    changePrepayments: cfBs("1300"),
+    changeDeposits: cfBs("1400"),
+    changeAP: cfBs("2000"),
+    changeGstOutput: cfBs("2010"),
+    changeAccruals: cfBs("2020"),
+    changeStaffPayable: cfBs("2040"),
+    changeCPF: cfBs("2050"),
   };
-  const totalWC     = +Object.values(wc).reduce((s, v) => s + v, 0).toFixed(2);
+  const totalWC = +Object.values(wc).reduce((s, v) => s + v, 0).toFixed(2);
   const netOperating = +(netProfit + addBackDepreciation + totalWC).toFixed(2);
 
   // ── Investing Activities ────────────────────────────────────────────────────
   const investing = {
-    equipment:  cfBs("1500"),
-    furniture:  cfBs("1600"),
+    equipment: cfBs("1500"),
+    furniture: cfBs("1600"),
     renovation: cfBs("1700"),
   };
   const netInvesting = +Object.values(investing).reduce((s, v) => s + v, 0).toFixed(2);
@@ -1957,14 +2160,14 @@ router.get("/cash-flow", async (req, res): Promise<void> => {
   // ── Financing Activities ────────────────────────────────────────────────────
   const financing = {
     directorsLoan: cfBs("2100"),
-    bankLoan:      cfBs("2200"),
-    shareCapital:  cfBs("3000"),
+    bankLoan: cfBs("2200"),
+    shareCapital: cfBs("3000"),
   };
   const netFinancing = +Object.values(financing).reduce((s, v) => s + v, 0).toFixed(2);
 
   // ── Cash Reconciliation ─────────────────────────────────────────────────────
-  const netChange   = +(netOperating + netInvesting + netFinancing).toFixed(2);
-  const cashCodes   = ["1000", "1010", "1020", "1030"];
+  const netChange = +(netOperating + netInvesting + netFinancing).toFixed(2);
+  const cashCodes = ["1000", "1010", "1020", "1030"];
   const openingCash = +cashCodes.reduce((s, c) => s + assetBal(c, preMov), 0).toFixed(2);
   const closingCash = +(openingCash + netChange).toFixed(2);
 
@@ -1993,8 +2196,8 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   if (!fromDate || !toDate) {
     res.status(400).json({ error: "from and to dates are required" });
@@ -2002,22 +2205,22 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
   }
 
   try {
-    const [company]  = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
+    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
     const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
-    const gstRate    = parseFloat(settings?.gstRate ?? "9");
+    const gstRate = parseFloat(settings?.gstRate ?? "9");
 
     // ── Output Tax: confirmed/paid invoices in period ──────────────────────
     const invRows = await db.select({
-      id:             invoicesTable.id,
-      invNumber:      invoicesTable.invNumber,
-      customerName:   invoicesTable.customerName,
-      issueDate:      invoicesTable.issueDate,
-      createdAt:      invoicesTable.createdAt,
-      subtotal:       invoicesTable.subtotal,
+      id: invoicesTable.id,
+      invNumber: invoicesTable.invNumber,
+      customerName: invoicesTable.customerName,
+      issueDate: invoicesTable.issueDate,
+      createdAt: invoicesTable.createdAt,
+      subtotal: invoicesTable.subtotal,
       discountAmount: invoicesTable.discountAmount,
-      tax:            invoicesTable.tax,
-      totalAmount:    invoicesTable.totalAmount,
-      status:         invoicesTable.status,
+      tax: invoicesTable.tax,
+      totalAmount: invoicesTable.totalAmount,
+      status: invoicesTable.status,
     }).from(invoicesTable).where(and(
       eq(invoicesTable.companyId, companyId),
       sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
@@ -2028,9 +2231,9 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
 
     const outputLines = invRows.map(r => {
       const taxableAmt = +(parseFloat(r.subtotal ?? "0") - parseFloat(r.discountAmount ?? "0")).toFixed(2);
-      const gstAmt     = +parseFloat(r.tax ?? "0").toFixed(2);
-      const totalAmt   = +parseFloat(r.totalAmount ?? "0").toFixed(2);
-      const date       = r.issueDate ?? r.createdAt?.toISOString().slice(0, 10) ?? "";
+      const gstAmt = +parseFloat(r.tax ?? "0").toFixed(2);
+      const totalAmt = +parseFloat(r.totalAmount ?? "0").toFixed(2);
+      const date = r.issueDate ?? r.createdAt?.toISOString().slice(0, 10) ?? "";
       return {
         date, docNo: r.invNumber ?? "", party: r.customerName ?? "",
         taxType: gstAmt > 0 ? "SR" : "ZR" as "SR" | "ZR",
@@ -2040,13 +2243,13 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
 
     // ── Input Tax: vendor invoices in period ───────────────────────────────
     const viRows = await db.select({
-      id:          vendorInvoicesTable.id,
-      piNumber:    vendorInvoicesTable.piNumber,
-      vendorName:  vendorInvoicesTable.vendorName,
-      piDate:      vendorInvoicesTable.piDate,
-      createdAt:   vendorInvoicesTable.createdAt,
+      id: vendorInvoicesTable.id,
+      piNumber: vendorInvoicesTable.piNumber,
+      vendorName: vendorInvoicesTable.vendorName,
+      piDate: vendorInvoicesTable.piDate,
+      createdAt: vendorInvoicesTable.createdAt,
       totalAmount: vendorInvoicesTable.totalAmount,
-      currency:    vendorInvoicesTable.currency,
+      currency: vendorInvoicesTable.currency,
     }).from(vendorInvoicesTable).where(and(
       eq(vendorInvoicesTable.companyId, companyId),
       sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
@@ -2060,40 +2263,40 @@ router.get("/gst-io-listing", async (req, res): Promise<void> => {
     const vendorMap = new Map(allVendors.map(v => [v.name?.toLowerCase() ?? "", v]));
 
     const inputLines = viRows.map(r => {
-      const totalAmt   = +parseFloat(r.totalAmount ?? "0").toFixed(2);
-      const date       = r.piDate ?? r.createdAt?.toISOString().slice(0, 10) ?? "";
-      const vendor     = vendorMap.get((r.vendorName ?? "").toLowerCase());
+      const totalAmt = +parseFloat(r.totalAmount ?? "0").toFixed(2);
+      const date = r.piDate ?? r.createdAt?.toISOString().slice(0, 10) ?? "";
+      const vendor = vendorMap.get((r.vendorName ?? "").toLowerCase());
       const isOverseas = vendor?.country && !isSingaporeCountry(vendor.country);
-      const isReg      = !!vendor?.gstRegistered;
-      const hasGst     = !isOverseas && isReg && (r.currency ?? "SGD") === "SGD";
-      const gstAmt     = hasGst ? +(totalAmt * gstRate / (100 + gstRate)).toFixed(2) : 0;
+      const isReg = !!vendor?.gstRegistered;
+      const hasGst = !isOverseas && isReg && (r.currency ?? "SGD") === "SGD";
+      const gstAmt = hasGst ? +(totalAmt * gstRate / (100 + gstRate)).toFixed(2) : 0;
       const taxableAmt = hasGst ? +(totalAmt - gstAmt).toFixed(2) : totalAmt;
-      const taxType    = hasGst ? "TX" : (isOverseas ? "NR" : "EP");
+      const taxType = hasGst ? "TX" : (isOverseas ? "NR" : "EP");
       return { date, docNo: r.piNumber ?? "", party: r.vendorName ?? "", taxType, taxableAmt, gstAmt, totalAmt, currency: r.currency ?? "SGD" };
     });
 
     // ── Summary ────────────────────────────────────────────────────────────
-    const srLines   = outputLines.filter(l => l.taxType === "SR");
-    const outputSR  = srLines.reduce((s, l) => s + l.taxableAmt, 0);
-    const outGst    = srLines.reduce((s, l) => s + l.gstAmt, 0);
-    const outputZR  = outputLines.filter(l => l.taxType === "ZR").reduce((s, l) => s + l.taxableAmt, 0);
-    const txLines   = inputLines.filter(l => l.taxType === "TX");
-    const inputTX   = txLines.reduce((s, l) => s + l.taxableAmt, 0);
-    const inGst     = txLines.reduce((s, l) => s + l.gstAmt, 0);
+    const srLines = outputLines.filter(l => l.taxType === "SR");
+    const outputSR = srLines.reduce((s, l) => s + l.taxableAmt, 0);
+    const outGst = srLines.reduce((s, l) => s + l.gstAmt, 0);
+    const outputZR = outputLines.filter(l => l.taxType === "ZR").reduce((s, l) => s + l.taxableAmt, 0);
+    const txLines = inputLines.filter(l => l.taxType === "TX");
+    const inputTX = txLines.reduce((s, l) => s + l.taxableAmt, 0);
+    const inGst = txLines.reduce((s, l) => s + l.gstAmt, 0);
 
     res.json({
-      period:  { from: fromDate, to: toDate },
+      period: { from: fromDate, to: toDate },
       company: { name: company?.name ?? "", gstRegistrationNo: company?.registrationNo ?? "", address: company?.address ?? "" },
       gstRate,
       outputLines,
       inputLines,
       summary: {
-        outputSR:    +outputSR.toFixed(2),
+        outputSR: +outputSR.toFixed(2),
         outputSRGst: +outGst.toFixed(2),
-        outputZR:    +outputZR.toFixed(2),
-        inputTX:     +inputTX.toFixed(2),
-        inputTXGst:  +inGst.toFixed(2),
-        netGst:      +(outGst - inGst).toFixed(2),
+        outputZR: +outputZR.toFixed(2),
+        inputTX: +inputTX.toFixed(2),
+        inputTXGst: +inGst.toFixed(2),
+        netGst: +(outGst - inGst).toFixed(2),
       },
     });
   } catch (err: any) {
@@ -2109,8 +2312,8 @@ router.get("/iaf", async (req, res): Promise<void> => {
   if (!(await requireSingapore(req, res))) return;
 
   const companyId = req.session.companyId!;
-  const fromDate  = (req.query.from as string) || null;
-  const toDate    = (req.query.to   as string) || null;
+  const fromDate = (req.query.from as string) || null;
+  const toDate = (req.query.to as string) || null;
 
   if (!fromDate || !toDate) {
     res.status(400).json({ error: "from and to dates are required" });
@@ -2118,151 +2321,151 @@ router.get("/iaf", async (req, res): Promise<void> => {
   }
 
   try {
-  await ensureAccountsSeeded(companyId);
+    await ensureAccountsSeeded(companyId);
 
-  // ── Company + settings ───────────────────────────────────────────────────
-  const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
-  const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
-  const gstRate = parseFloat(settings?.gstRate ?? "9");
+    // ── Company + settings ───────────────────────────────────────────────────
+    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
+    const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
+    const gstRate = parseFloat(settings?.gstRate ?? "9");
 
-  // ── SA: confirmed invoices in period ────────────────────────────────────
-  const invoices = await db.select().from(invoicesTable)
-    .where(and(
-      eq(invoicesTable.companyId, companyId),
-      sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
-      sql`${invoicesTable.status} NOT IN ('draft','void')`,
-      sql`COALESCE(${invoicesTable.issueDate}, TO_CHAR(${invoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`,
-      sql`COALESCE(${invoicesTable.issueDate}, TO_CHAR(${invoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`,
-    ))
-    .orderBy(asc(invoicesTable.issueDate));
+    // ── SA: confirmed invoices in period ────────────────────────────────────
+    const invoices = await db.select().from(invoicesTable)
+      .where(and(
+        eq(invoicesTable.companyId, companyId),
+        sql`COALESCE(${invoicesTable.isDeleted}, 0) = 0`,
+        sql`${invoicesTable.status} NOT IN ('draft','void')`,
+        sql`COALESCE(${invoicesTable.issueDate}, TO_CHAR(${invoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`,
+        sql`COALESCE(${invoicesTable.issueDate}, TO_CHAR(${invoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`,
+      ))
+      .orderBy(asc(invoicesTable.issueDate));
 
-  // ── PA: vendor invoices in period ────────────────────────────────────────
-  const vendorInvs = await db.select().from(vendorInvoicesTable)
-    .where(and(
-      eq(vendorInvoicesTable.companyId, companyId),
-      sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
-      sql`COALESCE(${vendorInvoicesTable.piDate}, TO_CHAR(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`,
-      sql`COALESCE(${vendorInvoicesTable.piDate}, TO_CHAR(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`,
-    ))
-    .orderBy(asc(vendorInvoicesTable.piDate));
+    // ── PA: vendor invoices in period ────────────────────────────────────────
+    const vendorInvs = await db.select().from(vendorInvoicesTable)
+      .where(and(
+        eq(vendorInvoicesTable.companyId, companyId),
+        sql`COALESCE(${vendorInvoicesTable.isDeleted}, 0) = 0`,
+        sql`COALESCE(${vendorInvoicesTable.piDate}, TO_CHAR(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) >= ${fromDate}`,
+        sql`COALESCE(${vendorInvoicesTable.piDate}, TO_CHAR(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`,
+      ))
+      .orderBy(asc(vendorInvoicesTable.piDate));
 
-  // vendor GST lookup by name (best-effort)
-  const allVendors = await db.select().from(vendorsTable).where(eq(vendorsTable.companyId, companyId));
-  const vendorMap = new Map(allVendors.map(v => [v.name.toLowerCase().trim(), v]));
+    // vendor GST lookup by name (best-effort)
+    const allVendors = await db.select().from(vendorsTable).where(eq(vendorsTable.companyId, companyId));
+    const vendorMap = new Map(allVendors.map(v => [v.name.toLowerCase().trim(), v]));
 
-  // ── GA: posted journal entries + lines in period ────────────────────────
-  const entries = await db.select().from(journalEntriesTable)
-    .where(and(
-      eq(journalEntriesTable.companyId, companyId),
-      eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
-      sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
-      sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
-      sql`${journalEntriesTable.entryDate} <= ${toDate}`,
-    ))
-    .orderBy(asc(journalEntriesTable.entryDate));
+    // ── GA: posted journal entries + lines in period ────────────────────────
+    const entries = await db.select().from(journalEntriesTable)
+      .where(and(
+        eq(journalEntriesTable.companyId, companyId),
+        eq(journalEntriesTable.status, "posted"), sql`${journalEntriesTable.reversalOfId} IS NULL`, sql`COALESCE(${journalEntriesTable.isDeleted}, 0) = 0`,
+        sql`COALESCE(${journalEntriesTable.refType}, '') <> 'fy_opening'`,
+        sql`${journalEntriesTable.entryDate} >= ${fromDate}`,
+        sql`${journalEntriesTable.entryDate} <= ${toDate}`,
+      ))
+      .orderBy(asc(journalEntriesTable.entryDate));
 
-  const entryIds = entries.map(e => e.id);
-  let jLines: { journalEntryId: number; accountId: number; debit: string | null; credit: string | null; description: string | null }[] = [];
-  if (entryIds.length > 0) {
-    jLines = await db.select({
-      journalEntryId: journalLinesTable.journalEntryId,
-      accountId:      journalLinesTable.accountId,
-      debit:          journalLinesTable.debit,
-      credit:         journalLinesTable.credit,
-      description:    journalLinesTable.description,
-    }).from(journalLinesTable)
-      .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${entryIds.join(",")}]::int[]`)})`);
-  }
-
-  const accounts = await db.select().from(accountsTable).where(eq(accountsTable.companyId, companyId));
-  const accountMap = new Map(accounts.map(a => [a.id, a]));
-  const entryMap   = new Map(entries.map(e => [e.id, e]));
-
-  // ── Build IAF text ──────────────────────────────────────────────────────
-  const today    = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const pFrom    = fromDate.replace(/-/g, "");
-  const pTo      = toDate.replace(/-/g, "");
-  const gstRegNo = company.registrationNo || "NA";
-
-  const safe    = (s: string | null | undefined) => (s || "").replace(/[\|]/g, " ").replace(/\r?\n/g, " ").trim() || "NA";
-  const fmtD    = (d: string | null | undefined) => (d || "").replace(/-/g, "").slice(0, 8) || today;
-  const fmtA    = (n: number) => n.toFixed(2);
-  const acctType = (t: string | null | undefined) => {
-    switch (t) {
-      case "asset":     return "A";
-      case "liability": return "L";
-      case "equity":    return "E";
-      case "revenue":   return "I";
-      case "expense":   return "X";
-      default:          return "A";
+    const entryIds = entries.map(e => e.id);
+    let jLines: { journalEntryId: number; accountId: number; debit: string | null; credit: string | null; description: string | null }[] = [];
+    if (entryIds.length > 0) {
+      jLines = await db.select({
+        journalEntryId: journalLinesTable.journalEntryId,
+        accountId: journalLinesTable.accountId,
+        debit: journalLinesTable.debit,
+        credit: journalLinesTable.credit,
+        description: journalLinesTable.description,
+      }).from(journalLinesTable)
+        .where(sql`${journalLinesTable.journalEntryId} = ANY(${sql.raw(`ARRAY[${entryIds.join(",")}]::int[]`)})`);
     }
-  };
 
-  const lines: string[] = [];
-  lines.push(`AF|${today}|${safe(company.name)}|${safe(gstRegNo)}|${pFrom}|${pTo}|SGD|GST|`);
+    const accounts = await db.select().from(accountsTable).where(eq(accountsTable.companyId, companyId));
+    const accountMap = new Map(accounts.map(a => [a.id, a]));
+    const entryMap = new Map(entries.map(e => [e.id, e]));
 
-  // SA records
-  let saCount = 0, saNet = 0, saGst = 0;
-  for (const inv of invoices) {
-    const docDate = fmtD(inv.issueDate ?? inv.createdAt?.toISOString().slice(0, 10) ?? null);
-    const total   = parseFloat(inv.totalAmount ?? "0");
-    const gst     = parseFloat(inv.tax ?? "0");
-    const net     = total - gst;
-    const currency = inv.currency || "SGD";
-    const txCode  = gst > 0.005 ? "SR" : "ZR";
-    lines.push(`SA|SI|${docDate}|${safe(inv.invNumber)}|${safe(inv.customerName)}|NA|${txCode}|${fmtA(net)}|${fmtA(gst)}|${fmtA(net)}|${fmtA(gst)}|${currency}|1.00|`);
-    saCount++; saNet += net; saGst += gst;
-  }
+    // ── Build IAF text ──────────────────────────────────────────────────────
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const pFrom = fromDate.replace(/-/g, "");
+    const pTo = toDate.replace(/-/g, "");
+    const gstRegNo = company.registrationNo || "NA";
 
-  // PA records
-  let paCount = 0, paNet = 0, paGst = 0;
-  for (const vi of vendorInvs) {
-    const docDate = fmtD(vi.piDate ?? vi.createdAt?.toISOString().slice(0, 10) ?? null);
-    const gross   = parseFloat(vi.totalAmount ?? "0");
-    const vendor  = vendorMap.get(vi.vendorName.toLowerCase().trim());
-    let net: number, gst: number, txCode: string, vendorGstNo: string;
-    if (vendor?.gstRegistered) {
-      net = gross / (1 + gstRate / 100);
-      gst = gross - net;
-      txCode     = "SR";
-      vendorGstNo = safe(vendor.gstNo);
-    } else {
-      net = gross; gst = 0;
-      txCode     = "NR";
-      vendorGstNo = "NA";
+    const safe = (s: string | null | undefined) => (s || "").replace(/[\|]/g, " ").replace(/\r?\n/g, " ").trim() || "NA";
+    const fmtD = (d: string | null | undefined) => (d || "").replace(/-/g, "").slice(0, 8) || today;
+    const fmtA = (n: number) => n.toFixed(2);
+    const acctType = (t: string | null | undefined) => {
+      switch (t) {
+        case "asset": return "A";
+        case "liability": return "L";
+        case "equity": return "E";
+        case "revenue": return "I";
+        case "expense": return "X";
+        default: return "A";
+      }
+    };
+
+    const lines: string[] = [];
+    lines.push(`AF|${today}|${safe(company.name)}|${safe(gstRegNo)}|${pFrom}|${pTo}|SGD|GST|`);
+
+    // SA records
+    let saCount = 0, saNet = 0, saGst = 0;
+    for (const inv of invoices) {
+      const docDate = fmtD(inv.issueDate ?? inv.createdAt?.toISOString().slice(0, 10) ?? null);
+      const total = parseFloat(inv.totalAmount ?? "0");
+      const gst = parseFloat(inv.tax ?? "0");
+      const net = total - gst;
+      const currency = inv.currency || "SGD";
+      const txCode = gst > 0.005 ? "SR" : "ZR";
+      lines.push(`SA|SI|${docDate}|${safe(inv.invNumber)}|${safe(inv.customerName)}|NA|${txCode}|${fmtA(net)}|${fmtA(gst)}|${fmtA(net)}|${fmtA(gst)}|${currency}|1.00|`);
+      saCount++; saNet += net; saGst += gst;
     }
-    lines.push(`PA|PI|${docDate}|${safe(vi.piNumber)}|${safe(vi.vendorName)}|${vendorGstNo}|${txCode}|${fmtA(net)}|${fmtA(gst)}|${fmtA(net)}|${fmtA(gst)}|SGD|1.00|`);
-    paCount++; paNet += net; paGst += gst;
-  }
 
-  // GA records
-  let gaCount = 0, totalDebit = 0, totalCredit = 0;
-  for (const jl of jLines) {
-    const entry   = entryMap.get(jl.journalEntryId);
-    const account = accountMap.get(jl.accountId);
-    if (!entry || !account) continue;
-    const debit  = parseFloat(jl.debit  ?? "0");
-    const credit = parseFloat(jl.credit ?? "0");
-    const docDate = fmtD(entry.entryDate);
-    const desc    = safe(jl.description || entry.description || "");
-    lines.push(`GA|${docDate}|${safe(account.code)}|${safe(account.name)}|${safe(entry.refNumber ?? "")}|${desc}|${fmtA(debit)}|${fmtA(credit)}|${acctType(account.type)}|`);
-    gaCount++; totalDebit += debit; totalCredit += credit;
-  }
+    // PA records
+    let paCount = 0, paNet = 0, paGst = 0;
+    for (const vi of vendorInvs) {
+      const docDate = fmtD(vi.piDate ?? vi.createdAt?.toISOString().slice(0, 10) ?? null);
+      const gross = parseFloat(vi.totalAmount ?? "0");
+      const vendor = vendorMap.get(vi.vendorName.toLowerCase().trim());
+      let net: number, gst: number, txCode: string, vendorGstNo: string;
+      if (vendor?.gstRegistered) {
+        net = gross / (1 + gstRate / 100);
+        gst = gross - net;
+        txCode = "SR";
+        vendorGstNo = safe(vendor.gstNo);
+      } else {
+        net = gross; gst = 0;
+        txCode = "NR";
+        vendorGstNo = "NA";
+      }
+      lines.push(`PA|PI|${docDate}|${safe(vi.piNumber)}|${safe(vi.vendorName)}|${vendorGstNo}|${txCode}|${fmtA(net)}|${fmtA(gst)}|${fmtA(net)}|${fmtA(gst)}|SGD|1.00|`);
+      paCount++; paNet += net; paGst += gst;
+    }
 
-  // Footer summary
-  lines.push(`AF|${saCount}|${fmtA(saNet)}|${fmtA(saGst)}|${paCount}|${fmtA(paNet)}|${fmtA(paGst)}|${gaCount}|${fmtA(totalDebit)}|${fmtA(totalCredit)}|`);
+    // GA records
+    let gaCount = 0, totalDebit = 0, totalCredit = 0;
+    for (const jl of jLines) {
+      const entry = entryMap.get(jl.journalEntryId);
+      const account = accountMap.get(jl.accountId);
+      if (!entry || !account) continue;
+      const debit = parseFloat(jl.debit ?? "0");
+      const credit = parseFloat(jl.credit ?? "0");
+      const docDate = fmtD(entry.entryDate);
+      const desc = safe(jl.description || entry.description || "");
+      lines.push(`GA|${docDate}|${safe(account.code)}|${safe(account.name)}|${safe(entry.refNumber ?? "")}|${desc}|${fmtA(debit)}|${fmtA(credit)}|${acctType(account.type)}|`);
+      gaCount++; totalDebit += debit; totalCredit += credit;
+    }
 
-  res.json({
-    saCount,
-    paCount,
-    gaCount,
-    saNet:  +saNet.toFixed(2),
-    saGst:  +saGst.toFixed(2),
-    paNet:  +paNet.toFixed(2),
-    paGst:  +paGst.toFixed(2),
-    filename: `IAF_${gstRegNo}_${pFrom}_${pTo}.txt`,
-    content: lines.join("\r\n"),
-  });
+    // Footer summary
+    lines.push(`AF|${saCount}|${fmtA(saNet)}|${fmtA(saGst)}|${paCount}|${fmtA(paNet)}|${fmtA(paGst)}|${gaCount}|${fmtA(totalDebit)}|${fmtA(totalCredit)}|`);
+
+    res.json({
+      saCount,
+      paCount,
+      gaCount,
+      saNet: +saNet.toFixed(2),
+      saGst: +saGst.toFixed(2),
+      paNet: +paNet.toFixed(2),
+      paGst: +paGst.toFixed(2),
+      filename: `IAF_${gstRegNo}_${pFrom}_${pTo}.txt`,
+      content: lines.join("\r\n"),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.message ?? "Failed to generate IAF" });
   }
@@ -2282,13 +2485,13 @@ router.get("/ar/customer-invoices", async (req, res): Promise<void> => {
     issueDate: invoicesTable.issueDate, totalAmount: invoicesTable.totalAmount,
     currency: invoicesTable.currency, paymentTerms: invoicesTable.paymentTerms, status: invoicesTable.status,
   })
-  .from(invoicesTable)
-  .where(and(
-    eq(invoicesTable.companyId, companyId),
-    sql`lower(${invoicesTable.customerName}) = lower(${customerName})`,
-    sql`${invoicesTable.status} NOT IN ('draft', 'void', 'paid')`,
-  ))
-  .orderBy(asc(invoicesTable.issueDate), asc(invoicesTable.id));
+    .from(invoicesTable)
+    .where(and(
+      eq(invoicesTable.companyId, companyId),
+      sql`lower(${invoicesTable.customerName}) = lower(${customerName})`,
+      sql`${invoicesTable.status} NOT IN ('draft', 'void', 'paid')`,
+    ))
+    .orderBy(asc(invoicesTable.issueDate), asc(invoicesTable.id));
 
   const result = await Promise.all(rows.map(async (inv) => {
     const payments = await db.select({ amount: invoicePaymentsTable.amount })
@@ -2450,9 +2653,9 @@ router.post("/ar/bulk-payment", async (req, res): Promise<void> => {
           }).returning();
           await db.insert(journalLinesTable).values([
             { journalEntryId: entry.id, accountId: cashAcct.id, description: desc, debit: p.amount.toFixed(2), credit: "0.00" },
-            { journalEntryId: entry.id, accountId: arAcct.id,   description: desc, debit: "0.00", credit: p.amount.toFixed(2) },
+            { journalEntryId: entry.id, accountId: arAcct.id, description: desc, debit: "0.00", credit: p.amount.toFixed(2) },
           ]);
-        } catch {}
+        } catch { }
       }
       if (excess > 0.004 && depositAcct && depositRecord) {
         const desc = `Cash receipt — Customer deposit — ${customerName}${ref}`;
@@ -2463,11 +2666,11 @@ router.post("/ar/bulk-payment", async (req, res): Promise<void> => {
             status: "posted", createdBy: userId,
           }).returning();
           await db.insert(journalLinesTable).values([
-            { journalEntryId: entry.id, accountId: cashAcct.id,    description: desc, debit: excess.toFixed(2), credit: "0.00" },
+            { journalEntryId: entry.id, accountId: cashAcct.id, description: desc, debit: excess.toFixed(2), credit: "0.00" },
             { journalEntryId: entry.id, accountId: depositAcct.id, description: desc, debit: "0.00", credit: excess.toFixed(2) },
           ]);
           await db.update(customerDepositsTable).set({ journalEntryId: entry.id }).where(eq(customerDepositsTable.id, depositRecord.id));
-        } catch {}
+        } catch { }
       }
     } else {
       const desc = `Payment received — ${customerName} — ${invNumbers}${ref}`;
@@ -2488,13 +2691,15 @@ router.post("/ar/bulk-payment", async (req, res): Promise<void> => {
           await db.update(customerDepositsTable).set({ journalEntryId: entry.id }).where(eq(customerDepositsTable.id, depositRecord.id));
         }
         await db.insert(journalLinesTable).values(lines);
-      } catch {}
+      } catch { }
     }
   }
 
-  logAudit({ req, action: "ar:bulk-payment", entityType: "invoice", entityId: 0,
+  logAudit({
+    req, action: "ar:bulk-payment", entityType: "invoice", entityId: 0,
     entityLabel: `${customerName} — ${processedPayments.length} invoices`,
-    details: { totalAmount: totalNum, allocated: allocTotal, excess } });
+    details: { totalAmount: totalNum, allocated: allocTotal, excess }
+  });
 
   res.json({
     processed: processedPayments.length,
@@ -2590,9 +2795,9 @@ router.post("/ar/apply-credit", async (req, res): Promise<void> => {
           }).returning();
           await db.insert(journalLinesTable).values([
             { journalEntryId: entry.id, accountId: depositAcct.id, description: desc, debit: p.amount.toFixed(2), credit: "0.00" },
-            { journalEntryId: entry.id, accountId: arAcct.id,      description: desc, debit: "0.00", credit: p.amount.toFixed(2) },
+            { journalEntryId: entry.id, accountId: arAcct.id, description: desc, debit: "0.00", credit: p.amount.toFixed(2) },
           ]);
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -2689,10 +2894,10 @@ router.post("/ap/bulk-payment", async (req, res): Promise<void> => {
             status: "posted", createdBy: userId,
           }).returning();
           await db.insert(journalLinesTable).values([
-            { journalEntryId: entry.id, accountId: apAcct.id,   description: desc, debit: p.amount.toFixed(2), credit: "0.00" },
+            { journalEntryId: entry.id, accountId: apAcct.id, description: desc, debit: p.amount.toFixed(2), credit: "0.00" },
             { journalEntryId: entry.id, accountId: cashAcct.id, description: desc, debit: "0.00", credit: p.amount.toFixed(2) },
           ]);
-        } catch {}
+        } catch { }
       }
     } else {
       const desc = `Payment to ${vendorName} — ${piNumbers}${ref}`;
@@ -2703,16 +2908,18 @@ router.post("/ap/bulk-payment", async (req, res): Promise<void> => {
           status: "posted", createdBy: userId,
         }).returning();
         await db.insert(journalLinesTable).values([
-          { journalEntryId: entry.id, accountId: apAcct.id,   description: `AP settlement — ${piNumbers}`, debit: totalPaid.toFixed(2), credit: "0.00" },
+          { journalEntryId: entry.id, accountId: apAcct.id, description: `AP settlement — ${piNumbers}`, debit: totalPaid.toFixed(2), credit: "0.00" },
           { journalEntryId: entry.id, accountId: cashAcct.id, description: desc, debit: "0.00", credit: totalNum.toFixed(2) },
         ]);
-      } catch {}
+      } catch { }
     }
   }
 
-  logAudit({ req, action: "ap:bulk-payment", entityType: "vendor_invoice", entityId: 0,
+  logAudit({
+    req, action: "ap:bulk-payment", entityType: "vendor_invoice", entityId: 0,
     entityLabel: `${vendorName} — ${processedPayments.length} PIs`,
-    details: { totalPaid, pis: processedPayments.length } });
+    details: { totalPaid, pis: processedPayments.length }
+  });
 
   res.json({ processed: processedPayments.length, totalPaid: +totalPaid.toFixed(2), payments: processedPayments });
 });

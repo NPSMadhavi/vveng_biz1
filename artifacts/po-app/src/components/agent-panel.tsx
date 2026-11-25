@@ -297,6 +297,41 @@ const PATH_ALIASES: Record<string, string> = {
   "/report_templates": "/report-templates",
   "/pos": "/point-of-sale",
   "/bom": "/bill-of-materials",
+
+  // Payroll & IR8A
+  "/ir8a": "/payroll/ir8a",
+  "/ir8a-ais": "/payroll/ir8a",
+  "/ir8a/ais": "/payroll/ir8a",
+  "/ais": "/payroll/ir8a/ais",
+  "/ais-submission": "/payroll/ir8a/ais",
+  "/ir8a-employers": "/payroll/ir8a/employers",
+  "/ir8a/employers": "/payroll/ir8a/employers",
+  "/employers-ir8a": "/payroll/ir8a/employers",
+  "/employer-ir8a": "/payroll/ir8a/employers",
+  "/employers": "/payroll/ir8a/employers",
+
+  // Fixed Assets
+  "/fixed-assets": "/assets",
+  "/add-asset": "/assets",
+  "/asset-register": "/assets/register",
+  "/assets-register": "/assets/register",
+  "/depreciation": "/assets/depreciation",
+  "/depreciation-schedule": "/assets/depreciation",
+  "/asset-depreciation": "/assets/depreciation",
+  "/disposal": "/assets/disposal",
+  "/asset-disposal": "/assets/disposal",
+  "/disposal-report": "/assets/disposal-report",
+  "/asset-disposal-report": "/assets/disposal-report",
+
+  // Manpower Supply
+  "/timesheets": "/manpower/suppliers/timesheets",
+  "/timesheet": "/manpower/suppliers/timesheets",
+  "/timesheet-management": "/manpower/suppliers/timesheets",
+  "/manpower/timesheets": "/manpower/suppliers/timesheets",
+  "/manpower/vendors/timesheets": "/manpower/suppliers/timesheets",
+  "/manpower/vendors/quotations": "/manpower/suppliers/quotations",
+  "/manpower/vendors/purchase-orders": "/manpower/suppliers/purchase-orders",
+  "/manpower/vendors/vendor-invoices": "/manpower/suppliers/vendor-invoices",
 };
 
 function normalizeNavPath(path: string): string {
@@ -525,7 +560,10 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
   if (!t) return null;
 
   // Search / analytics / specific-record phrases must reach the agent — never short-circuit.
-  if (/\b(find|search|look\s*up|latest|last|previous|recent|paid|confirmed|draft|void|revenue|total|amount|balance|how\s+many|what(?:'s|\s+is)|which|when|whose)\b/.test(t)) {
+  // Allow "trial balance" / "trail balance" / "balance sheet" page navigation through.
+  const isBalanceReportPage = /\b(?:(?:trial|trail)\s*balance|balance\s*sheet)\b/.test(t);
+  if (/\b(find|search|look\s*up|latest|last|previous|recent|paid|confirmed|draft|void|revenue|total|amount|how\s+many|what(?:'s|\s+is)|which|when|whose)\b/.test(t)
+    || (!isBalanceReportPage && /\bbalance\b/.test(t))) {
     return null;
   }
   if (/\b(inv-|qt-|po-|do-|pi-)\w*\d+/i.test(t)) return null;
@@ -561,9 +599,14 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
     if (/\bcustomers?\b/.test(t)) return openNew("/customers?vedaNew=1");
     if (/\bvendors?\b|\bsuppliers?\b/.test(t)) return openNew("/vendors?vedaNew=1");
     if (/\bprojects?\b/.test(t)) return openNew("/projects/new");
-    if (/\b(assets?|fixed\s*assets?)\b/.test(t)) return openNew("/assets/new");
+    if (/\b(?:assets?|assests?|add)\s*register\b/.test(t)) return openNew("/assets/register");
+    if (/\b(?:go\s*to|goto|open|show|navigate(?:\s*to)?)\s+add\s+(?:assets?|assests?)\b/.test(t)) return openNew("/assets");
+    if (/\b(assets?|assests?|fixed\s*(?:assets?|assests?))\b/.test(t)) return openNew("/assets/new");
     if (/\bexpenses?\b/.test(t)) return openNew("/accounting/expenses/new");
     if (/\bincome\b/.test(t)) return openNew("/accounting/income/new");
+    if (/\b(?:time\s*sheets?|timeshh?e?e?ts?)\b/.test(t)) {
+      return openNew(/\bcustomers?\b/.test(t) ? "/manpower/customers/timesheets/new" : "/manpower/suppliers/timesheets/new");
+    }
     if (/\b(journal\s*entries|journals?)\b/.test(t)) return openNew("/accounting/journal-entries/new");
     if (/\bbackups?\b/.test(t)) return openNew("/settings/backups?vedaCreate=1");
     if (/\bwarehouses?\b/.test(t)) return openNew("/inventory/warehouses");
@@ -580,11 +623,12 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
 
   const wantsNav = /\b(go\s*to|goto|open(?:ing)?|om|ope|op|on|show(?:ing)?|take\s*me|navigate|switch\s*to|bring\s*(me\s*)?up|launch|visit)\b/i.test(t)
     || /\b(page|module|screen|list)\b/.test(t)
-    || /^(warehouses?|stock\s*transfers?|stock\s*reports?|inventory\s*reports?|sales\s*person\s*(?:wise\s*)?reports?|batch\s*(?:&|and)?\s*expiry|item\s*master|invoices?|quotations?|quotes?|purchase\s*orders?|delivery\s*orders?|sales\s*orders?|customers?|vendors?|suppliers?|employees?|staff|payroll|licenses?|stock|grn|dashboard|home|settings|backups?|audit\s*logs?|point\s*of\s*sale|pos|bill\s*of\s*materials|bom|purchase\s*quotations?|proforma\s*invoices?|vendor\s*invoices?|credit\s*notes?|debit\s*notes?|projects?|inventory|catalogue|catalog|assets?|fixed\s*assets?|sales\s*persons?|address\s*book|contacts?|bank\s*(?:reconciliation|recon)|chart\s*of\s*accounts|coa|journal\s*entries|journals?|general\s*ledger|ledger|trial\s*balance|balance\s*sheet|profit\s*(?:and|&)?\s*loss|p\s*(?:and|&)?\s*l|income\s*statement|cash\s*flow|income|expenses?|gst\s*f5|gst\s*f7|gst\s*io|withholding\s*tax|wht|eci|form\s*c-?s|iras\s*audit\s*file|iaf|ar\s*collections?|receivables?|ar\s*aging|customer\s*statements?|ap\s*payments?|payables?|ap\s*aging|vendor\s*statements?|admin|user\s*management|users?|report\s*(?:templates?|design(?:er)?))$/.test(t);
+    || /^(warehouses?|stock\s*transfers?|stock\s*reports?|inventory\s*reports?|sales\s*person\s*(?:wise\s*)?reports?|batch\s*(?:&|and)?\s*expiry|item\s*master|invoices?|quotations?|quotes?|purchase\s*orders?|delivery\s*orders?|sales\s*orders?|customers?|vendors?|suppliers?|employees?|staff|payroll|ir8a(?:\s*\/\s*ais)?|ais\s*submission|employer'?s?(?:\s*\(?ir8a\)?)?|licenses?|stock|grn|dashboard|home|settings|backups?|audit\s*logs?|point\s*of\s*sale|pos|bill\s*of\s*materials|bom|purchase\s*quotations?|proforma\s*invoices?|vendor\s*invoices?|credit\s*notes?|debit\s*notes?|projects?|inventory|catalogue|catalog|add\s*(?:assets?|assests?)|assets?|assests?|fixed\s*(?:assets?|assests?)|(?:assets?|assests?|add)\s*register|depreciation(?:\s*schedule)?|(?:(?:fixed\s*)?(?:assets?|assests?)\s*)?disposals?|(?:(?:assets?|assests?)\s*)?disposal\s*reports?|(?:time\s*sheets?|timeshh?e?e?ts?)(?:\s*management)?|sales\s*(?:persons?|perosns?)|salespeople|sales\s*rep|address\s*book|contacts?|bank\s*(?:reconciliation|recon)|chart\s*of\s*acc(?:ounts?|punts?)|coa|journal\s*(?:entries|entry)|journals?|general\s*ledger|account\s*ledger|ledger|(?:trial|trail)\s*balance|balance\s*sheet|profit\s*(?:and|&)?\s*loss|p\s*(?:and|&)?\s*l|income\s*statement|cash\s*flow|income|expenses?|gst\s*f5|gst\s*f7|gst\s*io|withholding\s*tax|wht|eci|form\s*c-?s|iras\s*audit\s*file|iaf|ar\s*collections?|receivables?|ar\s*aging|customer\s*statements?|ap\s*(?:payments?|paymnets?)|payables?|ap\s*aging|vendor\s*statements?|admin|user\s*management|users?|report\s*(?:templates?|design(?:er)?))$/.test(t);
   if (!wantsNav) return null;
 
-  // "show/open X for Y" without create → let agent search (unless it's clearly a page jump)
-  if (/\b(show|open|display|get)\b.+\b(for|of|from|about|with)\b/.test(t) && !/\b(page|list|module|screen|form)\b/.test(t)) {
+  // "show/open X for Y" without create → let agent search (unless it's clearly a page jump or a module name containing "of")
+  const tWithoutModuleOf = t.replace(/\b(?:chart\s+of\s+acc(?:ounts?|punts?)|bill\s+of\s+materials|point\s+of\s+sale)\b/g, "");
+  if (/\b(show|open|display|get)\b.+\b(for|of|from|about|with)\b/.test(tWithoutModuleOf) && !/\b(page|list|module|screen|form)\b/.test(t)) {
     return null;
   }
 
@@ -598,6 +642,31 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
 
   // Bank Reconciliation
   if (/\bbank\s*(?:reconciliation|recon)\b/.test(t)) return { path: "/accounting/bank-reconciliation" };
+
+  // Manpower Supply (Vendors & Customers)
+  if (/\b(?:vendors?|suppliers?)\b/.test(t)) {
+    if (/\b(?:time\s*sheets?|timeshh?e?e?ts?)\b/.test(t)) return { path: "/manpower/suppliers/timesheets" };
+    if (/\bquotations?\b|\bquotes?\b/.test(t)) return { path: "/manpower/suppliers/quotations" };
+    if (/\bpurchase\s*orders?\b/.test(t)) return { path: "/manpower/suppliers/purchase-orders" };
+    if (/\b(?:vendor\s*)?invoices?\b/.test(t)) return { path: "/manpower/suppliers/vendor-invoices" };
+  }
+  if (/\bcustomers?\b/.test(t)) {
+    if (/\b(?:time\s*sheets?|timeshh?e?e?ts?)\b/.test(t)) return { path: "/manpower/customers/timesheets" };
+    if (/\bquotations?\b|\bquotes?\b/.test(t)) return { path: "/manpower/customers/quotations" };
+    if (/\bsales\s*orders?\b/.test(t)) return { path: "/manpower/customers/sales-orders" };
+    if (/\b(?:tax\s*)?invoices?\b/.test(t)) return { path: "/manpower/customers/tax-invoices" };
+  }
+  if (/\b(?:time\s*sheets?|timeshh?e?e?ts?)\b/.test(t)) {
+    return { path: "/manpower/suppliers/timesheets" };
+  }
+  if (/\bman\s*power(?:\s*supply)?\b/.test(t)) {
+    if (/\bquotations?\b|\bquotes?\b/.test(t)) return { path: "/manpower/suppliers/quotations" };
+    if (/\bpurchase\s*orders?\b/.test(t)) return { path: "/manpower/suppliers/purchase-orders" };
+    if (/\bvendor\s*invoices?\b/.test(t)) return { path: "/manpower/suppliers/vendor-invoices" };
+    if (/\bsales\s*orders?\b/.test(t)) return { path: "/manpower/customers/sales-orders" };
+    if (/\btax\s*invoices?\b/.test(t)) return { path: "/manpower/customers/tax-invoices" };
+    return { path: "/manpower/suppliers/timesheets" };
+  }
 
   // Documents
   if (/\b(vendor\s*invoices?|supplier\s*invoices?)\b/.test(t)) return { path: "/vendor-invoices" };
@@ -618,23 +687,34 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
 
   // Operations
   if (/\bemployees?\b|\bstaff\b/.test(t)) return { path: "/employees" };
+  if (/\bemployer'?s?\b/.test(t)) return { path: "/payroll/ir8a/employers" };
+  if (/\bais\s*submission\b/.test(t)) return { path: "/payroll/ir8a/ais" };
+  if (/\bir8a\b/.test(t)) return { path: "/payroll/ir8a" };
   if (/\bpayroll\b/.test(t)) return { path: "/payroll" };
   if (/\blicenses?\b/.test(t)) return { path: "/licenses" };
-  if (/\b(assets?|fixed\s*assets?)\b/.test(t)) return { path: "/assets" };
+  if (/\b(?:(?:assets?|assests?)\s*)?disposal\s*reports?\b/.test(t)) return { path: "/assets/disposal-report" };
+  if (/\b(?:(?:fixed\s*)?(?:assets?|assests?)\s*)?disposals?\b/.test(t)) return { path: "/assets/disposal" };
+  if (/\bdepreciation(?:\s*schedule)?\b/.test(t)) return { path: "/assets/depreciation" };
+  if (/\b(?:assets?|assests?|add)\s*register\b/.test(t)) return { path: "/assets/register" };
+  if (/\b(?:add\s*)?(?:fixed\s*)?(?:assets?|assests?)\b/.test(t)) return { path: "/assets" };
+
+  // Accounting statements (must come before Directory customers/vendors)
+  if (/\bcustomer\s*statements?\b/.test(t)) return { path: "/accounting/customer-statement" };
+  if (/\bvendor\s*statements?\b/.test(t)) return { path: "/accounting/vendor-statement" };
 
   // Directory
   if (/\bcustomers?\b/.test(t)) return { path: "/customers" };
   if (/\bvendors?\b|\bsuppliers?\b/.test(t)) return { path: "/vendors" };
-  if (/\b(sales\s*persons?|salespeople|sales\s*rep)\b/.test(t)) return { path: "/sales-persons" };
+  if (/\b(sales\s*(?:persons?|perosns?)|salespeople|sales\s*rep)\b/.test(t)) return { path: "/sales-persons" };
   if (/\b(address\s*book|contacts?)\b/.test(t)) return { path: "/address-book" };
 
   // Accounting
-  if (/\b(chart\s*of\s*accounts|coa)\b/.test(t)) return { path: "/accounting/chart-of-accounts" };
-  if (/\b(journal\s*entries|journals?)\b/.test(t)) return { path: "/accounting/journal-entries" };
-  if (/\b(general\s*ledger|ledger)\b/.test(t)) return { path: "/accounting/general-ledger" };
-  if (/\btrial\s*balance\b/.test(t)) return { path: "/accounting/trial-balance" };
+  if (/\b(chart\s*of\s*acc(?:ounts?|punts?)|coa)\b/.test(t)) return { path: "/accounting/chart-of-accounts" };
+  if (/\b(journal\s*(?:entries|entry)|journals?)\b/.test(t)) return { path: "/accounting/journal-entries" };
+  if (/\b((?:general|account)\s*ledger|ledger)\b/.test(t)) return { path: "/accounting/general-ledger" };
+  if (/\b(?:trial|trail)\s*balance\b/.test(t)) return { path: "/accounting/trial-balance" };
   if (/\bbalance\s*sheet\b/.test(t)) return { path: "/accounting/balance-sheet" };
-  if (/\b(profit\s*(?:and|&)\s*loss|p\s*(?:and|&)\s*l|income\s*statement)\b/.test(t)) return { path: "/accounting/profit-loss" };
+  if (/\b(profit\s*(?:and|&)\s*loss|p\s*(?:and|&)?\s*l|income\s*statement)\b/.test(t)) return { path: "/accounting/profit-loss" };
   if (/\bcash\s*flow\b/.test(t)) return { path: "/accounting/cash-flow" };
   if (/\bincome\b/.test(t)) return { path: "/accounting/income" };
   if (/\bexpenses?\b/.test(t)) return { path: "/accounting/expenses" };
@@ -648,7 +728,7 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
   if (/\b(ar\s*collections?|receivables?)\b/.test(t)) return { path: "/accounting/ar" };
   if (/\bar\s*aging\b/.test(t)) return { path: "/accounting/ar-aging" };
   if (/\bcustomer\s*statements?\b/.test(t)) return { path: "/accounting/customer-statement" };
-  if (/\b(ap\s*payments?|payables?)\b/.test(t)) return { path: "/accounting/ap" };
+  if (/\b(ap\s*(?:payments?|paymnets?)|payables?)\b/.test(t)) return { path: "/accounting/ap" };
   if (/\bap\s*aging\b/.test(t)) return { path: "/accounting/ap-aging" };
   if (/\bvendor\s*statements?\b/.test(t)) return { path: "/accounting/vendor-statement" };
 
@@ -709,11 +789,29 @@ const PATH_LABELS: Record<string, string> = {
   "/address-book": "Address Book",
   "/assets": "Fixed Assets",
   "/assets/new": "New Asset",
+  "/assets/register": "Asset Register",
+  "/assets/register/new": "Create Asset",
+  "/assets/depreciation": "Depreciation Schedule",
+  "/assets/disposal": "Asset Disposal",
+  "/assets/disposal-report": "Asset Disposal Report",
   "/licenses": "Licenses",
   "/licenses/new": "New License",
   "/employees": "Employees",
   "/employees/new": "New Employee",
   "/payroll": "Payroll",
+  "/payroll/ir8a": "IR8A / AIS",
+  "/payroll/ir8a/ais": "AIS Submission",
+  "/payroll/ir8a/employers": "Employer's (IR8A)",
+  "/manpower/suppliers/quotations": "Manpower Vendors — Quotation",
+  "/manpower/suppliers/purchase-orders": "Manpower Vendors — Purchase Order",
+  "/manpower/suppliers/timesheets": "Manpower Vendors — Time Sheet Management",
+  "/manpower/suppliers/timesheets/new": "New Vendor Timesheet",
+  "/manpower/suppliers/vendor-invoices": "Manpower Vendors — Vendor Invoice",
+  "/manpower/customers/quotations": "Manpower Customer — Quotation",
+  "/manpower/customers/sales-orders": "Manpower Customer — Sales Order",
+  "/manpower/customers/timesheets": "Manpower Customer — Time Sheet Management",
+  "/manpower/customers/timesheets/new": "New Customer Timesheet",
+  "/manpower/customers/tax-invoices": "Manpower Customer — Tax Invoice",
   "/accounting/chart-of-accounts": "Chart of Accounts",
   "/accounting/bank-reconciliation": "Bank Reconciliation",
   "/accounting/journal-entries": "Journal Entries",

@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/auth-context";
-import { Plus, Search, Edit2, Trash2, BookOpen, ShieldCheck } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, BookOpen, ShieldCheck, Landmark } from "lucide-react";
+import { CashBankOpeningDialog } from "@/components/cash-bank-opening-dialog";
 import { cn } from "@/lib/utils";
 import { usePagination } from "@/hooks/use-pagination";
 import { ListPagination } from "@/components/list-pagination";
@@ -118,6 +119,7 @@ export default function ChartOfAccounts() {
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
+  const [obDialogOpen, setObDialogOpen] = useState(false);
   const [filterType, setFilterType] = useState<string>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -262,11 +264,18 @@ export default function ChartOfAccounts() {
           <h1 className="text-2xl font-bold tracking-tight text-[#2563EB]">Chart of Accounts</h1>
         </div>
         {canManage && (
-          <Button className="gap-2" onClick={openAdd}>
-            <Plus className="h-4 w-4" /> Add Account
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50" onClick={() => setObDialogOpen(true)}>
+              <Landmark className="h-4 w-4" /> Cash &amp; Bank Opening Balances
+            </Button>
+            <Button className="gap-2" onClick={openAdd}>
+              <Plus className="h-4 w-4" /> Add Account
+            </Button>
+          </div>
         )}
       </div>
+
+      <CashBankOpeningDialog open={obDialogOpen} onOpenChange={setObDialogOpen} />
 
       {/* Filters */}
       <Card>

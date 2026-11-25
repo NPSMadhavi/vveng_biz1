@@ -395,7 +395,8 @@ const AGENT_TOOLS = [
             description:
               "App route. Exact sidebar module paths: " +
               "Inventory: /inventory/warehouses, /stock, /stock/new, /inventory/stock-transfer, /inventory/reports, /inventory/sales-person-wise-report, /inventory/batch-expiry. " +
-              "Operations: /assets, /assets/new, /licenses, /licenses/new, /employees, /employees/new, /payroll. " +
+              "Operations: /assets, /assets/new, /assets/register, /assets/register/new, /assets/depreciation, /assets/disposal, /assets/disposal-report, /licenses, /licenses/new, /employees, /employees/new, /payroll, /payroll/ir8a, /payroll/ir8a/ais, /payroll/ir8a/employers. " +
+              "Manpower Supply: /manpower/suppliers/quotations, /manpower/suppliers/purchase-orders, /manpower/suppliers/timesheets, /manpower/suppliers/timesheets/new, /manpower/suppliers/vendor-invoices, /manpower/customers/quotations, /manpower/customers/sales-orders, /manpower/customers/timesheets, /manpower/customers/timesheets/new, /manpower/customers/tax-invoices. " +
               "Bank: /accounting/bank-reconciliation. " +
               "Directory: /customers, /customers?vedaNew=1, /vendors, /vendors?vedaNew=1, /sales-persons, /address-book. " +
               "Documents: /invoices, /invoices/new, /quotations, /quotations/new, /purchase-orders, /purchase-orders/new, /delivery-orders, /delivery-orders/new, /sales-orders, /sales-orders/new, /purchase-quotations, /purchase-quotations/new, /proforma-invoices, /proforma-invoices/new, /credit-notes, /credit-notes/new, /debit-notes, /debit-notes/new, /vendor-invoices, /vendor-invoices/new, /grn, /grn/new, /point-of-sale, /bill-of-materials. " +
@@ -1788,6 +1789,35 @@ async function executeTool(
         "/employees/create": "/employees/new",
         "/employee/create": "/employees/new",
         "/payrolls": "/payroll",
+        "/ir8a": "/payroll/ir8a",
+        "/ir8a-ais": "/payroll/ir8a",
+        "/ir8a/ais": "/payroll/ir8a",
+        "/ais": "/payroll/ir8a/ais",
+        "/ais-submission": "/payroll/ir8a/ais",
+        "/ir8a-employers": "/payroll/ir8a/employers",
+        "/ir8a/employers": "/payroll/ir8a/employers",
+        "/employers-ir8a": "/payroll/ir8a/employers",
+        "/employer-ir8a": "/payroll/ir8a/employers",
+        "/employers": "/payroll/ir8a/employers",
+        "/fixed-assets": "/assets",
+        "/add-asset": "/assets",
+        "/asset-register": "/assets/register",
+        "/assets-register": "/assets/register",
+        "/depreciation": "/assets/depreciation",
+        "/depreciation-schedule": "/assets/depreciation",
+        "/asset-depreciation": "/assets/depreciation",
+        "/disposal": "/assets/disposal",
+        "/asset-disposal": "/assets/disposal",
+        "/disposal-report": "/assets/disposal-report",
+        "/asset-disposal-report": "/assets/disposal-report",
+        "/timesheets": "/manpower/suppliers/timesheets",
+        "/timesheet": "/manpower/suppliers/timesheets",
+        "/timesheet-management": "/manpower/suppliers/timesheets",
+        "/manpower/timesheets": "/manpower/suppliers/timesheets",
+        "/manpower/vendors/timesheets": "/manpower/suppliers/timesheets",
+        "/manpower/vendors/quotations": "/manpower/suppliers/quotations",
+        "/manpower/vendors/purchase-orders": "/manpower/suppliers/purchase-orders",
+        "/manpower/vendors/vendor-invoices": "/manpower/suppliers/vendor-invoices",
       };
       const cleanPath = navPath.split("?")[0].replace(/\/+$/, "") || "/";
       const query = navPath.includes("?") ? navPath.slice(navPath.indexOf("?")) : "";
@@ -2336,7 +2366,7 @@ function toolCatalogForPrompt(tools: any[]): string {
 }
 
 function looksLikeBizoneAction(text: string): boolean {
-  return /\b(create|open|show|save|email|search|find|navigate|go\s*to|invoice|quotation|purchase|employee|payroll|fill|confirm|void|customer|vendor|stock|journal|preview|download|update|edit|delete|list)\b/i.test(
+  return /\b(create|open|show|save|email|search|find|navigate|go\s*to|invoice|quotation|purchase|employee|employer|payroll|ir8a|ais|asset|assest|register|depreciation|disposal|manpower|timesheet|timeshhet|sales\s*persons?|sales\s*perosns?|trial\s*balance|trail\s*balance|balance\s*sheet|profit|loss|cash\s*flow|ledger|chart\s*of\s*accounts|fill|confirm|void|customer|vendor|stock|journal|preview|download|update|edit|delete|list)\b/i.test(
     text || "",
   );
 }

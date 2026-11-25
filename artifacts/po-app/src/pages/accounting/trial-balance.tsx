@@ -4,20 +4,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
-import { ChevronDown, Download, Loader2 } from "lucide-react";
+import { ChevronDown, Download, Landmark, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { generateTrialBalance_PDF } from "@/lib/pdf";
 import { AccountActivityPanel } from "@/pages/accounting/account-activity";
 import { useFollowWorkingYear } from "@/components/financial-year-controls";
+import { CashBankOpeningDialog } from "@/components/cash-bank-opening-dialog";
 
 interface TBRow {
   id: number; code: string; name: string; type: string; subType: string | null;
   totalDebit: number; totalCredit: number;
+  openingDebit?: number; openingCredit?: number;
   openingBalance: number; closingBalance: number; balance: number;
 }
 interface TBData {
   fromDate: string | null; toDate: string | null; rows: TBRow[];
   grandDebit: number; grandCredit: number;
+  grandOpeningDebit?: number; grandOpeningCredit?: number;
   grandOpening: number; grandClosing: number; balanced: boolean;
 }
 
@@ -68,17 +71,18 @@ function SignedAmount({ value, strong = false }: { value: number; strong?: boole
 }
 
 export default function TrialBalancePage() {
-  const { selectedCompany } = useAuth();
+  const { selectedCompany, canManage } = useAuth();
   const today = new Date().toISOString().split("T")[0];
   const [boot] = useState(initialTbFilters);
   const [from, setFrom] = useState(boot.from);
-  const [to, setTo]     = useState(boot.to);
+  const [to, setTo] = useState(boot.to);
   const urlLocked = useRef(new URLSearchParams(window.location.search).has("from") || new URLSearchParams(window.location.search).has("to"));
   useFollowWorkingYear(urlLocked.current, (nextFrom, nextTo) => {
     setFrom(nextFrom);
     setTo(nextTo);
   });
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [obDialogOpen, setObDialogOpen] = useState(false);
   const [expanded, setExpanded] = useState<Record<number, boolean>>(
     boot.expand ? { [boot.expand]: true } : {},
   );
@@ -92,7 +96,7 @@ export default function TrialBalancePage() {
     queryFn: async () => {
       const p = new URLSearchParams();
       if (from) p.set("from", from);
-      if (to)   p.set("to", to);
+      if (to) p.set("to", to);
       const r = await fetch(`/api/trial-balance?${p}`, { credentials: "include" });
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || "Failed to load"); }
       return r.json();
@@ -145,6 +149,12 @@ export default function TrialBalancePage() {
               {data.balanced ? "Balanced ✓" : "Out of balance"}
             </span>
           )}
+          {canManage && (
+            <Button variant="outline" size="sm" onClick={() => setObDialogOpen(true)} className="border-blue-200 text-blue-700 hover:bg-blue-50 mb-0.5">
+              <Landmark className="h-4 w-4 mr-2" />
+              Cash &amp; Bank Opening Balances
+            </Button>
+          )}
           {hasData && (
             <Button variant="outline" size="sm" onClick={handleDownloadPDF} disabled={pdfLoading} className="border-gray-200 text-gray-600 hover:text-gray-900 mb-0.5">
               {pdfLoading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
@@ -154,8 +164,10 @@ export default function TrialBalancePage() {
         </div>
       </div>
 
+      <CashBankOpeningDialog open={obDialogOpen} onOpenChange={setObDialogOpen} defaultFromDate={from} />
+
       {isLoading && <div className="text-center py-16 text-sm text-gray-400">Loading…</div>}
-      {isError   && <div className="text-center py-16 text-sm text-red-500">{(error as Error).message}</div>}
+      {isError && <div className="text-center py-16 text-sm text-red-500">{(error as Error).message}</div>}
 
       {data && (
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
@@ -165,7 +177,8 @@ export default function TrialBalancePage() {
                 <tr className="border-b-2 border-gray-200 bg-gray-50">
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-24">Code</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider">Account Name</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-40">Opening Balance</th>
+                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Opening Debit</th>
+                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Opening Credit</th>
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Debit</th>
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Credit</th>
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-40">Closing Balance</th>
@@ -173,13 +186,13 @@ export default function TrialBalancePage() {
               </thead>
               <tbody>
                 {!hasData && (
-                  <tr><td colSpan={6} className="text-center py-16 text-sm text-gray-400">No journal entries for this period.</td></tr>
+                  <tr><td colSpan={7} className="text-center py-16 text-sm text-gray-400">No journal entries for this period.</td></tr>
                 )}
                 {TYPE_ORDER.map(type =>
                   grouped[type].length > 0 ? (
                     <Fragment key={type}>
                       <tr>
-                        <td colSpan={6} className="px-4 py-2.5 border-b border-t border-gray-100 bg-gray-50">
+                        <td colSpan={7} className="px-4 py-2.5 border-b border-t border-gray-100 bg-gray-50">
                           <div className="flex items-center gap-2.5">
                             <div className="w-0.5 h-3.5 bg-gray-400 rounded-full" />
                             <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{TYPE_LABEL[type]}</span>
@@ -188,6 +201,8 @@ export default function TrialBalancePage() {
                       </tr>
                       {grouped[type].map(row => {
                         const open = Boolean(expanded[row.id]);
+                        const opDr = row.openingDebit ?? (row.openingBalance > 0 ? row.openingBalance : 0);
+                        const opCr = row.openingCredit ?? (row.openingBalance < 0 ? Math.abs(row.openingBalance) : 0);
                         return (
                           <Fragment key={row.id}>
                             <tr
@@ -202,7 +217,10 @@ export default function TrialBalancePage() {
                                 </span>
                               </td>
                               <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
-                                <SignedAmount value={row.openingBalance || 0} />
+                                {fmtAmt(opDr) ?? <span className="text-gray-300">—</span>}
+                              </td>
+                              <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
+                                {fmtAmt(opCr) ?? <span className="text-gray-300">—</span>}
                               </td>
                               <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
                                 {fmtAmt(row.totalDebit) ?? <span className="text-gray-300">—</span>}
@@ -216,7 +234,7 @@ export default function TrialBalancePage() {
                             </tr>
                             {open && (
                               <tr className="border-b border-gray-100">
-                                <td colSpan={6} className="p-0 bg-slate-50/80">
+                                <td colSpan={7} className="p-0 bg-slate-50/80">
                                   <AccountActivityPanel accountId={row.id} from={from} to={to} returnTo={tbReturnPath(from, to, row.id)} />
                                 </td>
                               </tr>
@@ -231,8 +249,11 @@ export default function TrialBalancePage() {
               <tfoot>
                 <tr className="bg-gray-900 text-white">
                   <td colSpan={2} className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-300">Grand Total</td>
-                  <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums">
-                    <SignedAmount value={data.grandOpening || 0} strong />
+                  <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">
+                    {fmtBig(data.grandOpeningDebit ?? data.rows.reduce((s, r) => s + (r.openingDebit ?? (r.openingBalance > 0 ? r.openingBalance : 0)), 0))}
+                  </td>
+                  <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">
+                    {fmtBig(data.grandOpeningCredit ?? data.rows.reduce((s, r) => s + (r.openingCredit ?? (r.openingBalance < 0 ? Math.abs(r.openingBalance) : 0)), 0))}
                   </td>
                   <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">{fmtBig(data.grandDebit)}</td>
                   <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">{fmtBig(data.grandCredit)}</td>
