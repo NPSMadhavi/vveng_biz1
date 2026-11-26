@@ -11,6 +11,7 @@ import { generateSalesOrder_PDF } from "@/lib/pdf";
 import { PdfPreviewModal, isSentToExternal } from "@/components/pdf-preview-modal";
 import { useToast } from "@/hooks/use-toast";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
+import { ManpowerCustomerBillingRatesViewCard } from "@/components/manpower-quotation-fields";
 import { useAuth } from "@/contexts/auth-context";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -236,16 +237,6 @@ export default function SalesOrderView() {
           <Button variant="outline" className="gap-2" onClick={() => setPreviewOpen(true)}>
             <Eye className="h-4 w-4" />Preview
           </Button>
-          <Button
-            variant="outline"
-            className="gap-2 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-            onClick={() => handleConvert("tax")}
-            disabled={!!converting || !!(doc as any).invId}
-            title={(doc as any).invId ? "Already converted to Tax Invoice" : undefined}
-          >
-            {converting === "tax" ? <span className="h-4 w-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" /> : <Receipt className="h-4 w-4" />}
-            Convert to Invoice
-          </Button>
 
           <Button
             variant="outline"
@@ -355,6 +346,13 @@ export default function SalesOrderView() {
           </CardContent>
         </Card>
       </div>
+
+      {isManpower && (
+        <ManpowerCustomerBillingRatesViewCard
+          manpowerDetails={md}
+          currency={(doc as any).currency || "SGD"}
+        />
+      )}
 
       {!isManpower && (
       <Card>

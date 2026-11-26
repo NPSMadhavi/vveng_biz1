@@ -691,7 +691,7 @@ export default function SalesOrderNew() {
                   <FormField control={form.control} name="issueDate" render={({ field }) => (
                     <FormItem>
                       <FormControl>
-                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="Sales Order Date" />
+                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="Sales Order Date" hideHints />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

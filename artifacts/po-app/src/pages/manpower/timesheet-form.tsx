@@ -513,25 +513,42 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       return fallback || String(emp?.id || "");
     };
 
-    const ids: number[] = [...parseEmployeeIds(selectedPo?.employeeIds)];
-    const names: string[] = [...parseEmployeeNames(selectedPo?.employeeNames)];
+    const poIds = parseEmployeeIds(selectedPo?.employeeIds);
+    const poNames = parseEmployeeNames(selectedPo?.employeeNames);
+
+    // 1. If the selected PO / Sales Order has its own assigned employees, show ONLY those.
+    const uniquePoIds = [...new Set(poIds)];
+    if (uniquePoIds.length) {
+      return uniquePoIds.map((id) => {
+        const emp = allEmployees.find((row) => Number(row.id) === Number(id));
+        return { id: String(id), label: labelFor(emp, String(id)) };
+      });
+    }
+    const uniquePoNames = [...new Set(poNames)];
+    if (uniquePoNames.length) {
+      return uniquePoNames.map((name, index) => ({ id: `named-${index}-${name}`, label: name }));
+    }
+
+    // 2. Otherwise fall back to employees from linked quotations (for older POs without employeeIds).
+    const qtIds: number[] = [];
+    const qtNames: string[] = [];
     linkedQuotations.forEach((qt) => {
       const md = qt?.manpowerDetails || {};
-      ids.push(...parseEmployeeIds(md.employeeIds));
-      names.push(...parseEmployeeNames(md.employeeNames));
+      qtIds.push(...parseEmployeeIds(md.employeeIds));
+      qtNames.push(...parseEmployeeNames(md.employeeNames));
     });
 
-    const uniqueIds = [...new Set(ids)];
-    if (uniqueIds.length) {
-      return uniqueIds.map((id) => {
+    const uniqueQtIds = [...new Set(qtIds)];
+    if (uniqueQtIds.length) {
+      return uniqueQtIds.map((id) => {
         const emp = allEmployees.find((row) => Number(row.id) === Number(id));
         return { id: String(id), label: labelFor(emp, String(id)) };
       });
     }
 
-    const uniqueNames = [...new Set(names)];
-    if (uniqueNames.length) {
-      return uniqueNames.map((name, index) => ({ id: `named-${index}-${name}`, label: name }));
+    const uniqueQtNames = [...new Set(qtNames)];
+    if (uniqueQtNames.length) {
+      return uniqueQtNames.map((name, index) => ({ id: `named-${index}-${name}`, label: name }));
     }
 
     const assigned = selectedParty?.assignedEmployees || [];
@@ -548,6 +565,13 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   }, [selectedPo, selectedParty, allEmployees, linkedQuotations]);
 
   const classification = useMemo(() => sumClassification(entries), [entries]);
+
+  useEffect(() => {
+    if (readOnly || !employeeKey) return;
+    if (employeeOptions.length > 0 && !employeeOptions.some((o) => o.id === employeeKey)) {
+      setEmployeeKey("");
+    }
+  }, [readOnly, employeeKey, employeeOptions]);
 
   useEffect(() => {
     if (readOnly) return;

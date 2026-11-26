@@ -1,4 +1,4 @@
-﻿import { useDocNav } from "@/lib/doc-nav";
+import { useDocNav } from "@/lib/doc-nav";
 import { useGetQuotation, getGetQuotationQueryKey, getListQuotationsQueryKey, useDeleteQuotation, useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
 import { useParams } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { formatCurrency as formatCurrencySafe } from "@/lib/currencies";
 import { StickyPageHeader } from "@/components/sticky-page-header";
-import { quotationLineAmount } from "@/components/manpower-quotation-fields";
+import { quotationLineAmount, ManpowerCustomerBillingRatesViewCard } from "@/components/manpower-quotation-fields";
 
 function isoToReadable(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
@@ -357,6 +357,13 @@ export default function QuotationView() {
           </CardContent>
         </Card>
       </div>
+
+      {isManpower && (
+        <ManpowerCustomerBillingRatesViewCard
+          manpowerDetails={md}
+          currency={(doc as any).currency || "SGD"}
+        />
+      )}
 
       {!isManpower && (
       <Card>

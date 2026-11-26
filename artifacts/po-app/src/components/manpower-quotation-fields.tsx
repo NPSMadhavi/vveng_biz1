@@ -877,6 +877,71 @@ async function fetchQuotationEmployees(): Promise<QuotationEmployeeOption[]> {
   return Array.isArray(data) ? data : [];
 }
 
+export function ManpowerCustomerBillingRatesViewCard({
+  manpowerDetails,
+  currency = "SGD",
+  title = "Customer Billing Rates",
+}: {
+  manpowerDetails: any;
+  currency?: string;
+  title?: string;
+}) {
+  if (!manpowerDetails || typeof manpowerDetails !== "object") return null;
+
+  const rawRates: Array<{ category?: string; rate?: string | number; gst?: string }> =
+    Array.isArray(manpowerDetails.customerBillingRates) && manpowerDetails.customerBillingRates.length > 0
+      ? manpowerDetails.customerBillingRates
+      : [
+          ...(manpowerDetails.customerRate
+            ? [{ category: "Normal Hour", rate: manpowerDetails.customerRate, gst: manpowerDetails.customerRateGst || "Applicable" }]
+            : []),
+          ...((manpowerDetails.customerRateOt15 || manpowerDetails.weekdayOtRate)
+            ? [{ category: "OT 1.5x", rate: manpowerDetails.customerRateOt15 || manpowerDetails.weekdayOtRate, gst: manpowerDetails.customerRateGst || "Applicable" }]
+            : []),
+        ];
+
+  const rows = rawRates.filter(
+    (r) => String(r?.category || "").trim() !== "" || String(r?.rate ?? "").trim() !== ""
+  );
+  if (rows.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">{title}</CardTitle>
+      </CardHeader>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50 border-y text-xs text-muted-foreground uppercase">
+            <tr>
+              <th className="px-6 py-2.5 text-left w-10">#</th>
+              <th className="px-6 py-2.5 text-left">Category</th>
+              <th className="px-6 py-2.5 text-right">Rate ({currency})</th>
+              <th className="px-6 py-2.5 text-center">GST</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {rows.map((row, idx) => {
+              const rateNum = Number(row.rate);
+              const rateStr = Number.isFinite(rateNum) && String(row.rate ?? "").trim() !== ""
+                ? `${currency} ${rateNum.toFixed(2)}`
+                : (row.rate ? String(row.rate) : "—");
+              return (
+                <tr key={idx} className="hover:bg-muted/20">
+                  <td className="px-6 py-2.5 text-muted-foreground">{idx + 1}</td>
+                  <td className="px-6 py-2.5 font-medium">{row.category || "—"}</td>
+                  <td className="px-6 py-2.5 text-right font-mono tabular-nums">{rateStr}</td>
+                  <td className="px-6 py-2.5 text-center text-muted-foreground">{row.gst || "Applicable"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export function ManpowerCustomerBillingRatesCard({ control, title = "Customer Billing Rates" }: { control: Control<any>; title?: string }) {
   const { setValue, getValues } = useFormContext();
   const { fields, append, remove } = useFieldArray({
