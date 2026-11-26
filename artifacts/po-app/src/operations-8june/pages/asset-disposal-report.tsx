@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO, isValid } from "date-fns";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
@@ -8,8 +8,30 @@ import "jspdf-autotable";
 import type { Asset } from "@shared/schema";
 import { useAuth } from "@/contexts/auth-context";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/operations-8june/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -25,7 +47,7 @@ import { resolveAssetImageSrc } from "@/operations-8june/lib/asset-attachments";
 import { cn } from "@/lib/utils";
 import {
   Search, RotateCcw, Printer, FileText, Eye,
-  Clock, Info, Trash2, Coins, TrendingDown, TrendingUp,
+  Clock, Info, Trash2, Coins, TrendingDown, TrendingUp, Pencil, AlertTriangle,
 } from "lucide-react";
 
 export type DisposalRowItem = {
@@ -42,6 +64,7 @@ export type DisposalRowItem = {
   gainLoss: number;
   disposalType: string;
   disposalTypeKey: string;
+  remarks?: string;
   imageUrl?: string;
 };
 
@@ -91,6 +114,11 @@ function parseMoneyFromDesc(desc: string, label: string): number | null {
   if (!m) return null;
   const n = parseFloat(m[1].replace(/,/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+function parseRemarksFromDesc(desc: string): string {
+  const m = desc.match(/Remarks:\s*([^·]+)/i);
+  return m ? m[1].trim() : "";
 }
 
 function normalizeDisposalType(raw: string | null | undefined, description?: string | null) {
@@ -170,6 +198,8 @@ function buildDisposalRowFromAsset(asset: Asset): DisposalRowItem {
     (asset as any).assetImage ?? (asset as any).asset_image,
   );
 
+  const remarks = parseRemarksFromDesc(desc);
+
   return {
     id: asset.id,
     asset,
@@ -184,6 +214,7 @@ function buildDisposalRowFromAsset(asset: Asset): DisposalRowItem {
     gainLoss,
     disposalType: disposalTypeLabel(typeKey),
     disposalTypeKey: typeKey,
+    remarks,
     imageUrl: img || undefined,
   };
 }
@@ -225,6 +256,98 @@ export default function AssetDisposalReportPage() {
     statusFilter: "all",
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const queryClient = useQueryClient();
+
+  // Edit Disposal Modal State
+  const [editingRow, setEditingRow] = useState<DisposalRowItem | null>(null);
+  const [editDisposalDate, setEditDisposalDate] = useState("");
+  const [editDisposalType, setEditDisposalType] = useState("sale");
+  const [editSaleAmount, setEditSaleAmount] = useState<string>("0");
+  const [editRemarks, setEditRemarks] = useState("");
+
+  // Delete / Reversal Modal State
+  const [deletingRow, setDeletingRow] = useState<DisposalRowItem | null>(null);
+  const [deletePermanently, setDeletePermanently] = useState(false);
+
+  function handleOpenEdit(e: React.MouseEvent, row: DisposalRowItem) {
+    e.stopPropagation();
+    setEditingRow(row);
+    setEditDisposalDate(row.disposalDate || format(new Date(), "yyyy-MM-dd"));
+    setEditDisposalType(row.disposalTypeKey || "sale");
+    setEditSaleAmount(String(row.saleAmount ?? 0));
+    setEditRemarks(row.remarks || "");
+  }
+
+  function handleOpenDelete(e: React.MouseEvent, row: DisposalRowItem) {
+    e.stopPropagation();
+    setDeletingRow(row);
+    setDeletePermanently(false);
+  }
+
+  const updateDisposalMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingRow) return;
+      const res = await apiRequest("PUT", `/api/assets/${editingRow.id}/dispose`, {
+        disposalDate: editDisposalDate,
+        disposalType: editDisposalType,
+        saleAmount: parseFloat(editSaleAmount) || 0,
+        remarks: editRemarks,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/balance-sheet"] });
+      toast({
+        title: "Disposal updated",
+        description: `Disposal details for ${editingRow?.assetName} updated successfully.`,
+      });
+      setEditingRow(null);
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Update failed",
+        description: err?.message || "Failed to update disposal details.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteDisposalMutation = useMutation({
+    mutationFn: async () => {
+      if (!deletingRow) return;
+      if (deletePermanently) {
+        const res = await apiRequest("DELETE", `/api/assets/${deletingRow.id}`);
+        return res.json();
+      } else {
+        const res = await apiRequest("DELETE", `/api/assets/${deletingRow.id}/dispose`, {
+          reversalDate: format(new Date(), "yyyy-MM-dd"),
+        });
+        return res.json();
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/assets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/journal-entries"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/balance-sheet"] });
+      toast({
+        title: deletePermanently ? "Asset deleted" : "Disposal removed",
+        description: deletePermanently
+          ? `Asset ${deletingRow?.assetName} was permanently deleted.`
+          : `Disposal for ${deletingRow?.assetName} was removed. Asset is restored to Active.`,
+      });
+      setDeletingRow(null);
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Action failed",
+        description: err?.message || "Failed to delete disposal.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const { data: assets = [], isLoading } = useQuery<Asset[]>({
     queryKey: ["/api/assets"],
@@ -693,18 +816,19 @@ export default function AssetDisposalReportPage() {
                 <TableHead className="text-right text-xs font-semibold text-[#334155]">Sale Amount (S$)</TableHead>
                 <TableHead className="text-right text-xs font-semibold text-[#334155]">Gain / Loss (S$)</TableHead>
                 <TableHead className="text-xs font-semibold text-[#334155]">Disposal Type</TableHead>
+                <TableHead className="text-right text-xs font-semibold text-[#334155] pr-4">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-8 text-center text-xs text-[#94A3B8]">
+                  <TableCell colSpan={12} className="py-8 text-center text-xs text-[#94A3B8]">
                     Loading assets...
                   </TableCell>
                 </TableRow>
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-8 text-center text-xs text-[#94A3B8]">
+                  <TableCell colSpan={12} className="py-8 text-center text-xs text-[#94A3B8]">
                     No disposed assets found for the selected filters.
                   </TableCell>
                 </TableRow>
@@ -748,6 +872,30 @@ export default function AssetDisposalReportPage() {
                         >
                           {row.disposalType}
                         </span>
+                      </TableCell>
+                      <TableCell className="text-right pr-4" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-[#2563EB] hover:text-[#1D4ED8] hover:bg-blue-50"
+                            title="Edit Disposal"
+                            onClick={(e) => handleOpenEdit(e, row)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-[#DC2626] hover:text-[#B91C1C] hover:bg-red-50"
+                            title="Delete Disposal"
+                            onClick={(e) => handleOpenDelete(e, row)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -974,6 +1122,150 @@ export default function AssetDisposalReportPage() {
           ) : null}
         </section>
       </div>
+
+      {/* EDIT DISPOSAL DIALOG */}
+      <Dialog open={!!editingRow} onOpenChange={(open) => { if (!open) setEditingRow(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-[#0F172A] flex items-center gap-2">
+              <Pencil className="h-4 w-4 text-[#2563EB]" />
+              Edit Asset Disposal
+            </DialogTitle>
+            <DialogDescription className="text-xs text-[#64748B]">
+              Update the disposal details for <strong className="text-[#0F172A]">{editingRow?.assetName}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3.5 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-[#334155]">Disposal Date</Label>
+              <SyncBridgeDatePicker
+                value={editDisposalDate}
+                onChange={(v) => setEditDisposalDate(v || editDisposalDate)}
+                mode="date"
+                placeholder="YYYY-MM-DD"
+                className="h-9 text-xs"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-[#334155]">Disposal Type</Label>
+              <Select value={editDisposalType} onValueChange={setEditDisposalType}>
+                <SelectTrigger className="h-9 bg-white text-xs text-[#0F172A]">
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sale" className="text-xs">Sale</SelectItem>
+                  <SelectItem value="scrap" className="text-xs">Scrapped</SelectItem>
+                  <SelectItem value="write_off" className="text-xs">Damaged</SelectItem>
+                  <SelectItem value="donation" className="text-xs">Donation / Gift</SelectItem>
+                  <SelectItem value="retired" className="text-xs">Retired</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-[#334155]">Sale Amount (S$)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={editSaleAmount}
+                onChange={(e) => setEditSaleAmount(e.target.value)}
+                placeholder="0.00"
+                className="h-9 text-xs"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-[#334155]">Remarks / Notes</Label>
+              <Textarea
+                rows={3}
+                value={editRemarks}
+                onChange={(e) => setEditRemarks(e.target.value)}
+                placeholder="Optional notes or reasons for disposal..."
+                className="text-xs resize-none"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={() => setEditingRow(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-medium"
+              onClick={() => updateDisposalMutation.mutate()}
+              disabled={updateDisposalMutation.isPending}
+            >
+              {updateDisposalMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DELETE / REVERSAL ALERT DIALOG */}
+      <AlertDialog open={!!deletingRow} onOpenChange={(open) => { if (!open) setDeletingRow(null); }}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base font-bold text-[#DC2626] flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-[#DC2626]" />
+              Delete Asset Disposal
+            </AlertDialogTitle>
+            <div className="text-xs text-[#64748B] space-y-2">
+              <p>
+                Are you sure you want to remove the disposal record for{" "}
+                <strong className="text-[#0F172A]">{deletingRow?.assetName}</strong>?
+              </p>
+              <p>
+                By default, this will <strong>reverse the disposal</strong>, remove the disposal journal entry, and return the asset back to <strong>Active / Available</strong> status so it is removed from this report.
+              </p>
+            </div>
+          </AlertDialogHeader>
+
+          <div className="flex items-center space-x-2 pt-2 pb-1 border-t border-[#F1F5F9]">
+            <Checkbox
+              id="delete-perm"
+              checked={deletePermanently}
+              onCheckedChange={(c) => setDeletePermanently(!!c)}
+            />
+            <label
+              htmlFor="delete-perm"
+              className="text-xs font-medium text-[#475569] cursor-pointer"
+            >
+              Permanently delete this asset completely from database
+            </label>
+          </div>
+
+          <AlertDialogFooter className="gap-2 sm:gap-0">
+            <AlertDialogCancel
+              className="text-xs"
+              onClick={() => setDeletingRow(null)}
+              disabled={deleteDisposalMutation.isPending}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-[#DC2626] hover:bg-[#B91C1C] text-white text-xs font-medium"
+              onClick={(e) => {
+                e.preventDefault();
+                deleteDisposalMutation.mutate();
+              }}
+              disabled={deleteDisposalMutation.isPending}
+            >
+              {deleteDisposalMutation.isPending ? "Deleting..." : "Confirm Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

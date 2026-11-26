@@ -11,6 +11,7 @@ import { z } from "zod";
 import { useFieldArray, useFormContext, useWatch, type Control } from "react-hook-form";
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronDown, Trash2 } from "lucide-react";
@@ -397,14 +398,57 @@ export function ManpowerRequirementsCard({
   const draftNameRef = useRef("");
   const [created, setCreated] = useState<string[]>([]);
   const [addError, setAddError] = useState("");
-  const [creatingWorker, setCreatingWorker] = useState(false);
-  const [draftWorkerName, setDraftWorkerName] = useState("");
-  const draftWorkerNameRef = useRef("");
   const [createdWorkers, setCreatedWorkers] = useState<string[]>([]);
   const [workerError, setWorkerError] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [workersDialogOpen, setWorkersDialogOpen] = useState(false);
   const [draftIds, setDraftIds] = useState<number[]>([]);
+  const [createWorkerDialogOpen, setCreateWorkerDialogOpen] = useState(false);
+  const [newWorkerName, setNewWorkerName] = useState("");
+  const [newWorkerDesignation, setNewWorkerDesignation] = useState("");
+  const [createWorkerError, setCreateWorkerError] = useState("");
+  const [selectedDesignation, setSelectedDesignation] = useState("");
+
+  const handleSaveNewWorker = () => {
+    const name = newWorkerName.replace(/^,+|,+$/g, "").trim();
+    if (!name || name === CREATE_WORKER) {
+      setCreateWorkerError("Please enter a valid worker name.");
+      return;
+    }
+    const designation = newWorkerDesignation.replace(/^,+|,+$/g, "").trim();
+
+    setCreatedWorkers((current) => (current.includes(name) ? current : [...current, name]));
+
+    const currentWorkerNames = String(getValues("manpowerDetails.workerNames") || "");
+    const existing = currentWorkerNames
+      .split(",")
+      .map((v) => v.trim().replace(/^,+|,+$/g, ""))
+      .filter(Boolean);
+    const next = existing.includes(name) ? existing : [...existing, name];
+    const cleanedWorkers = next.filter(Boolean).join(", ");
+    setValue("manpowerDetails.workerNames", cleanedWorkers, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+    setValue("manpowerDetails.workers", String(next.length), { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+
+    if (designation) {
+      const currentDesig = String(getValues("manpowerDetails.designation") || selectedDesignation || "");
+      const existingDesigs = currentDesig
+        .split(",")
+        .map((v) => v.trim().replace(/^,+|,+$/g, ""))
+        .filter(Boolean);
+      const nextDesigs = existingDesigs.includes(designation) ? existingDesigs : [...existingDesigs, designation];
+      const cleanedDesigs = nextDesigs.filter(Boolean).join(", ");
+      setSelectedDesignation(cleanedDesigs);
+      setValue("manpowerDetails.designation", cleanedDesigs, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+      setCreating(false);
+      setDraftName("");
+      draftNameRef.current = "";
+    }
+
+    setNewWorkerName("");
+    setNewWorkerDesignation("");
+    setCreateWorkerError("");
+    setCreateWorkerDialogOpen(false);
+  };
 
   const selectedIds = (useWatch({ control, name: "manpowerDetails.employeeIds" }) || []) as number[];
   const watchedDesignation = String(useWatch({ control, name: "manpowerDetails.designation" }) || "").trim();
@@ -414,8 +458,13 @@ export function ManpowerRequirementsCard({
     const fromLines = (lineItems as Array<{ description?: string }>)
       .map((item) => String(item?.description || "").trim())
       .filter(Boolean);
-    return Array.from(new Set([...created, ...fromLines, ...(watchedDesignation ? [watchedDesignation] : [])]));
-  }, [created, lineItems, watchedDesignation]);
+    return Array.from(new Set([
+      ...created,
+      ...fromLines,
+      ...(selectedDesignation ? [selectedDesignation] : []),
+      ...(watchedDesignation ? [watchedDesignation] : []),
+    ]));
+  }, [created, lineItems, selectedDesignation, watchedDesignation]);
 
   const workerList = useMemo(
     () => watchedWorkerNames.split(",").map((v) => v.trim()).filter(Boolean),
@@ -425,6 +474,18 @@ export function ManpowerRequirementsCard({
     () => Array.from(new Set([...createdWorkers, ...workerList])),
     [createdWorkers, workerList],
   );
+
+  useEffect(() => {
+    if (watchedDesignation && !selectedDesignation) {
+      setSelectedDesignation(watchedDesignation);
+    }
+  }, [watchedDesignation, selectedDesignation]);
+
+  useEffect(() => {
+    if (workerList.length > 0) {
+      setValue("manpowerDetails.workers", String(workerList.length), { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+    }
+  }, [workerList.length, setValue]);
 
   const { data: employees = [], isLoading: employeesLoading, isError: employeesError } = useQuery({
     queryKey: ["quotation-manpower-employees"],
@@ -577,76 +638,56 @@ export function ManpowerRequirementsCard({
               </button>
             </FormItem>
           ) : (
-            <FormField control={control} name="manpowerDetails.workerNames" render={({ field }) => (
+            <FormField control={control} name="manpowerDetails.workerNames" render={({ field }) => {
+              const currentWorkerNames = String(field.value || watchedWorkerNames || "")
+                .split(",")
+                .map((v) => v.trim().replace(/^,+|,+$/g, ""))
+                .filter(Boolean)
+                .join(", ");
+              return (
               <FormItem className="min-w-0">
                 <FormLabel>Workers Name</FormLabel>
-                {creatingWorker ? (
+                <Select
+                  value={currentWorkerNames || undefined}
+                  onValueChange={(value) => {
+                    setWorkerError("");
+                    if (value === CREATE_WORKER) {
+                      setNewWorkerName("");
+                      setNewWorkerDesignation("");
+                      setCreateWorkerError("");
+                      setCreateWorkerDialogOpen(true);
+                      return;
+                    }
+                    const existing = currentWorkerNames
+                      .split(",")
+                      .map((v) => v.trim().replace(/^,+|,+$/g, ""))
+                      .filter(Boolean);
+                    const next = existing.includes(value) ? existing : [...existing, value];
+                    const cleaned = next.filter(Boolean).join(", ");
+                    field.onChange(cleaned);
+                    setValue("manpowerDetails.workerNames", cleaned, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+                    setValue("manpowerDetails.workers", String(next.length), { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+                  }}
+                >
                   <FormControl>
-                    <Input
-                      autoFocus
-                      placeholder="Type worker name"
-                      value={draftWorkerName}
-                      onChange={(event) => {
-                        draftWorkerNameRef.current = event.target.value;
-                        setDraftWorkerName(event.target.value);
-                        setWorkerError("");
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter") return;
-                        event.preventDefault();
-                        const name = String(draftWorkerNameRef.current || draftWorkerName || "").trim();
-                        if (!name || name === CREATE_WORKER) {
-                          setWorkerError("Enter a worker name, then press Enter.");
-                          return;
-                        }
-                        setCreatedWorkers((current) => (current.includes(name) ? current : [...current, name]));
-                        const existing = String(field.value || "")
-                          .split(",")
-                          .map((v) => v.trim())
-                          .filter(Boolean);
-                        const next = existing.includes(name) ? existing : [...existing, name];
-                        field.onChange(next.join(", "));
-                        setValue("manpowerDetails.workers", String(next.length), { shouldDirty: true });
-                        draftWorkerNameRef.current = "";
-                        setDraftWorkerName("");
-                        setCreatingWorker(false);
-                        setWorkerError("");
-                      }}
-                    />
+                    <SelectTrigger>
+                      {currentWorkerNames ? (
+                        <span className="truncate text-foreground text-left flex-1 font-normal">{currentWorkerNames}</span>
+                      ) : (
+                        <SelectValue placeholder="Create worker name" />
+                      )}
+                    </SelectTrigger>
                   </FormControl>
-                ) : (
-                  <Select
-                    value={undefined}
-                    onValueChange={(value) => {
-                      setWorkerError("");
-                      if (value === CREATE_WORKER) {
-                        setCreatingWorker(true);
-                        draftWorkerNameRef.current = "";
-                        setDraftWorkerName("");
-                        return;
-                      }
-                      const existing = String(field.value || "")
-                        .split(",")
-                        .map((v) => v.trim())
-                        .filter(Boolean);
-                      const next = existing.includes(value) ? existing : [...existing, value];
-                      field.onChange(next.join(", "));
-                      setValue("manpowerDetails.workers", String(next.length), { shouldDirty: true });
-                    }}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder={field.value ? String(field.value) : "Create worker name"} />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value={CREATE_WORKER}>Create</SelectItem>
-                      {workerOptions.map((item) => (
-                        <SelectItem key={item} value={item}>{item}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+                  <SelectContent>
+                    <SelectItem value={CREATE_WORKER}>Create</SelectItem>
+                    {currentWorkerNames && !workerOptions.includes(currentWorkerNames) && (
+                      <SelectItem value={currentWorkerNames}>{currentWorkerNames}</SelectItem>
+                    )}
+                    {workerOptions.map((item) => (
+                      <SelectItem key={item} value={item}>{item}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 {workerList.length > 0 && (
                   <div className="pt-1">
                     <Button
@@ -662,65 +703,52 @@ export function ManpowerRequirementsCard({
                 )}
                 {workerError ? <p className="text-sm font-medium text-destructive">{workerError}</p> : null}
               </FormItem>
-            )} />
+            );
+          }} />
           )}
 
-          <FormField control={control} name="manpowerDetails.designation" render={({ field }) => (
-            <FormItem className="min-w-0">
-              <FormLabel>Designation</FormLabel>
-              {showEmployeePicker ? (
-                <FormControl>
-                  <Input {...field} value={field.value || ""} placeholder="Auto from employees" onKeyDown={addOnEnter} />
-                </FormControl>
-              ) : creating ? (
+          <FormField control={control} name="manpowerDetails.designation" render={({ field }) => {
+            const displayValue = field.value !== undefined && field.value !== "" ? String(field.value) : (selectedDesignation || "");
+            return (
+              <FormItem className="min-w-0">
+                <FormLabel>Designation</FormLabel>
                 <FormControl>
                   <Input
-                    autoFocus
-                    placeholder="Type a new designation"
-                    value={draftName}
-                    onChange={(event) => {
-                      draftNameRef.current = event.target.value;
-                      setDraftName(event.target.value);
-                      field.onChange(event.target.value);
-                      setAddError("");
+                    {...field}
+                    value={displayValue}
+                    placeholder="Create designation"
+                    onChange={(e) => {
+                      setSelectedDesignation(e.target.value);
+                      field.onChange(e.target.value);
+                      setValue("manpowerDetails.designation", e.target.value, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
                     }}
-                    onKeyDown={addOnEnter}
                   />
                 </FormControl>
-              ) : (
-                <Select
-                  value={field.value || undefined}
-                  onValueChange={(value) => {
-                    setAddError("");
-                    if (value === CREATE_DESIGNATION) {
-                      setCreating(true);
-                      draftNameRef.current = "";
-                      setDraftName("");
-                      field.onChange("");
-                      return;
-                    }
-                    field.onChange(value);
-                  }}
-                >
-                  <FormControl>
-                    <SelectTrigger><SelectValue placeholder="Create designation" /></SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    <SelectItem value={CREATE_DESIGNATION}>Create</SelectItem>
-                    {designationOptions.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              )}
-              {addError ? <p className="text-sm font-medium text-destructive">{addError}</p> : null}
-            </FormItem>
-          )} />
+                {addError ? <p className="text-sm font-medium text-destructive">{addError}</p> : null}
+              </FormItem>
+            );
+          }} />
 
-          <FormField control={control} name="manpowerDetails.workers" render={({ field }) => (
-            <FormItem>
-              <FormLabel>Number of Workers</FormLabel>
-              <FormControl><Input inputMode="numeric" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
-            </FormItem>
-          )} />
+          <FormField control={control} name="manpowerDetails.workers" render={({ field }) => {
+            const autoWorkers = workerList.length > 0 ? String(workerList.length) : "";
+            const displayWorkers = field.value || autoWorkers || "";
+            return (
+              <FormItem>
+                <FormLabel>Number of Workers</FormLabel>
+                <FormControl>
+                  <Input
+                    inputMode="numeric"
+                    {...field}
+                    value={displayWorkers}
+                    onChange={(e) => {
+                      field.onChange(e.target.value);
+                      setValue("manpowerDetails.workers", e.target.value, { shouldDirty: true, shouldTouch: true, shouldValidate: true });
+                    }}
+                  />
+                </FormControl>
+              </FormItem>
+            );
+          }} />
 
           <FormField control={control} name="manpowerDetails.extraWorkType" render={({ field }) => (
             <FormItem>
@@ -851,6 +879,63 @@ export function ManpowerRequirementsCard({
             )}
             <DialogFooter>
               <Button type="button" onClick={() => setWorkersDialogOpen(false)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={createWorkerDialogOpen} onOpenChange={setCreateWorkerDialogOpen}>
+          <DialogContent className="z-[80] max-w-md">
+            <DialogHeader>
+              <DialogTitle>Create Worker</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="create-worker-name" className="text-sm font-medium">Worker Name <span className="text-destructive">*</span></Label>
+                <Input
+                  id="create-worker-name"
+                  placeholder="Enter worker name"
+                  value={newWorkerName}
+                  onChange={(e) => {
+                    setNewWorkerName(e.target.value);
+                    setCreateWorkerError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleSaveNewWorker();
+                    }
+                  }}
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="create-worker-designation" className="text-sm font-medium">Designation</Label>
+                <Input
+                  id="create-worker-designation"
+                  placeholder="Enter designation (e.g. Electrician, Welder)"
+                  value={newWorkerDesignation}
+                  onChange={(e) => setNewWorkerDesignation(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleSaveNewWorker();
+                    }
+                  }}
+                />
+              </div>
+              {createWorkerError ? (
+                <p className="text-xs font-medium text-destructive">{createWorkerError}</p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreateWorkerDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={handleSaveNewWorker}>
+                Save
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
