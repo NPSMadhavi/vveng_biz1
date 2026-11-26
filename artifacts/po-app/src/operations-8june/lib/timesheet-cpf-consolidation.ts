@@ -54,6 +54,67 @@ export function classifyEntryHours(dayType: string, normalHours: string | number
   return { ...zero, normal: n, ot15: ot };
 }
 
+function expandIsoDateRange(from?: string, to?: string): string[] {
+  const startIso = String(from || "").slice(0, 10);
+  const endIso = String(to || from || "").slice(0, 10);
+  if (!startIso) return [];
+  const start = new Date(`${startIso}T00:00:00`);
+  const end = new Date(`${(endIso && endIso >= startIso ? endIso : startIso)}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [startIso];
+  const out: string[] = [];
+  for (let ms = start.getTime(); ms <= end.getTime() && out.length < 366; ms += 86400000) {
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    out.push(`${y}-${m}-${day}`);
+  }
+  return out.length ? out : [startIso];
+}
+
+/** Scale a timesheet entry's per-day hours by its Work From–To day count (weekdays for Normal, weekends for Rest). */
+export function scaleEntryHours(
+  row: Pick<TimesheetEntry, "workFrom" | "workTo" | "workDate" | "dayType" | "normalHours" | "overtimeHours" | "days">
+): ClassifiedHours & { days: number } {
+  const dates = expandIsoDateRange(row.workFrom || row.workDate, row.workTo || row.workDate);
+  let weekdays = 0;
+  let weekendDays = 0;
+  for (const dStr of dates) {
+    const day = new Date(`${dStr}T00:00:00`).getDay();
+    if (day === 0 || day === 6) weekendDays++;
+    else weekdays++;
+  }
+  const totalDays = dates.length || 1;
+  const isNormalWork = String(row.dayType || "").toLowerCase().includes("normal");
+  const isRest = String(row.dayType || "").toLowerCase().includes("rest");
+
+  let days: number;
+  if (row.days != null && Number.isFinite(row.days) && row.days > 0) {
+    days = row.days;
+  } else if (isNormalWork && dates.length > 1) {
+    days = weekdays;
+  } else if (isRest && dates.length > 1 && weekendDays > 0) {
+    days = weekendDays;
+  } else {
+    days = totalDays;
+  }
+
+  const rawN = Number(row.normalHours) || 0;
+  const rawO = Number(row.overtimeHours) || 0;
+  const base = classifyEntryHours(row.dayType, row.normalHours, row.overtimeHours);
+  if (days > 1 && rawN + rawO > 24) {
+    return { days, ...base };
+  }
+  return {
+    days,
+    normal: base.normal * days,
+    ot15: base.ot15 * days,
+    ot20: base.ot20 * days,
+    restDay: base.restDay * days,
+    publicHoliday: base.publicHoliday * days,
+  };
+}
+
 function entriesOf(sheet: Timesheet): TimesheetEntry[] {
   if (Array.isArray(sheet.entries) && sheet.entries.length > 0) return sheet.entries;
   return [{

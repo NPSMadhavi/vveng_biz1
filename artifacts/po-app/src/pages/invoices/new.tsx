@@ -43,7 +43,7 @@ import { PORefSelect } from "@/components/po-ref-select";
 import { SalesOrderRefSelect } from "@/components/sales-order-ref-select";
 import { TimesheetRefSelect } from "@/components/timesheet-ref-select";
 import { loadTimesheets, type Timesheet } from "@/pages/manpower/timesheet-store";
-import { classifyEntryHours } from "@/operations-8june/lib/timesheet-cpf-consolidation";
+import { scaleEntryHours } from "@/operations-8june/lib/timesheet-cpf-consolidation";
 import { CustomerPoUploadDialog, type ExtractedPoData } from "@/components/customer-po-upload-dialog";
 import { AiInvoiceDialog, type AiGeneratedInvoice } from "@/components/ai-invoice-dialog";
 import { useAuth } from "@/contexts/auth-context";
@@ -560,7 +560,15 @@ export default function InvoiceNew() {
     const classified = { normal: 0, ot15: 0, ot20: 0, restDay: 0, publicHoliday: 0 };
     for (const entry of entries as any[]) {
       const workerKey = String(entry.employeeId || entry.employeeLabel || found.employeeId || found.employeeLabel || "worker").trim();
-      const hours = classifyEntryHours(entry.dayType, entry.normalHours, entry.overtimeHours);
+      const hours = scaleEntryHours({
+        workFrom: entry.workFrom ?? found.workFrom,
+        workTo: entry.workTo ?? found.workTo,
+        workDate: entry.workDate ?? found.workDate,
+        dayType: entry.dayType,
+        normalHours: entry.normalHours,
+        overtimeHours: entry.overtimeHours,
+        days: entry.days,
+      });
       classified.normal += hours.normal;
       classified.ot15 += hours.ot15;
       classified.ot20 += hours.ot20;
