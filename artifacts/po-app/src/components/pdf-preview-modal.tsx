@@ -90,7 +90,8 @@ function printingCaption(title: string) {
     .replace(/\s+[A-Z0-9][A-Z0-9./-]*$/i, "")
     .replace(/\s+preview$/i, "")
     .trim();
-  if (/^(sales\s+)?invoice$/i.test(base)) return "Tax Invoice Printing";
+  if (/^vendor\s+invoice$/i.test(base)) return "Vendor Invoice Printing";
+  if (/^(sales\s+|tax\s+)?invoice$/i.test(base)) return "Tax Invoice Printing";
   if (/payslip/i.test(base)) return "Payslip Printing";
   if (!base) return "Printing";
   return `${base} Printing`;

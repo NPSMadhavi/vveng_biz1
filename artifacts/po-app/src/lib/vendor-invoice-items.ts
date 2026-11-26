@@ -37,10 +37,9 @@ export function calcViLineAmount(
 ): number {
   if (isFoc) return 0;
   const hrs = Number(hours) || 0;
-  const hourly = String(uom || "").toLowerCase().startsWith("hour");
-  const factor = hourly && hrs > 0 ? hrs : 1;
-  const base = qty * factor * unitPrice;
-  return +(base - (base * discount) / 100).toFixed(2);
+  const hourly = String(uom || "").toLowerCase().startsWith("hour") || String(uom || "").toLowerCase() === "hr" || String(uom || "").toLowerCase() === "hrs";
+  const base = hourly ? (hrs > 0 ? hrs : qty) : qty;
+  return +(base * unitPrice - (base * unitPrice * discount) / 100).toFixed(2);
 }
 
 export function calcViSubtotal(items: VendorInvoiceLineItem[]): number {

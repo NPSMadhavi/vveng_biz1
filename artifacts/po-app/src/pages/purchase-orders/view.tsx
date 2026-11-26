@@ -15,6 +15,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
+import { ManpowerCustomerBillingRatesViewCard } from "@/components/manpower-quotation-fields";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader,
@@ -165,15 +166,50 @@ export default function PurchaseOrderView() {
 
   const deleteMutation = useDeletePurchaseOrder();
 
+  const quoteRefNo = (po as any)?.quoteRefNo;
+  const { data: linkedPQ } = useQuery<any>({
+    queryKey: ["purchase-quotation-by-quoteRefNo", quoteRefNo],
+    queryFn: async () => {
+      if (!quoteRefNo) return null;
+      try {
+        const res = await fetch("/api/purchase-quotations", { credentials: "include" });
+        if (!res.ok) return null;
+        const list = await res.json();
+        return Array.isArray(list) ? list.find((q: any) => q.pqNumber === quoteRefNo) : null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!quoteRefNo,
+  });
+
   const formatCurrency = (value: number) =>
     formatCurrencySafe(value, (po as any)?.currency);
 
   const hasPOUom = !!(po && (po.items as any[]).some((item: any) => item.uom && String(item.uom).trim() !== ""));
   const md = (po as any)?.manpowerDetails;
-  const isManpower = isManpowerRoute || !!(md && typeof md === "object" && (
-    md.source || md.customerRate || md.supplierRate || md.weekdayOtRate || md.otSupplierRate
-    || (Array.isArray(md.customerBillingRates) && md.customerBillingRates.length > 0)
-  ));
+  const pqMd = (linkedPQ as any)?.manpowerDetails;
+  const effectiveMd = {
+    source: "supplier",
+    ...(pqMd && typeof pqMd === "object" ? pqMd : {}),
+    ...(md && typeof md === "object" ? md : {}),
+    customerBillingRates:
+      (Array.isArray(md?.customerBillingRates) && md.customerBillingRates.length > 0)
+        ? md.customerBillingRates
+        : (Array.isArray(pqMd?.customerBillingRates) && pqMd.customerBillingRates.length > 0)
+          ? pqMd.customerBillingRates
+          : undefined,
+    supplierRate: md?.supplierRate || pqMd?.supplierRate,
+    otSupplierRate: md?.otSupplierRate || pqMd?.otSupplierRate,
+  };
+  const isManpower = isManpowerRoute || !!(
+    (effectiveMd && typeof effectiveMd === "object" && (
+      effectiveMd.customerRate || effectiveMd.supplierRate || effectiveMd.weekdayOtRate || effectiveMd.otSupplierRate
+      || (Array.isArray(effectiveMd.customerBillingRates) && effectiveMd.customerBillingRates.length > 0)
+    )) ||
+    (po as any)?.quoteRefNo?.startsWith?.("PQ") ||
+    (Array.isArray(po?.items) && po.items.some((item: any) => item.uom?.toLowerCase?.() === "hourly" || /hour/i.test(item.uom || "")))
+  );
 
   const getStatusBadge = (status: string, compact = false) => {
     const size = compact ? "text-xs py-0 px-1.5" : "text-sm py-1";
@@ -233,7 +269,7 @@ export default function PurchaseOrderView() {
 
     return (
     <>
-      {(linkedGrn || ["confirmed", "sent"].includes(po.status)) && (
+      {po && (linkedGrn || ["confirmed", "sent"].includes(po.status)) && (
         <Button
           variant="outline"
           className={`${btnClass} border-emerald-300 text-emerald-700 hover:bg-emerald-50`}
@@ -242,18 +278,6 @@ export default function PurchaseOrderView() {
         >
           <ClipboardList className={iconClass} />
           {createGrnMutation.isPending ? "Creating..." : "Convert to GRN"}
-        </Button>
-      )}
-      {["confirmed", "sent"].includes(po.status) && (
-        <Button
-          variant="outline"
-          className={`${btnClass} border-blue-300 text-blue-700 hover:bg-blue-50`}
-          disabled={linkedPIs.length > 0}
-          onClick={() => setLocation(
-            `/vendor-invoices/new?poId=${id}&poNumber=${encodeURIComponent(po.poNumber)}&vendorName=${encodeURIComponent(po.vendorName)}&amount=${po.totalAmount}&currency=${encodeURIComponent((po as any).currency || "SGD")}`
-          )}
-        >
-          Convert to Vendor Invoice
         </Button>
       )}
       <Button variant="outline" className={btnClass} onClick={() => setLocation(`/purchase-orders/${id}/edit`)}>
@@ -474,6 +498,15 @@ export default function PurchaseOrderView() {
           </CardContent>
         </Card>
       </div>
+
+      {isManpower && (
+        <ManpowerCustomerBillingRatesViewCard
+          manpowerDetails={effectiveMd}
+          items={(po as any)?.items || (linkedPQ as any)?.items}
+          currency={(po as any).currency || (linkedPQ as any)?.currency || "SGD"}
+          title="Supplier Billing Rates"
+        />
+      )}
 
       {!isManpower && (
       <Card>

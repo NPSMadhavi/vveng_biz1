@@ -1038,6 +1038,32 @@ function buildDoFooter(doc: jsPDF) {
 // ── PURCHASE ORDER PDF ────────────────────────────────────────────────────────
 
 export async function generatePO_PDF(po: PurchaseOrder, company?: Company | null, options?: { returnBase64?: boolean }): Promise<string | void> {
+  const poMd = (po as any).manpowerDetails || null;
+  const poIsManpower = !!(
+    (poMd && typeof poMd === "object" && (
+      poMd.source === "supplier" || poMd.supplierRate || poMd.customerRate || poMd.otSupplierRate || poMd.weekdayOtRate ||
+      (Array.isArray(poMd.customerBillingRates) && poMd.customerBillingRates.length > 0)
+    )) ||
+    (po as any).quoteRefNo?.startsWith?.("PQ") ||
+    (Array.isArray(po.items) && po.items.some((it: any) => it.uom?.toLowerCase?.() === "hourly" || /hour/i.test(it.uom || "")))
+  );
+
+  if (poIsManpower) {
+    const poAsQt = {
+      ...po,
+      qtNumber: po.poNumber,
+      customerName: po.vendorName,
+      customerAddress: po.vendorAddress,
+      customerContact: po.vendorContact,
+      customerContactEmail: (po as any).vendorContactEmail,
+      deliveryAddress: po.deliveryAddress,
+    } as unknown as Quotation;
+    return generateQuotation_PDF(poAsQt, company, null, {
+      ...options,
+      titleOverride: "Purchase Order",
+    });
+  }
+
   await ensurePdfFonts();
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   attachPdfFonts(doc);
@@ -1469,7 +1495,7 @@ function renderBottomDocInfo(
 
   const lineH = 3.8;
   const footerSepY = pageHeight - FOOTER_RESERVE + 1;
-  const blockH = calcBlockHeight(doc, settings, maxW);
+  const blockH = calcBlockHeight(doc, settings as any, maxW);
   let y = footerSepY - blockH;
 
   doc.setFontSize(7.5);
@@ -1590,12 +1616,50 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
   const qtDocDiscount = Number((qt as any).discountAmount) || 0;
   const qtMd = (qt as any).manpowerDetails || null;
   const qtBillingRates = Array.isArray(qtMd?.customerBillingRates) ? qtMd.customerBillingRates : [];
+
+  const isSupplierDoc =
+    /purchase|vendor|supplier/i.test(options?.titleOverride || "") ||
+    (qt as any).source === "supplier" ||
+    qtMd?.source === "supplier" ||
+    String((qt as any).qtNumber || "").startsWith("PQ") ||
+    String((qt as any).poNumber || "").startsWith("PO");
+
+  const normalRateFallback = isSupplierDoc
+    ? (qtMd?.supplierRate || qtMd?.customerRate)
+    : (qtMd?.customerRate || qtMd?.supplierRate);
+
+  const otRateFallback = isSupplierDoc
+    ? (qtMd?.otSupplierRate || qtMd?.weekdayOtRate || qtMd?.customerRateOt15)
+    : (qtMd?.customerRateOt15 || qtMd?.weekdayOtRate || qtMd?.otSupplierRate);
+
+  // Strip trailing/empty item rows that have no description and no part number
+  const allQtItems = ((qt.items as any[]) || []).filter((item: any) => {
+    if (item.type === "section") return htmlToText(item.sectionLabel || "").trim() !== "";
+    const hasDesc = htmlToText(item.description || "").trim() !== "";
+    const hasPart = (item.partNumber || "").trim() !== "";
+    return hasDesc || hasPart || (item.uom && /hour/i.test(item.uom)) || Number(item.unitPrice) > 0;
+  });
+  const regularQtItems = allQtItems.filter((item: any) => item.type !== "section");
+  const firstRegularItem = regularQtItems.find((it: any) => Number(it.unitPrice) > 0) || regularQtItems[0];
+  const itemUnitPrice = firstRegularItem ? Number(firstRegularItem.unitPrice) : 0;
+  const itemOtPrice = firstRegularItem && (Number((firstRegularItem as any).otRate) || Number((firstRegularItem as any).otUnitPrice))
+    ? Number((firstRegularItem as any).otRate || (firstRegularItem as any).otUnitPrice)
+    : (itemUnitPrice > 0 ? Math.round(itemUnitPrice * 1.5 * 100) / 100 : 0);
+
   const qtBillingNormalRate = Number(String(qtBillingRates[0]?.rate ?? "").replace(/[^0-9.]/g, "")) || 0;
   const qtBillingOtRate = Number(String(qtBillingRates[1]?.rate ?? "").replace(/[^0-9.]/g, "")) || 0;
-  const qtIsManpower = !!(qtMd && typeof qtMd === "object" && (
-    qtMd.source || qtMd.otSupplierRate || qtMd.customerRate || qtMd.supplierRate || qtMd.weekdayOtRate
-    || qtBillingNormalRate > 0 || qtBillingOtRate > 0 || qtBillingRates.length > 0
-  ));
+
+  const qtIsManpower = !!(
+    (qtMd && typeof qtMd === "object" && (
+      qtMd.source || qtMd.otSupplierRate || qtMd.customerRate || qtMd.supplierRate || qtMd.weekdayOtRate
+      || qtBillingNormalRate > 0 || qtBillingOtRate > 0 || qtBillingRates.length > 0
+    )) ||
+    String((qt as any).qtNumber || "").startsWith("PQ") ||
+    String((qt as any).poNumber || "").startsWith("PO") ||
+    String((qt as any).soNumber || "").startsWith("SO") ||
+    (Array.isArray(qt.items) && qt.items.some((it: any) => it.uom?.toLowerCase?.() === "hourly" || /hour/i.test(it.uom || "")))
+  );
+
   const qtGstFallback =
     Number(qt.tax) > 0 ? "Applicable" : "Not Applicable";
   const formatBillingGst = (raw: unknown) => {
@@ -1606,15 +1670,6 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
     const n = Number(String(raw ?? "").replace(/[^0-9.]/g, ""));
     return n > 0 ? `$${fmtNum(n)}` : "$0.00";
   };
-
-  // Strip trailing/empty item rows that have no description and no part number
-  const allQtItems = (qt.items as any[]).filter((item: any) => {
-    if (item.type === "section") return htmlToText(item.sectionLabel || "").trim() !== "";
-    const hasDesc = htmlToText(item.description || "").trim() !== "";
-    const hasPart = (item.partNumber || "").trim() !== "";
-    return hasDesc || hasPart;
-  });
-  const regularQtItems = allQtItems.filter((item: any) => item.type !== "section");
 
   // Manpower preview: Customer Billing Rates only (Category | Rate | GST)
   // Non-manpower: standard line-items table
@@ -1629,33 +1684,28 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
   const qtTablePages: number[] = [];
 
   if (qtIsManpower) {
+    const finalNormal = normalRateFallback || (itemUnitPrice > 0 ? itemUnitPrice : "");
+    const finalOt = otRateFallback || (itemOtPrice > 0 ? itemOtPrice : (finalNormal !== "" ? Math.round(Number(finalNormal) * 1.5 * 100) / 100 : ""));
+    const gstVal = qtMd?.customerRateGst || qtMd?.gst || formatBillingGst(null);
+
     const billingRowsRaw = qtBillingRates.length > 0
       ? qtBillingRates
       : [
-          {
-            category: "Normal Hour",
-            rate: qtMd?.customerRate || "",
-            gst: qtMd?.customerRateGst || "Applicable",
-          },
-          {
-            category: "OT 1.5x",
-            rate: qtMd?.customerRateOt15 || qtMd?.weekdayOtRate || "",
-            gst: qtMd?.customerRateGst || "Applicable",
-          },
+          ...(finalNormal !== "" ? [{ category: "Normal Hour", rate: finalNormal, gst: gstVal }] : []),
+          ...(finalOt !== "" ? [{ category: "OT 1.5x", rate: finalOt, gst: gstVal }] : []),
         ];
-    const billingRows = billingRowsRaw
-      .map((r: any) => ({
-        category: String(r?.category || "").trim(),
-        rate: r?.rate,
-        gst: formatBillingGst(r?.gst),
-      }))
-      .filter((r: any) => r.category || Number(String(r.rate ?? "").replace(/[^0-9.]/g, "")) > 0);
+
+    const billingRows = (billingRowsRaw.length > 0 ? billingRowsRaw : [
+      { category: "Normal Hour", rate: finalNormal || "", gst: gstVal },
+      { category: "OT 1.5x", rate: finalOt || "", gst: gstVal },
+    ]).map((r: any) => ({
+      category: String(r?.category || "").trim(),
+      rate: r?.rate,
+      gst: formatBillingGst(r?.gst),
+    }));
 
     qtHeaders = ["Category", "Rate (SGD / Hour)", "GST"];
-    qtTableData = (billingRows.length > 0 ? billingRows : [
-      { category: "Normal Hour", rate: "", gst: "Applicable" },
-      { category: "OT 1.5x", rate: "", gst: "Applicable" },
-    ]).map((r: any) => [r.category || "—", formatBillingRate(r.rate), r.gst]);
+    qtTableData = billingRows.map((r: any) => [r.category || "—", formatBillingRate(r.rate), r.gst]);
     qtDescColIdx = 0;
     qtRichDesc = qtTableData.map((row: any[]) => [{ text: String(row[0] || ""), bold: false, italic: false }]);
     qtFocFlags = qtTableData.map(() => false);
@@ -1750,7 +1800,7 @@ export async function generateQuotation_PDF(qt: Quotation, company?: Company | n
   if ((qt as any).customerNote?.trim()) qtBlocks.push({ title: "Customer Note:", content: (qt as any).customerNote });
   if ((qt as any).deliveryInstructions?.trim()) qtBlocks.push({ title: "Delivery Instructions:", content: (qt as any).deliveryInstructions });
   if (settings?.bankDetails) qtBlocks.push({ title: "Bank Details:", content: settings.bankDetails, shaded: true });
-  if (((qt as any).customerQuotationTerms || (qt as any).termsAndConditions || qtSettings?.quotationTerms)?.trim()) qtBlocks.push({ title: "Terms & Conditions:", content: ((qt as any).customerQuotationTerms || (qt as any).termsAndConditions || qtSettings?.quotationTerms) });
+  if (((qt as any).customerQuotationTerms || (qt as any).termsAndConditions || (qtSettings as any)?.termsAndConditions)?.trim()) qtBlocks.push({ title: "Terms & Conditions:", content: ((qt as any).customerQuotationTerms || (qt as any).termsAndConditions || (qtSettings as any)?.termsAndConditions) });
   const qtBankBlockH = calcBlockHeight(doc, qtBlocks, 125);
 
   if (!qtIsManpower) {
@@ -1982,7 +2032,7 @@ export async function generateInvoice_PDF(inv: Invoice, company?: Company | null
     return hasDesc || hasPart;
   });
   const regularInvItems = allInvItems.filter(item => item.type !== "section");
-  const hasInvPartNo = regularInvItems.some((item: any) => item.partNumber && String(item.partNumber).trim() !== "");
+  const hasInvPartNo = true;
   const hasInvItemDiscount = regularInvItems.some(item => Number(item.discount) > 0);
   const hasInvUom = regularInvItems.some((item: any) => item.uom && String(item.uom).trim() !== "");
 

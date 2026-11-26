@@ -11,6 +11,7 @@ import { generatePurchaseQuotation_PDF } from "@/lib/pdf";
 import { PdfPreviewModal, isSentToExternal } from "@/components/pdf-preview-modal";
 import { useToast } from "@/hooks/use-toast";
 import { useVedaFormActions } from "@/hooks/useVedaFormActions";
+import { ManpowerCustomerBillingRatesViewCard } from "@/components/manpower-quotation-fields";
 import { useAuth } from "@/contexts/auth-context";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -209,15 +210,6 @@ export default function PurchaseQuotationView() {
           </Button>
           <Button
             variant="outline"
-            className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50"
-            onClick={handleConvertToVendorInvoice}
-            disabled={!!converting || !canConvert}
-            title={!canConvert ? "Confirm the purchase quotation before converting" : undefined}
-          >
-            {converting === "vendor-invoice" ? "Converting..." : "Convert to Vendor Invoice"}
-          </Button>
-          <Button
-            variant="outline"
             className="gap-2"
             onClick={() => setLocation(`/purchase-quotations/${id}/edit`)}
             disabled={(doc as any).status === "sent"}
@@ -286,6 +278,15 @@ export default function PurchaseQuotationView() {
         </Card>
       </div>
 
+      {showManpowerCols && (
+        <ManpowerCustomerBillingRatesViewCard
+          manpowerDetails={md}
+          currency={(doc as any).currency || "SGD"}
+          title="Supplier Billing Rates"
+        />
+      )}
+
+      {!showManpowerCols && (
       <Card>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -368,6 +369,7 @@ export default function PurchaseQuotationView() {
         </div>
         )}
       </Card>
+      )}
 
       <PdfPreviewModal
         open={previewOpen}

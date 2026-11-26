@@ -403,16 +403,28 @@ export function ManpowerRequirementsCard({
   const [createdWorkers, setCreatedWorkers] = useState<string[]>([]);
   const [workerError, setWorkerError] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [workersDialogOpen, setWorkersDialogOpen] = useState(false);
   const [draftIds, setDraftIds] = useState<number[]>([]);
 
   const selectedIds = (useWatch({ control, name: "manpowerDetails.employeeIds" }) || []) as number[];
+  const watchedDesignation = String(useWatch({ control, name: "manpowerDetails.designation" }) || "").trim();
+  const watchedWorkerNames = String(useWatch({ control, name: "manpowerDetails.workerNames" }) || "");
   const lineItems = useWatch({ control, name: "items" }) || [];
   const designationOptions = useMemo(() => {
     const fromLines = (lineItems as Array<{ description?: string }>)
       .map((item) => String(item?.description || "").trim())
       .filter(Boolean);
-    return Array.from(new Set([...created, ...fromLines]));
-  }, [created, lineItems]);
+    return Array.from(new Set([...created, ...fromLines, ...(watchedDesignation ? [watchedDesignation] : [])]));
+  }, [created, lineItems, watchedDesignation]);
+
+  const workerList = useMemo(
+    () => watchedWorkerNames.split(",").map((v) => v.trim()).filter(Boolean),
+    [watchedWorkerNames],
+  );
+  const workerOptions = useMemo(
+    () => Array.from(new Set([...createdWorkers, ...workerList])),
+    [createdWorkers, workerList],
+  );
 
   const { data: employees = [], isLoading: employeesLoading, isError: employeesError } = useQuery({
     queryKey: ["quotation-manpower-employees"],
@@ -549,7 +561,7 @@ export function ManpowerRequirementsCard({
         )} />
         )}
 
-        <div className="grid grid-cols-1 items-end gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-4">
           {showEmployeePicker ? (
             <FormItem>
               <FormLabel>Select Employee</FormLabel>
@@ -594,6 +606,7 @@ export function ManpowerRequirementsCard({
                           .filter(Boolean);
                         const next = existing.includes(name) ? existing : [...existing, name];
                         field.onChange(next.join(", "));
+                        setValue("manpowerDetails.workers", String(next.length), { shouldDirty: true });
                         draftWorkerNameRef.current = "";
                         setDraftWorkerName("");
                         setCreatingWorker(false);
@@ -618,6 +631,7 @@ export function ManpowerRequirementsCard({
                         .filter(Boolean);
                       const next = existing.includes(value) ? existing : [...existing, value];
                       field.onChange(next.join(", "));
+                      setValue("manpowerDetails.workers", String(next.length), { shouldDirty: true });
                     }}
                   >
                     <FormControl>
@@ -627,11 +641,24 @@ export function ManpowerRequirementsCard({
                     </FormControl>
                     <SelectContent>
                       <SelectItem value={CREATE_WORKER}>Create</SelectItem>
-                      {createdWorkers.map((item) => (
+                      {workerOptions.map((item) => (
                         <SelectItem key={item} value={item}>{item}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                )}
+                {workerList.length > 0 && (
+                  <div className="pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs text-blue-700 border-blue-200 hover:bg-blue-50"
+                      onClick={() => setWorkersDialogOpen(true)}
+                    >
+                      View Workers ({workerList.length})
+                    </Button>
+                  </div>
                 )}
                 {workerError ? <p className="text-sm font-medium text-destructive">{workerError}</p> : null}
               </FormItem>
@@ -760,8 +787,8 @@ export function ManpowerRequirementsCard({
           )} />
         </div>
 
-                {showSupplierFields && (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        {showSupplierFields && (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <FormField control={control} name="manpowerDetails.supplierRate" render={({ field }) => (
               <FormItem className="min-w-0">
                 <FormLabel>Supplier Rate</FormLabel>
@@ -780,20 +807,53 @@ export function ManpowerRequirementsCard({
                 </FormControl>
               </FormItem>
             )} />
-            <FormField control={control} name="manpowerDetails.workingDates" render={({ field }) => (
-              <FormItem className="min-w-0">
-                <FormLabel>Working Days</FormLabel>
-                <FormControl><Input {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
-              </FormItem>
-            )} />
             <FormField control={control} name="manpowerDetails.otSupplierRate" render={({ field }) => (
               <FormItem className="min-w-0">
-                <FormLabel>OT Supplier Rate</FormLabel>
+                <FormLabel>Supplier OT Rate</FormLabel>
                 <FormControl><Input inputMode="decimal" {...field} value={field.value || ""} onKeyDown={addOnEnter} /></FormControl>
               </FormItem>
             )} />
           </div>
         )}
+
+        <Dialog open={workersDialogOpen} onOpenChange={setWorkersDialogOpen}>
+          <DialogContent className="z-[80] max-w-md">
+            <DialogHeader>
+              <DialogTitle>Workers ({workerList.length})</DialogTitle>
+            </DialogHeader>
+            {workerList.length === 0 ? (
+              <p className="py-4 text-sm text-muted-foreground text-center">No workers added yet.</p>
+            ) : (
+              <div className="max-h-72 overflow-y-auto rounded-md border divide-y">
+                {workerList.map((w, idx) => (
+                  <div key={w} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <span className="font-medium text-foreground">
+                      <span className="text-xs text-muted-foreground mr-2">{idx + 1}.</span>
+                      {w}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      aria-label={`Remove ${w}`}
+                      onClick={() => {
+                        const next = workerList.filter((item) => item !== w);
+                        setValue("manpowerDetails.workerNames", next.join(", "), { shouldDirty: true });
+                        setValue("manpowerDetails.workers", next.length ? String(next.length) : "", { shouldDirty: true });
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <DialogFooter>
+              <Button type="button" onClick={() => setWorkersDialogOpen(false)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
           <DialogContent className="z-[80] flex max-h-[80vh] max-w-lg flex-col gap-4">
@@ -881,29 +941,52 @@ export function ManpowerCustomerBillingRatesViewCard({
   manpowerDetails,
   currency = "SGD",
   title = "Customer Billing Rates",
+  items,
 }: {
   manpowerDetails: any;
   currency?: string;
   title?: string;
+  items?: any[];
 }) {
-  if (!manpowerDetails || typeof manpowerDetails !== "object") return null;
-
-  const rawRates: Array<{ category?: string; rate?: string | number; gst?: string }> =
-    Array.isArray(manpowerDetails.customerBillingRates) && manpowerDetails.customerBillingRates.length > 0
-      ? manpowerDetails.customerBillingRates
+  const md = manpowerDetails && typeof manpowerDetails === "object" ? manpowerDetails : {};
+  const isSupplier = md.source === "supplier" || /supplier/i.test(title);
+  const normalFallback = isSupplier ? (md.supplierRate || md.customerRate) : md.customerRate;
+  const otFallback = isSupplier ? (md.otSupplierRate || md.weekdayOtRate) : (md.customerRateOt15 || md.weekdayOtRate);
+  
+  let rawRates: Array<{ category?: string; rate?: string | number; gst?: string }> =
+    Array.isArray(md.customerBillingRates) && md.customerBillingRates.length > 0
+      ? md.customerBillingRates
       : [
-          ...(manpowerDetails.customerRate
-            ? [{ category: "Normal Hour", rate: manpowerDetails.customerRate, gst: manpowerDetails.customerRateGst || "Applicable" }]
+          ...(normalFallback
+            ? [{ category: "Normal Hour", rate: normalFallback, gst: md.customerRateGst || md.gst || "Applicable" }]
             : []),
-          ...((manpowerDetails.customerRateOt15 || manpowerDetails.weekdayOtRate)
-            ? [{ category: "OT 1.5x", rate: manpowerDetails.customerRateOt15 || manpowerDetails.weekdayOtRate, gst: manpowerDetails.customerRateGst || "Applicable" }]
+          ...(otFallback
+            ? [{ category: "OT 1.5x", rate: otFallback, gst: md.customerRateGst || md.gst || "Applicable" }]
             : []),
         ];
 
-  const rows = rawRates.filter(
-    (r) => String(r?.category || "").trim() !== "" || String(r?.rate ?? "").trim() !== ""
-  );
-  if (rows.length === 0) return null;
+  if (rawRates.length === 0 && Array.isArray(items) && items.length > 0) {
+    const regularItems = items.filter((it: any) => it.type !== "section");
+    const firstItem = regularItems.find((it: any) => Number(it.unitPrice) > 0) || regularItems[0];
+    if (firstItem) {
+      const up = Number(firstItem.unitPrice) || 0;
+      const otVal = Number((firstItem as any).otUnitPrice) || Number((firstItem as any).otRate) || (up > 0 ? Math.round(up * 1.5 * 100) / 100 : 0);
+      const gst = (firstItem as any).gst || md.customerRateGst || "Applicable";
+      if (up > 0) {
+        rawRates.push({ category: "Normal Hour", rate: up, gst });
+      }
+      if (otVal > 0) {
+        rawRates.push({ category: "OT 1.5x", rate: otVal, gst });
+      }
+    }
+  }
+
+  if (rawRates.length === 0) {
+    rawRates.push({ category: "Normal Hour", rate: "", gst: "Applicable" });
+    rawRates.push({ category: "OT 1.5x", rate: "", gst: "Applicable" });
+  }
+
+  const rows = rawRates;
 
   return (
     <Card>
@@ -949,15 +1032,22 @@ export function ManpowerCustomerBillingRatesCard({ control, title = "Customer Bi
     name: "manpowerDetails.customerBillingRates",
   });
 
+  const watchedSource = useWatch({ control, name: "manpowerDetails.source" }) || "";
+  const isSupplier = watchedSource === "supplier" || /supplier/i.test(title);
   const customerRate = useWatch({ control, name: "manpowerDetails.customerRate" }) || "";
   const customerRateOt15 = useWatch({ control, name: "manpowerDetails.customerRateOt15" }) || "";
   const weekdayOtRate = useWatch({ control, name: "manpowerDetails.weekdayOtRate" }) || "";
+  const supplierRate = useWatch({ control, name: "manpowerDetails.supplierRate" }) || "";
+  const otSupplierRate = useWatch({ control, name: "manpowerDetails.otSupplierRate" }) || "";
   const customerRateGst = useWatch({ control, name: "manpowerDetails.customerRateGst" }) || "Applicable";
   const syncingFromLegacy = useRef(false);
 
+  const activeNormalRate = isSupplier ? supplierRate : customerRate;
+  const activeOtRate = isSupplier ? otSupplierRate : (customerRateOt15 || weekdayOtRate);
+
   useEffect(() => {
-    const normal = String(customerRate || "");
-    const ot15 = String(customerRateOt15 || weekdayOtRate || "");
+    const normal = String(activeNormalRate || "");
+    const ot15 = String(activeOtRate || "");
     const gst = String(customerRateGst || "Applicable");
     const current = getValues("manpowerDetails.customerBillingRates");
     const rows = Array.isArray(current) ? [...current] : [];
@@ -971,13 +1061,13 @@ export function ManpowerCustomerBillingRatesCard({ control, title = "Customer Bi
     const next0 = {
       ...rows[0],
       category: rows[0]?.category || "Normal Hour",
-      rate: normal,
+      rate: normal || String(rows[0]?.rate || ""),
       gst: rows[0]?.gst || gst,
     };
     const next1 = {
       ...rows[1],
       category: rows[1]?.category || "OT 1.5x",
-      rate: ot15,
+      rate: ot15 || String(rows[1]?.rate || ""),
       gst: rows[1]?.gst || "Applicable",
     };
     if (String(rows[0]?.rate || "") === next0.rate && String(rows[1]?.rate || "") === next1.rate && rows.length >= 2) {
@@ -988,15 +1078,20 @@ export function ManpowerCustomerBillingRatesCard({ control, title = "Customer Bi
     rows[1] = next1;
     setValue("manpowerDetails.customerBillingRates", rows, { shouldDirty: false });
     queueMicrotask(() => { syncingFromLegacy.current = false; });
-  }, [customerRate, customerRateOt15, weekdayOtRate, customerRateGst, getValues, setValue]);
+  }, [activeNormalRate, activeOtRate, customerRateGst, getValues, setValue]);
 
   const syncLegacyRates = (index: number, rate: string) => {
     if (syncingFromLegacy.current) return;
     if (index === 0) {
-      setValue("manpowerDetails.customerRate", rate, { shouldDirty: true });
       const ot = otRateFromBase(rate);
-      setValue("manpowerDetails.customerRateOt15", ot, { shouldDirty: true });
-      setValue("manpowerDetails.weekdayOtRate", ot, { shouldDirty: true });
+      if (isSupplier) {
+        setValue("manpowerDetails.supplierRate", rate, { shouldDirty: true });
+        setValue("manpowerDetails.otSupplierRate", ot, { shouldDirty: true });
+      } else {
+        setValue("manpowerDetails.customerRate", rate, { shouldDirty: true });
+        setValue("manpowerDetails.customerRateOt15", ot, { shouldDirty: true });
+        setValue("manpowerDetails.weekdayOtRate", ot, { shouldDirty: true });
+      }
       const rows = getValues("manpowerDetails.customerBillingRates");
       if (Array.isArray(rows) && rows[1]) {
         syncingFromLegacy.current = true;
@@ -1007,10 +1102,14 @@ export function ManpowerCustomerBillingRatesCard({ control, title = "Customer Bi
       }
     }
     if (index === 1) {
-      setValue("manpowerDetails.customerRateOt15", rate, { shouldDirty: true });
-      setValue("manpowerDetails.weekdayOtRate", rate, { shouldDirty: true });
+      if (isSupplier) {
+        setValue("manpowerDetails.otSupplierRate", rate, { shouldDirty: true });
+      } else {
+        setValue("manpowerDetails.customerRateOt15", rate, { shouldDirty: true });
+        setValue("manpowerDetails.weekdayOtRate", rate, { shouldDirty: true });
+      }
     }
-  }
+  };
 
   return (
     <Card>

@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { recordVisibleInWorkingYear } from "@/lib/date-range";
 import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Pencil, Plus, Trash2 } from "lucide-react";
@@ -131,10 +130,7 @@ export default function Ir8aEmployersPage() {
     queryKey: ["/api/ir8a/employers"],
   });
   const workingYear = useWorkingYearBounds();
-  const visibleEmployers = useMemo(
-    () => employers.filter((employer) => recordVisibleInWorkingYear(employer.createdAt, workingYear)),
-    [employers, workingYear],
-  );
+  const visibleEmployers = employers;
 
   const createMutation = useMutation({
     mutationFn: async (payload: EmployerForm) => {

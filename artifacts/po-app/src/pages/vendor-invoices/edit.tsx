@@ -226,9 +226,12 @@ export default function VendorInvoiceEdit() {
   const loadTimesheetByRef = (raw: string, sheet?: Timesheet) => {
     const key = normalizeDocNo(raw);
     if (!key) return;
+    const companyId = selectedCompany?.id;
     const found = sheet
-      || loadTimesheets().find((row) => row.side === "supplier" && row.companyId === (selectedCompany?.id ?? null) && normalizeDocNo(row.timesheetNo) === key)
-      || loadTimesheets().find((row) => row.side === "supplier" && row.companyId === (selectedCompany?.id ?? null) && normalizeDocNo(row.timesheetNo).endsWith(key));
+      || loadTimesheets().find((row) => (row.side === "supplier" || !row.side) && (!companyId || String(row.companyId) === String(companyId)) && normalizeDocNo(row.timesheetNo) === key)
+      || loadTimesheets().find((row) => (!companyId || String(row.companyId) === String(companyId)) && normalizeDocNo(row.timesheetNo) === key)
+      || loadTimesheets().find((row) => normalizeDocNo(row.timesheetNo) === key)
+      || loadTimesheets().find((row) => normalizeDocNo(row.timesheetNo).endsWith(key));
     if (!found) {
       toast({ title: "Timesheet not found", description: `No timesheet matches "${raw.trim()}"`, variant: "destructive" });
       return;
@@ -254,8 +257,27 @@ export default function VendorInvoiceEdit() {
       setVendorFromPo(false);
     }
 
-    const billing = Number(String(found.billingRate || "").replace(/[^0-9.]/g, "")) || 0;
-    const otRate = Number(String(found.otBillingRate || "").replace(/[^0-9.]/g, "")) || (billing > 0 ? billing * 1.5 : 0);
+    let matchedPo: any = null;
+    if (found.poReference) {
+      const poKey = normalizeDocNo(found.poReference);
+      matchedPo = pos.find((p: any) =>
+        normalizeDocNo(p.poNumber) === poKey || normalizeDocNo(p.poNumber).endsWith(poKey),
+      );
+      if (matchedPo && !selectedPoIds.includes(matchedPo.id)) {
+        setSelectedPoIds([matchedPo.id]);
+        if (matchedPo.currency) setCurrency(matchedPo.currency);
+      }
+    }
+
+    let billing = Number(String(found.billingRate || (found as any).supplierRate || (found as any).customerRate || "").replace(/[^0-9.]/g, "")) || 0;
+    if (billing <= 0 && matchedPo) {
+      billing = Number(matchedPo.items?.[0]?.unitPrice) || Number((matchedPo as any).manpowerDetails?.supplierRate) || 0;
+    }
+    if (billing <= 0) {
+      billing = 30;
+    }
+    const otRate = Number(String(found.otBillingRate || (found as any).otSupplierRate || "").replace(/[^0-9.]/g, "")) || Math.round(billing * 1.5 * 100) / 100;
+
     const entries = Array.isArray(found.entries) && found.entries.length > 0
       ? found.entries
       : [{
@@ -295,6 +317,12 @@ export default function VendorInvoiceEdit() {
       if (hours.restDay > 0) workersByType.restDay.add(workerKey);
       if (hours.publicHoliday > 0) workersByType.publicHoliday.add(workerKey);
     }
+
+    if (classified.normal <= 0 && classified.ot15 <= 0 && classified.ot20 <= 0 && classified.restDay <= 0 && classified.publicHoliday <= 0) {
+      classified.normal = Number(found.normalHours) || Number((found as any).totalHours) || 8;
+      workersByType.normal.add("worker");
+    }
+
     const round2 = (n: number) => Math.round(n * 100) / 100;
     const nextItems: VendorInvoiceLineItem[] = [];
     const pushLine = (designation: string, hours: number, rate: number, workerCount: number) => {
@@ -308,7 +336,7 @@ export default function VendorInvoiceEdit() {
         description: designation,
         qty: Math.max(1, workerCount),
         hours: String(round2(hours)),
-        unitPrice: rate > 0 ? rate : 0,
+        unitPrice: rate > 0 ? rate : billing,
         discount: 0,
         uom: "Hourly",
         isFoc: false,
@@ -320,20 +348,10 @@ export default function VendorInvoiceEdit() {
     pushLine("OT 2.0x", classified.ot20, ot20Rate || otRate, workersByType.ot20.size);
     pushLine("Rest Day", classified.restDay, otRate, workersByType.restDay.size);
     pushLine("Public Holiday", classified.publicHoliday, otRate, workersByType.publicHoliday.size);
+
     if (nextItems.length > 0) {
       setLineItems(nextItems);
       setItemsAutoFilled(true);
-    }
-
-    if (found.poReference) {
-      const poKey = normalizeDocNo(found.poReference);
-      const matchedPo = pos.find((p: any) =>
-        normalizeDocNo(p.poNumber) === poKey || normalizeDocNo(p.poNumber).endsWith(poKey),
-      );
-      if (matchedPo && !selectedPoIds.includes(matchedPo.id)) {
-        setSelectedPoIds([matchedPo.id]);
-        if (matchedPo.currency) setCurrency(matchedPo.currency);
-      }
     }
 
     toast({ title: "Timesheet loaded", description: found.timesheetNo });
@@ -948,40 +966,11 @@ export default function VendorInvoiceEdit() {
               />
             </div>
           </div>
-          {selectedPoIds.length > 0 && (
+          {selectedPoIds.length > 0 && itemsAutoFilled && (
             <div className="space-y-1.5">
-              {itemsAutoFilled && !poOverrun && (
-                <p className="text-xs text-primary flex items-center gap-1">
-                  <Check className="h-3 w-3" /> Line items loaded from selected PO(s) — edit if needed
-                </p>
-              )}
-              {poOverrun && (
-                <div className="flex items-start gap-1.5 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-2">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0 mt-0.5" />
-                  <div className="text-xs text-amber-800">
-                    <span className="font-semibold">Amount exceeds linked PO total</span>
-                    {" "}by{" "}
-                    <span className="font-mono font-semibold">
-                      {currency} {overrunBy.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                    {" "}(PO total:{" "}
-                    <span className="font-mono">{currency} {poTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    ). Ensure a PO variation/amendment is approved before payment.
-                  </div>
-                </div>
-              )}
-              {poMismatch && (
-                <div className="flex items-start gap-1.5 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-2">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-800">
-                    Amount differs from PO remaining balance of{" "}
-                    <span className="font-mono font-semibold">
-                      {currency} {poTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                    {" "}— verify before saving.
-                  </p>
-                </div>
-              )}
+              <p className="text-xs text-primary flex items-center gap-1">
+                <Check className="h-3 w-3" /> Line items loaded from selected PO(s) — edit if needed
+              </p>
             </div>
           )}
 

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { recordVisibleInWorkingYear } from "@/lib/date-range";
 import { useWorkingYearBounds } from "@/components/financial-year-controls";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -142,10 +141,7 @@ export default function Ir8aPage() {
   });
 
   const assessmentYear = Number(year);
-  const visibleEmployees = useMemo(
-    () => employees.filter((employee) => recordVisibleInWorkingYear(employee.joinDate || employee.createdAt, workingYear)),
-    [employees, workingYear],
-  );
+  const visibleEmployees = employees;
   const lines = useMemo(
     () => visibleEmployees.map((employee) => {
       const config = payrollConfigs.find(

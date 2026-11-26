@@ -61,7 +61,7 @@ export default function TimesheetList({ side }: { side: DeploymentSide }) {
               <TableHead>Timesheet No.</TableHead>
               <TableHead>Work Date</TableHead>
               <TableHead>PO Reference No.</TableHead>
-              <TableHead>Employee</TableHead>
+              <TableHead>{side === "customer" ? "Employee" : "Worker"}</TableHead>
               <TableHead>{partyLabel}</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-28">Actions</TableHead>
@@ -79,7 +79,7 @@ export default function TimesheetList({ side }: { side: DeploymentSide }) {
                 <TableCell className="font-medium">{row.timesheetNo}</TableCell>
                 <TableCell>{formatDisplayDate(row.workDate)}</TableCell>
                 <TableCell>{row.poReference || row.deploymentNo || "—"}</TableCell>
-                <TableCell>{(row.entries && row.entries.length > 1) ? `${row.entries.length} employees` : (row.employeeLabel || row.entries?.[0]?.employeeLabel || "—")}</TableCell>
+                <TableCell>{(row.entries && row.entries.length > 1) ? `${row.entries.length} ${side === "customer" ? "employees" : "workers"}` : (row.employeeLabel || row.entries?.[0]?.employeeLabel || "—")}</TableCell>
                 <TableCell>{row.partyName || "—"}</TableCell>
                 <TableCell>{statusBadge(row.status)}</TableCell>
                 <TableCell onClick={(event) => event.stopPropagation()}>

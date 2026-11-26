@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useRoute } from "wouter";
-import { Trash2 } from "lucide-react";
+import { Trash2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
@@ -60,9 +60,12 @@ type PoDoc = {
   workLocation?: string;
   employeeIds?: number[];
   employeeNames?: string;
+  workerNames?: string;
   billingRate?: string;
   qtId?: number | null;
   qtNumber?: string;
+  items?: any[];
+  manpowerDetails?: any;
 };
 
 type EmpOpt = { id: string; label: string };
@@ -265,6 +268,29 @@ function parseEmployeeNames(raw: unknown): string[] {
   return String(raw).split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+function parseWorkerList(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item) => parseWorkerList(item));
+  }
+  const str = String(raw).trim();
+  if (!str) return [];
+  return str
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (!s) return false;
+      const lower = s.toLowerCase();
+      return (
+        !lower.includes("normal hour") &&
+        !lower.includes("ot 1.5") &&
+        !lower.includes("ot 2.0") &&
+        !lower.includes("supplier manpower") &&
+        !lower.includes("customer manpower")
+      );
+    });
+}
+
 function mapSalesOrders(docs: any[]): PoDoc[] {
   return (docs || []).map((doc) => {
     const md = doc.manpowerDetails || {};
@@ -281,6 +307,8 @@ function mapSalesOrders(docs: any[]): PoDoc[] {
       billingRate: String(md.customerRate || md.customerBillingRates?.[0]?.rate || ""),
       qtId: doc.qtId != null ? Number(doc.qtId) : null,
       qtNumber: String(doc.qtNumber || ""),
+      items: doc.items || [],
+      manpowerDetails: md,
     };
   }).filter((row) => row.number);
 }
@@ -289,6 +317,7 @@ function mapPurchaseOrders(docs: any[]): PoDoc[] {
   return (docs || []).map((doc) => {
     const md = doc.manpowerDetails || {};
     const ids = parseEmployeeIds(md.employeeIds);
+    const workerNamesStr = String(md.workerNames || md.employeeNames || "");
     return {
       id: Number(doc.id),
       number: String(doc.poNumber || ""),
@@ -297,15 +326,18 @@ function mapPurchaseOrders(docs: any[]): PoDoc[] {
       project: String(md.project || ""),
       workLocation: String(md.workLocation || doc.deliveryAddress || ""),
       employeeIds: ids,
-      employeeNames: String(md.employeeNames || ""),
+      employeeNames: workerNamesStr,
+      workerNames: workerNamesStr,
       billingRate: String(md.supplierRate || md.customerRate || md.customerBillingRates?.[0]?.rate || ""),
-      qtId: null,
-      qtNumber: "",
+      qtId: doc.pqId != null ? Number(doc.pqId) : null,
+      qtNumber: String(doc.quoteRefNo || doc.pqNumber || ""),
+      items: Array.isArray(doc.items) ? doc.items : [],
+      manpowerDetails: md,
     };
   }).filter((row) => row.number);
 }
 
-function entryTotals(entries: TimesheetEntry[]) {
+function entryTotals(entries: TimesheetEntry[], isSupplier = false) {
   const normal = entries.reduce((sum, row) => {
     const scaled = scaleEntryHours(row);
     const rawN = Number(row.normalHours) || 0;
@@ -318,12 +350,13 @@ function entryTotals(entries: TimesheetEntry[]) {
   }, 0);
   const restRow = entries.find((e) => String(e.dayType || "").toLowerCase().includes("rest"));
   const first = entries[0];
+  const unitNoun = isSupplier ? "workers" : "employees";
   return {
     normalHours: String(Math.round(normal * 100) / 100),
     overtimeHours: String(Math.round(overtime * 100) / 100),
     employeeId: first?.employeeId || "",
     employeeLabel: entries.length > 1
-      ? `${entries.length} employees`
+      ? `${entries.length} ${unitNoun}`
       : (first?.employeeLabel || ""),
     workLocation: first?.workLocation || "",
     workDate: first?.workDate || first?.workFrom || todayIso(),
@@ -405,6 +438,29 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
 
   const initialEntry = existing?.entries?.[0];
   const initialRestEntry = existing?.entries?.find((e) => String(e.dayType || "").toLowerCase().includes("rest"));
+  const personNoun = side === "customer" ? "Employee" : "Worker";
+  const [customWorkers, setCustomWorkers] = useState<Record<string, string[]>>({});
+  const [newWorkerName, setNewWorkerName] = useState("");
+  const [showAddWorkerDialog, setShowAddWorkerDialog] = useState(false);
+
+  function handleAddCustomWorker() {
+    const name = newWorkerName.trim();
+    if (!name) return;
+    const currentPoKey = String(poId || "default");
+    setCustomWorkers((prev) => {
+      const list = prev[currentPoKey] || [];
+      return {
+        ...prev,
+        [currentPoKey]: list.includes(name) ? list : [...list, name],
+      };
+    });
+    const optId = `worker-${name}`;
+    setEmployeeKey(optId);
+    setNewWorkerName("");
+    setShowAddWorkerDialog(false);
+    toast({ title: `Worker "${name}" added.` });
+  }
+
   const [timesheetNo] = useState(() => existing?.timesheetNo ?? "");
   const [project, setProject] = useState(() => existing?.project ?? "");
   const [partyId, setPartyId] = useState(() => existing?.partyId ?? "");
@@ -458,12 +514,16 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   const shownNo = existing?.timesheetNo || timesheetNo || runningNo.value;
   const selectedParty = parties.find((party) => String(party.id) === String(partyId)) ?? null;
   const relatedPos = useMemo(() => {
-    if (!partyId && !selectedParty) return [];
-    return allPos.filter((doc) => {
-      if (doc.partyId != null && partyId && String(doc.partyId) === String(partyId)) return true;
-      if (selectedParty?.name && doc.partyName.trim().toLowerCase() === selectedParty.name.trim().toLowerCase()) return true;
+    // If no party selected, show all POs so user can select any PO directly
+    if (!partyId && !selectedParty) return allPos;
+    const partyName = (selectedParty?.name || "").trim().toLowerCase();
+    const partyIdStr = String(partyId || "");
+    const filtered = allPos.filter((doc) => {
+      if (doc.partyId != null && partyIdStr && String(doc.partyId) === partyIdStr) return true;
+      if (partyName && doc.partyName && doc.partyName.trim().toLowerCase() === partyName) return true;
       return false;
     });
+    return filtered;
   }, [allPos, partyId, selectedParty]);
 
   const selectedPo = relatedPos.find((doc) => String(doc.id) === String(poId))
@@ -474,34 +534,82 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     const rows = side === "customer"
       ? (Array.isArray(quotations) ? (quotations as any[]) : [])
       : (Array.isArray(purchaseQuotations) ? (purchaseQuotations as any[]) : []);
-    if (!rows.length) return [] as any[];
+    if (!rows.length || !selectedPo) return [] as any[];
     const matched: any[] = [];
-    if (selectedPo?.qtId != null) {
+    if (selectedPo.qtId != null) {
       const byId = rows.find((row) => Number(row.id) === Number(selectedPo.qtId));
       if (byId) matched.push(byId);
     }
-    if (selectedPo?.qtNumber) {
+    if (selectedPo.qtNumber) {
       const key = String(selectedPo.qtNumber).trim().toUpperCase();
       const byNo = rows.find((row) =>
         String(row.qtNumber || row.pqNumber || "").trim().toUpperCase() === key
       );
       if (byNo && !matched.some((row) => Number(row.id) === Number(byNo.id))) matched.push(byNo);
     }
-    // Same party quotations (covers older docs that lost employeeIds)
-    const partyName = (selectedParty?.name || selectedPo?.partyName || "").trim().toLowerCase();
-    const partyIdNum = selectedParty?.id != null ? Number(selectedParty.id) : (selectedPo?.partyId != null ? Number(selectedPo.partyId) : null);
-    rows.forEach((row) => {
-      const rowPartyId = side === "customer" ? row.customerId : row.vendorId;
-      const rowPartyName = side === "customer" ? row.customerName : row.vendorName;
-      const sameId = partyIdNum != null && rowPartyId != null && Number(rowPartyId) === partyIdNum;
-      const sameName = partyName && String(rowPartyName || "").trim().toLowerCase() === partyName;
-      if ((sameId || sameName) && !matched.some((m) => Number(m.id) === Number(row.id))) matched.push(row);
-    });
+    // Only fall back to same party quotations for customer side if no qt linked
+    if (matched.length === 0 && side === "customer") {
+      const partyName = (selectedParty?.name || selectedPo?.partyName || "").trim().toLowerCase();
+      const partyIdNum = selectedParty?.id != null ? Number(selectedParty.id) : (selectedPo?.partyId != null ? Number(selectedPo.partyId) : null);
+      rows.forEach((row) => {
+        const rowPartyId = row.customerId;
+        const rowPartyName = row.customerName;
+        const sameId = partyIdNum != null && rowPartyId != null && Number(rowPartyId) === partyIdNum;
+        const sameName = partyName && String(rowPartyName || "").trim().toLowerCase() === partyName;
+        if ((sameId || sameName) && !matched.some((m) => Number(m.id) === Number(row.id))) matched.push(row);
+      });
+    }
     return matched;
   }, [side, selectedPo, selectedParty, quotations, purchaseQuotations]);
 
   const employeeOptions: EmpOpt[] = useMemo(() => {
-    if (!selectedPo && !selectedParty) return [];
+    if (!selectedPo) return [];
+
+    if (side === "supplier") {
+      const workerSet = new Set<string>();
+
+      // 1. From selected PO only
+      parseWorkerList(selectedPo.workerNames).forEach((w) => workerSet.add(w));
+      parseWorkerList(selectedPo.employeeNames).forEach((w) => workerSet.add(w));
+      parseWorkerList(selectedPo.manpowerDetails?.workerNames).forEach((w) => workerSet.add(w));
+      parseWorkerList(selectedPo.manpowerDetails?.employeeNames).forEach((w) => workerSet.add(w));
+      (selectedPo.items || []).forEach((item: any) => {
+        const desc = item.description || item.name || "";
+        if (desc && !/^(normal|ot|overtime|rest|public|holiday)/i.test(desc.trim())) {
+          parseWorkerList(desc).forEach((w) => workerSet.add(w));
+        }
+      });
+
+      // 2. From linked Quotation of this selected PO only
+      linkedQuotations.forEach((qt) => {
+        const md = qt?.manpowerDetails || {};
+        parseWorkerList(md.workerNames).forEach((w) => workerSet.add(w));
+        parseWorkerList(md.employeeNames).forEach((w) => workerSet.add(w));
+        (qt.items || []).forEach((item: any) => {
+          const desc = item.description || item.name || "";
+          if (desc && !/^(normal|ot|overtime|rest|public|holiday)/i.test(desc.trim())) {
+            parseWorkerList(desc).forEach((w) => workerSet.add(w));
+          }
+        });
+      });
+
+      // 3. From custom workers added by user for this PO
+      const currentPoKey = String(selectedPo.id);
+      (customWorkers[currentPoKey] || []).forEach((w) => workerSet.add(w));
+
+      // 4. From existing entries in this timesheet if editing for this PO
+      if (existing && String(existing.poId) === String(selectedPo.id)) {
+        (existing.entries || []).forEach((e) => {
+          if (e.employeeLabel) workerSet.add(e.employeeLabel);
+        });
+      }
+
+      const list = Array.from(workerSet).filter(Boolean);
+      return list.map((name) => ({
+        id: `worker-${name}`,
+        label: name,
+      }));
+    }
 
     const labelFor = (
       emp: { id?: number | string; name?: string | null; employeeId?: string | null; designation?: string | null } | undefined,
@@ -562,7 +670,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     }
 
     return [];
-  }, [selectedPo, selectedParty, allEmployees, linkedQuotations]);
+  }, [side, selectedPo, selectedParty, allEmployees, linkedQuotations, customWorkers, entries, existing]);
 
   const classification = useMemo(() => sumClassification(entries), [entries]);
 
@@ -603,6 +711,14 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     setPoId(value);
     const doc = relatedPos.find((row) => String(row.id) === String(value)) || allPos.find((row) => String(row.id) === String(value));
     if (!doc) return;
+    if (!partyId) {
+      if (doc.partyId != null) {
+        setPartyId(String(doc.partyId));
+      } else if (doc.partyName) {
+        const p = parties.find((pt) => pt.name.trim().toLowerCase() === doc.partyName.trim().toLowerCase());
+        if (p) setPartyId(String(p.id));
+      }
+    }
     if (doc.project) setProject(doc.project);
     if (doc.workLocation) setWorkLocation(doc.workLocation);
     resetEntryFields(true);
@@ -615,7 +731,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   function addEntry() {
     if (readOnly) return;
     if (!employeeKey) {
-      toast({ title: "Select employee", variant: "destructive" });
+      toast({ title: `Select ${personNoun.toLowerCase()}`, variant: "destructive" });
       return;
     }
     if (!workFrom) {
@@ -707,7 +823,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
         days: entryDays,
       };
       newEntries.push(singleEntry);
-      toast({ title: `Employee hours saved (${entryDays} ${isNormal ? "normal working" : isRest ? "rest" : ""} days).` });
+      toast({ title: `${personNoun} hours saved (${entryDays} ${isNormal ? "normal working" : isRest ? "rest" : ""} days).` });
     }
 
     setEntries((prev) => {
@@ -737,10 +853,10 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       return;
     }
     if (entries.length === 0) {
-      toast({ title: "Save at least one employee", variant: "destructive" });
+      toast({ title: `Save at least one ${personNoun.toLowerCase()}`, variant: "destructive" });
       return;
     }
-    const totals = entryTotals(entries);
+    const totals = entryTotals(entries, side === "supplier");
     const hasRest = entries.some((e) => String(e.dayType || "").toLowerCase().includes("rest"));
     const hasHoliday = entries.some((e) => String(e.dayType || "").toLowerCase().includes("public") || String(e.dayType || "").toLowerCase().includes("holiday"));
     const savedDayType = hasRest ? "Rest Day" : hasHoliday ? "Public Holiday" : (dayType || totals.dayType);
@@ -806,9 +922,13 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
   async function applyRemoteStatuses(sheet: Timesheet) {
     if (!sheet.approvalToken) return;
     try {
-      const remote = await syncTimesheetAckStatus(sheet.approvalToken);
+      const remoteMap = await syncTimesheetAckStatus([sheet.id]);
+      const remote = remoteMap[sheet.id];
+      if (!remote) return;
       const status = localStatusFromAck(remote.status);
+      // Only apply an explicit remote decision (approved/rejected); never downgrade a Confirmed timesheet back to Pending.
       if (!status || status === sheet.status) return;
+      if (status === "submitted" && (sheet.status === "approved" || sheet.status === "rejected")) return;
       updateTimesheet(sheet.id, { status });
       setSaved({ ...sheet, status });
     } catch {
@@ -820,6 +940,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
     if (sheet.approvalToken) return sheet.approvalToken;
     try {
       const created = await createTimesheetAck(sheet);
+      if (!created?.token) return "";
       setAckToken(created.token);
       updateTimesheet(sheet.id, { approvalToken: created.token });
       setSaved({ ...sheet, approvalToken: created.token });
@@ -831,8 +952,9 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
 
   useEffect(() => {
     if (!current || current.status === "draft") return;
+    if (!readOnly && !current.approvalToken) return;
     void (async () => {
-      const token = await ensureAckToken(current);
+      const token = current.approvalToken || (await ensureAckToken(current));
       if (token) await applyRemoteStatuses({ ...current, approvalToken: token });
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -900,9 +1022,9 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                 </Select>
               </Field>
               <Field label="PO Reference No.">
-                <Select value={poId || undefined} onValueChange={onPoChange} disabled={readOnly || !partyId}>
+                <Select value={poId || undefined} onValueChange={onPoChange} disabled={readOnly}>
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder={partyId ? "Select PO" : `Select ${partyNoun.toLowerCase()} first`} />
+                    <SelectValue placeholder="Select PO" />
                   </SelectTrigger>
                   <SelectContent>
                     {relatedPos.length === 0 ? (
@@ -919,22 +1041,73 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
           {!readOnly && (
             <>
               <section className="space-y-4">
-                <ModalSectionHeader title="Employee Details" />
+                <ModalSectionHeader title={`${personNoun} Details`} />
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <Field label="Employee">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <Label className={labelClass}>{personNoun}</Label>
+                      {side === "supplier" && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAddWorkerDialog(true)}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-1"
+                        >
+                          <Plus className="h-3 w-3" /> Add Worker
+                        </button>
+                      )}
+                    </div>
                     <Select value={employeeKey || undefined} onValueChange={setEmployeeKey} disabled={!poId}>
                       <SelectTrigger className="w-full">
-                        <SelectValue placeholder={poId ? "Select employee" : "Select PO first"} />
+                        <SelectValue placeholder={poId ? `Select ${personNoun.toLowerCase()}` : "Select PO first"} />
                       </SelectTrigger>
                       <SelectContent>
                         {employeeOptions.length === 0 ? (
-                          <SelectItem value="__none" disabled>No employees found</SelectItem>
+                          <SelectItem value="__none" disabled>
+                            {side === "supplier" ? 'No workers found (click "+ Add Worker" above)' : "No employees found"}
+                          </SelectItem>
                         ) : employeeOptions.map((emp) => (
                           <SelectItem key={emp.id} value={emp.id}>{emp.label}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                  </Field>
+                    {showAddWorkerDialog && side === "supplier" && (
+                      <div className="mt-2 rounded-md border border-blue-200 bg-blue-50/60 p-2 flex items-center gap-2">
+                        <Input
+                          placeholder="Worker name..."
+                          value={newWorkerName}
+                          onChange={(e) => setNewWorkerName(e.target.value)}
+                          className="h-8 bg-white text-xs"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleAddCustomWorker();
+                            }
+                          }}
+                          autoFocus
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 px-2.5 text-xs bg-[#2563EB] text-white hover:bg-[#1D4ED8]"
+                          onClick={handleAddCustomWorker}
+                        >
+                          Add
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 px-2 text-xs text-gray-500"
+                          onClick={() => {
+                            setShowAddWorkerDialog(false);
+                            setNewWorkerName("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                   <Field label="Worksite">
                     <Input value={workLocation} onChange={(event) => setWorkLocation(event.target.value)} />
                   </Field>
@@ -1000,12 +1173,12 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
           )}
 
           <section className="space-y-4">
-            <ModalSectionHeader title="Saved Employees" />
+            <ModalSectionHeader title={`Saved ${personNoun}s`} />
             <div className="overflow-hidden rounded-lg border border-[#E5E7EB] bg-white">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Employee</TableHead>
+                    <TableHead>{personNoun}</TableHead>
                     <TableHead>Work From</TableHead>
                     <TableHead>Work To</TableHead>
                     <TableHead>Worksite</TableHead>
@@ -1025,7 +1198,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                   {entries.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={readOnly ? 13 : 14} className="h-24 text-center text-muted-foreground">
-                        No employees saved yet.
+                        No {personNoun.toLowerCase()}s saved yet.
                       </TableCell>
                     </TableRow>
                   ) : entries.map((row) => (
