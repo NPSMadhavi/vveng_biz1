@@ -413,8 +413,10 @@ export default function InvoiceEdit() {
   const loadTimesheetByRef = async (raw: string, sheet?: Timesheet) => {
     const key = normalizeDocNo(raw);
     if (!key) return;
-    const found = sheet || loadTimesheets().find((row) => normalizeDocNo(row.timesheetNo) === key)
-      || loadTimesheets().find((row) => normalizeDocNo(row.timesheetNo).endsWith(key));
+    const companyId = selectedCompany?.id ?? null;
+    const companySheets = loadTimesheets().filter((row) => row.side === "customer" && row.companyId === companyId);
+    const found = sheet || companySheets.find((row) => normalizeDocNo(row.timesheetNo) === key)
+      || companySheets.find((row) => normalizeDocNo(row.timesheetNo).endsWith(key));
     if (!found) {
       toast({ title: "Timesheet not found", description: `No timesheet matches "${raw.trim()}"`, variant: "destructive" });
       return;

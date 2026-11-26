@@ -114,6 +114,11 @@ const BARE_ACTION_LABELS: Array<{ re: RegExp; label: string }> = [
   { re: /^configure\s*schedule$/i, label: "Configure Schedule" },
   { re: /^restore\s*from\s*backup$/i, label: "Restore From Backup" },
   { re: /^view\s*archives(?:\s*below)?$/i, label: "View Archives Below" },
+  { re: /^(?:open\s+)?(?:the\s+)?pick\s+from\s+customers?(?:\s+button|\s+modal|\s+dialog)?$/i, label: "Pick from Customers" },
+  { re: /^(?:open\s+)?(?:the\s+)?pick\s+from\s+vendors?(?:\s+button|\s+modal|\s+dialog)?$/i, label: "Pick from Vendors" },
+  { re: /^(?:open\s+)?(?:the\s+)?pick\s+from\s+stock(?:\s+button|\s+modal|\s+dialog)?$/i, label: "Pick from stock" },
+  { re: /^(?:open\s+)?(?:the\s+)?generate\s+with\s+ai(?:\s+button)?$/i, label: "Generate with AI" },
+  { re: /^(?:open\s+)?(?:the\s+)?import\s+customer\s+po(?:\s+button)?$/i, label: "Import Customer PO" },
 ];
 
 export function matchUiClickCommand(command: string): string | null {

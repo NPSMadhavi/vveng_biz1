@@ -368,7 +368,6 @@ export default function Dashboard() {
   } = useDateRangeOptional();
   const [fyRolloverRequest, setFyRolloverRequest] = useState<{ from: string; to: string } | null>(null);
   const [selectedCard, setSelectedCard] = useState("Total Income");
-  const [hoveredCard, setHoveredCard] = useState<string | null>(null);
   const cardHighlightStyle: CSSProperties = {
     background: "linear-gradient(135deg, #2F4FC4 0%, #2B7BE8 100%)",
   };
@@ -959,26 +958,20 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Summary Cards — equal size, full-width row; blue on hover/click */}
+      {/* Summary Cards — equal size, full-width row; blue on click, subtle border/shadow on hover */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {summaryCards.map((card) => {
           const Icon = card.icon;
-          const highlighted = hoveredCard
-            ? hoveredCard === card.title
-            : selectedCard === card.title;
+          const highlighted = selectedCard === card.title;
           return (
             <button
               type="button"
               key={card.title}
               onClick={() => setSelectedCard(card.title)}
-              onMouseEnter={() => setHoveredCard(card.title)}
-              onMouseLeave={() => setHoveredCard(null)}
-              onFocus={() => setHoveredCard(card.title)}
-              onBlur={() => setHoveredCard(null)}
-              className={`flex h-[128px] w-full min-w-0 flex-col justify-between rounded-[16px] p-5 text-left shadow-[0_4px_16px_rgba(47,79,196,0.08)] transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-[#2B7BE8]/40 ${
+              className={`flex h-[128px] w-full min-w-0 flex-col justify-between rounded-[16px] p-5 text-left shadow-[0_4px_16px_rgba(47,79,196,0.08)] transition-all outline-none focus-visible:ring-2 focus-visible:ring-[#2B7BE8]/40 ${
                 highlighted
                   ? "border border-transparent text-white"
-                  : "border border-[#e4ebf7] bg-white text-[#0F1C33]"
+                  : "border border-[#e4ebf7] bg-white text-[#0F1C33] hover:border-[#2B7BE8]/40 hover:shadow-[0_6px_20px_rgba(47,79,196,0.14)]"
               }`}
               style={highlighted ? cardHighlightStyle : undefined}
             >

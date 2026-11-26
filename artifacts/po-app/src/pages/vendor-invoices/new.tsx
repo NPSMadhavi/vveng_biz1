@@ -160,8 +160,8 @@ export default function VendorInvoiceNew() {
     const key = normalizeDocNo(raw);
     if (!key) return;
     const found = sheet
-      || loadTimesheets().find((row) => row.side === "supplier" && normalizeDocNo(row.timesheetNo) === key)
-      || loadTimesheets().find((row) => row.side === "supplier" && normalizeDocNo(row.timesheetNo).endsWith(key));
+      || loadTimesheets().find((row) => row.side === "supplier" && row.companyId === (selectedCompany?.id ?? null) && normalizeDocNo(row.timesheetNo) === key)
+      || loadTimesheets().find((row) => row.side === "supplier" && row.companyId === (selectedCompany?.id ?? null) && normalizeDocNo(row.timesheetNo).endsWith(key));
     if (!found) {
       toast({ title: "Timesheet not found", description: `No timesheet matches "${raw.trim()}"`, variant: "destructive" });
       return;

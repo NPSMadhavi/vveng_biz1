@@ -1,9 +1,10 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth-context";
 import { loadTimesheets, type Timesheet } from "@/pages/manpower/timesheet-store";
 
 interface TimesheetRefSelectProps {
@@ -23,6 +24,8 @@ export function TimesheetRefSelect({
   placeholder = "Select timesheet reference",
   side = "customer",
 }: TimesheetRefSelectProps) {
+  const { selectedCompany } = useAuth();
+  const companyId = selectedCompany?.id ?? null;
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [tick, setTick] = useState(0);
@@ -30,9 +33,9 @@ export function TimesheetRefSelect({
   const sheets = useMemo(() => {
     void tick;
     return loadTimesheets()
-      .filter((row) => row.side === side && String(row.timesheetNo || "").trim())
+      .filter((row) => row.side === side && row.companyId === companyId && String(row.timesheetNo || "").trim())
       .sort((a, b) => String(b.timesheetNo).localeCompare(String(a.timesheetNo)));
-  }, [side, tick]);
+  }, [side, companyId, tick]);
 
   const filtered = search.trim()
     ? sheets.filter((row) => {

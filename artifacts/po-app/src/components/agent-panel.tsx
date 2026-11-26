@@ -292,6 +292,9 @@ const PATH_ALIASES: Record<string, string> = {
   "/backups/create": "/settings/backups?vedaCreate=1",
   "/backup/create": "/settings/backups?vedaCreate=1",
   "/create-backup": "/settings/backups?vedaCreate=1",
+  "/year-end": "/settings/year-end",
+  "/year-end-process": "/settings/year-end",
+  "/yearend": "/settings/year-end",
   "/report-designer": "/report-templates",
   "/report-design": "/report-templates",
   "/report_templates": "/report-templates",
@@ -623,7 +626,7 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
 
   const wantsNav = /\b(go\s*to|goto|open(?:ing)?|om|ope|op|on|show(?:ing)?|take\s*me|navigate|switch\s*to|bring\s*(me\s*)?up|launch|visit)\b/i.test(t)
     || /\b(page|module|screen|list)\b/.test(t)
-    || /^(warehouses?|stock\s*transfers?|stock\s*reports?|inventory\s*reports?|sales\s*person\s*(?:wise\s*)?reports?|batch\s*(?:&|and)?\s*expiry|item\s*master|invoices?|quotations?|quotes?|purchase\s*orders?|delivery\s*orders?|sales\s*orders?|customers?|vendors?|suppliers?|employees?|staff|payroll|ir8a(?:\s*\/\s*ais)?|ais\s*submission|employer'?s?(?:\s*\(?ir8a\)?)?|licenses?|stock|grn|dashboard|home|settings|backups?|audit\s*logs?|point\s*of\s*sale|pos|bill\s*of\s*materials|bom|purchase\s*quotations?|proforma\s*invoices?|vendor\s*invoices?|credit\s*notes?|debit\s*notes?|projects?|inventory|catalogue|catalog|add\s*(?:assets?|assests?)|assets?|assests?|fixed\s*(?:assets?|assests?)|(?:assets?|assests?|add)\s*register|depreciation(?:\s*schedule)?|(?:(?:fixed\s*)?(?:assets?|assests?)\s*)?disposals?|(?:(?:assets?|assests?)\s*)?disposal\s*reports?|(?:time\s*sheets?|timeshh?e?e?ts?)(?:\s*management)?|sales\s*(?:persons?|perosns?)|salespeople|sales\s*rep|address\s*book|contacts?|bank\s*(?:reconciliation|recon)|chart\s*of\s*acc(?:ounts?|punts?)|coa|journal\s*(?:entries|entry)|journals?|general\s*ledger|account\s*ledger|ledger|(?:trial|trail)\s*balance|balance\s*sheet|profit\s*(?:and|&)?\s*loss|p\s*(?:and|&)?\s*l|income\s*statement|cash\s*flow|income|expenses?|gst\s*f5|gst\s*f7|gst\s*io|withholding\s*tax|wht|eci|form\s*c-?s|iras\s*audit\s*file|iaf|ar\s*collections?|receivables?|ar\s*aging|customer\s*statements?|ap\s*(?:payments?|paymnets?)|payables?|ap\s*aging|vendor\s*statements?|admin|user\s*management|users?|report\s*(?:templates?|design(?:er)?))$/.test(t);
+    || /^(warehouses?|stock\s*transfers?|stock\s*reports?|inventory\s*reports?|sales\s*person\s*(?:wise\s*)?reports?|batch\s*(?:&|and)?\s*expiry|item\s*master|invoices?|quotations?|quotes?|purchase\s*orders?|delivery\s*orders?|sales\s*orders?|customers?|vendors?|suppliers?|employees?|staff|payroll|ir8a(?:\s*\/\s*ais)?|ais\s*submission|employer'?s?(?:\s*\(?ir8a\)?)?|licenses?|stock|grn|dashboard|home|settings|backups?|year\s*-?\s*end(?:\s*process)?|audit\s*logs?|point\s*of\s*sale|pos|bill\s*of\s*materials|bom|purchase\s*quotations?|proforma\s*invoices?|vendor\s*invoices?|credit\s*notes?|debit\s*notes?|projects?|inventory|catalogue|catalog|add\s*(?:assets?|assests?)|assets?|assests?|fixed\s*(?:assets?|assests?)|(?:assets?|assests?|add)\s*register|depreciation(?:\s*schedule)?|(?:(?:fixed\s*)?(?:assets?|assests?)\s*)?disposals?|(?:(?:assets?|assests?)\s*)?disposal\s*reports?|(?:time\s*sheets?|timeshh?e?e?ts?)(?:\s*management)?|sales\s*(?:persons?|perosns?)|salespeople|sales\s*rep|address\s*book|contacts?|bank\s*(?:reconciliation|recon)|chart\s*of\s*acc(?:ounts?|punts?)|coa|journal\s*(?:entries|entry)|journals?|general\s*ledger|account\s*ledger|ledger|(?:trial|trail)\s*balance|balance\s*sheet|profit\s*(?:and|&)?\s*loss|p\s*(?:and|&)?\s*l|income\s*statement|cash\s*flow|income|expenses?|gst\s*f5|gst\s*f7|gst\s*io|withholding\s*tax|wht|eci|form\s*c-?s|iras\s*audit\s*file|iaf|ar\s*collections?|receivables?|ar\s*aging|customer\s*statements?|ap\s*(?:payments?|paymnets?)|payables?|ap\s*aging|vendor\s*statements?|admin|user\s*management|users?|report\s*(?:templates?|design(?:er)?))$/.test(t);
   if (!wantsNav) return null;
 
   // "show/open X for Y" without create → let agent search (unless it's clearly a page jump or a module name containing "of")
@@ -735,6 +738,7 @@ function matchQuickNavigate(command: string): QuickNavResult | null {
   // System
   if (/\b(user\s*management|users?|admin)\b/.test(t)) return { path: "/admin" };
   if (/\baudit\s*logs?\b/.test(t)) return { path: "/audit-log" };
+  if (/\byear\s*-?\s*end(?:\s*process)?\b/.test(t)) return { path: "/settings/year-end" };
   if (/\bsettings?\b/.test(t)) return { path: "/settings" };
   if (/\bbackups?\b/.test(t)) return { path: "/settings/backups" };
   if (/\breport\s*(?:templates?|design(?:er)?)\b/.test(t)) return { path: "/report-templates" };
@@ -846,6 +850,7 @@ const PATH_LABELS: Record<string, string> = {
   "/settings": "Settings",
   "/settings/backups": "Backup & Restore",
   "/settings/backups?vedaCreate=1": "Create Backup",
+  "/settings/year-end": "Year End Process",
   "/report-templates": "Report Templates",
 };
 

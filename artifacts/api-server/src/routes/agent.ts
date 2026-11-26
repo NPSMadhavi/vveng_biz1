@@ -401,7 +401,7 @@ const AGENT_TOOLS = [
               "Directory: /customers, /customers?vedaNew=1, /vendors, /vendors?vedaNew=1, /sales-persons, /address-book. " +
               "Documents: /invoices, /invoices/new, /quotations, /quotations/new, /purchase-orders, /purchase-orders/new, /delivery-orders, /delivery-orders/new, /sales-orders, /sales-orders/new, /purchase-quotations, /purchase-quotations/new, /proforma-invoices, /proforma-invoices/new, /credit-notes, /credit-notes/new, /debit-notes, /debit-notes/new, /vendor-invoices, /vendor-invoices/new, /grn, /grn/new, /point-of-sale, /bill-of-materials. " +
               "Accounting: /accounting/chart-of-accounts, /accounting/journal-entries, /accounting/general-ledger, /accounting/trial-balance, /accounting/balance-sheet, /accounting/profit-loss, /accounting/cash-flow, /accounting/income, /accounting/expenses, /accounting/gst-f5, /accounting/gst-f7, /accounting/gst-io, /accounting/wht, /accounting/eci, /accounting/form-cs, /accounting/iaf, /accounting/ar, /accounting/ar-aging, /accounting/customer-statement, /accounting/ap, /accounting/ap-aging, /accounting/vendor-statement. " +
-              "System: /dashboard, /admin, /audit-log, /settings, /settings/backups, /settings/backups?vedaCreate=1 (Create Backup), /report-templates. " +
+              "System: /dashboard, /admin, /audit-log, /settings, /settings/backups, /settings/backups?vedaCreate=1 (Create Backup), /settings/year-end, /report-templates. " +
               "Document details/edit: /invoices/:id, /quotations/:id, etc.",
           },
           prefill: {
@@ -1782,6 +1782,9 @@ async function executeTool(
         "/backups": "/settings/backups",
         "/create-backup": "/settings/backups?vedaCreate=1",
         "/backups/create": "/settings/backups?vedaCreate=1",
+        "/year-end": "/settings/year-end",
+        "/year-end-process": "/settings/year-end",
+        "/yearend": "/settings/year-end",
         "/report-designer": "/report-templates",
         "/report_templates": "/report-templates",
         "/employee": "/employees",
@@ -2366,7 +2369,7 @@ function toolCatalogForPrompt(tools: any[]): string {
 }
 
 function looksLikeBizoneAction(text: string): boolean {
-  return /\b(create|open|show|save|email|search|find|navigate|go\s*to|invoice|quotation|purchase|employee|employer|payroll|ir8a|ais|asset|assest|register|depreciation|disposal|manpower|timesheet|timeshhet|sales\s*persons?|sales\s*perosns?|trial\s*balance|trail\s*balance|balance\s*sheet|profit|loss|cash\s*flow|ledger|chart\s*of\s*accounts|fill|confirm|void|customer|vendor|stock|journal|preview|download|update|edit|delete|list)\b/i.test(
+  return /\b(create|open|show|save|email|search|find|navigate|go\s*to|invoice|quotation|purchase|employee|employer|payroll|ir8a|ais|asset|assest|register|depreciation|disposal|manpower|timesheet|timeshhet|sales\s*persons?|sales\s*perosns?|trial\s*balance|trail\s*balance|balance\s*sheet|profit|loss|cash\s*flow|ledger|chart\s*of\s*accounts|year\s*-?\s*end|fill|confirm|void|customer|vendor|stock|journal|preview|download|update|edit|delete|list)\b/i.test(
     text || "",
   );
 }
