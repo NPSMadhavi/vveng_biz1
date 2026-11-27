@@ -547,7 +547,36 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       );
       if (byNo && !matched.some((row) => Number(row.id) === Number(byNo.id))) matched.push(byNo);
     }
-    // Only fall back to same party quotations for customer side if no qt linked
+
+    // Match convertedPoNumber / convertedPoId for supplier side
+    if (side === "supplier") {
+      const poNumKey = String(selectedPo.number || "").trim().toUpperCase();
+      rows.forEach((row) => {
+        const cNum = String(row.convertedPoNumber || "").trim().toUpperCase();
+        const cId = row.convertedPoId != null ? Number(row.convertedPoId) : null;
+        if (
+          (poNumKey && cNum === poNumKey) ||
+          (cId != null && cId === Number(selectedPo.id))
+        ) {
+          if (!matched.some((m) => Number(m.id) === Number(row.id))) matched.push(row);
+        }
+      });
+
+      // If still no direct match, match quotations for the same vendor
+      if (matched.length === 0) {
+        const partyName = (selectedParty?.name || selectedPo?.partyName || "").trim().toLowerCase();
+        const partyIdNum = selectedParty?.id != null ? Number(selectedParty.id) : (selectedPo?.partyId != null ? Number(selectedPo.partyId) : null);
+        rows.forEach((row) => {
+          const rowVendorId = row.vendorId;
+          const rowVendorName = row.vendorName;
+          const sameId = partyIdNum != null && rowVendorId != null && Number(rowVendorId) === partyIdNum;
+          const sameName = partyName && String(rowVendorName || "").trim().toLowerCase() === partyName;
+          if ((sameId || sameName) && !matched.some((m) => Number(m.id) === Number(row.id))) matched.push(row);
+        });
+      }
+    }
+
+    // Fall back to same party quotations for customer side if no qt linked
     if (matched.length === 0 && side === "customer") {
       const partyName = (selectedParty?.name || selectedPo?.partyName || "").trim().toLowerCase();
       const partyIdNum = selectedParty?.id != null ? Number(selectedParty.id) : (selectedPo?.partyId != null ? Number(selectedPo.partyId) : null);
@@ -567,35 +596,60 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
 
     if (side === "supplier") {
       const workerSet = new Set<string>();
+      const explicitDesignations = new Set<string>();
 
-      // 1. From selected PO only
+      const collectDesignations = (raw: unknown) => {
+        if (!raw) return;
+        if (Array.isArray(raw)) {
+          raw.forEach((r) => collectDesignations(r));
+          return;
+        }
+        String(raw)
+          .split(/[,;\n]+/)
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean)
+          .forEach((d) => explicitDesignations.add(d));
+      };
+
+      // Collect designations from explicit designation fields
+      collectDesignations(selectedPo.manpowerDetails?.designation);
+      collectDesignations(selectedPo.manpowerDetails?.designations);
+      linkedQuotations.forEach((qt) => {
+        const md = qt?.manpowerDetails || {};
+        collectDesignations(md.designation);
+        collectDesignations(md.designations);
+      });
+
+      // 1. From selected PO: workerNames / employeeNames
       parseWorkerList(selectedPo.workerNames).forEach((w) => workerSet.add(w));
       parseWorkerList(selectedPo.employeeNames).forEach((w) => workerSet.add(w));
       parseWorkerList(selectedPo.manpowerDetails?.workerNames).forEach((w) => workerSet.add(w));
       parseWorkerList(selectedPo.manpowerDetails?.employeeNames).forEach((w) => workerSet.add(w));
-      (selectedPo.items || []).forEach((item: any) => {
-        const desc = item.description || item.name || "";
-        if (desc && !/^(normal|ot|overtime|rest|public|holiday)/i.test(desc.trim())) {
-          parseWorkerList(desc).forEach((w) => workerSet.add(w));
-        }
-      });
 
-      // 2. From linked Quotation of this selected PO only
+      // 2. From linked Quotations of this selected PO
       linkedQuotations.forEach((qt) => {
         const md = qt?.manpowerDetails || {};
         parseWorkerList(md.workerNames).forEach((w) => workerSet.add(w));
         parseWorkerList(md.employeeNames).forEach((w) => workerSet.add(w));
-        (qt.items || []).forEach((item: any) => {
-          const desc = item.description || item.name || "";
-          if (desc && !/^(normal|ot|overtime|rest|public|holiday)/i.test(desc.trim())) {
-            parseWorkerList(desc).forEach((w) => workerSet.add(w));
-          }
-        });
       });
 
-      // 3. From custom workers added by user for this PO
-      const currentPoKey = String(selectedPo.id);
-      (customWorkers[currentPoKey] || []).forEach((w) => workerSet.add(w));
+      // 3. From items (both selectedPo.items and linkedQuotations.items)
+      const itemsList: any[] = [
+        ...(Array.isArray(selectedPo.items) ? selectedPo.items : []),
+        ...linkedQuotations.flatMap((qt) => (Array.isArray(qt.items) ? qt.items : [])),
+      ];
+
+      itemsList.forEach((item: any) => {
+        const desc = String(item.description || item.name || "").trim();
+        if (!desc) return;
+        // Skip obvious rate categories / unit labels
+        if (/^(normal|ot|overtime|rest|public|holiday|hourly|daily|monthly|billing|rate|sgd|gst)/i.test(desc)) {
+          return;
+        }
+        parseWorkerList(desc).forEach((w) => {
+          if (w) workerSet.add(w);
+        });
+      });
 
       // 4. From existing entries in this timesheet if editing for this PO
       if (existing && String(existing.poId) === String(selectedPo.id)) {
@@ -604,7 +658,54 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
         });
       }
 
-      const list = Array.from(workerSet).filter(Boolean);
+      // Standard list of designation keywords to filter out job titles from worker names
+      const KNOWN_DESIGNATION_PATTERNS = [
+        /^technician$/i,
+        /^general\s*worker$/i,
+        /^worker$/i,
+        /^engineer$/i,
+        /^accountant$/i,
+        /^driver$/i,
+        /^supervisor$/i,
+        /^manager$/i,
+        /^electrician$/i,
+        /^plumber$/i,
+        /^carpenter$/i,
+        /^welder$/i,
+        /^painter$/i,
+        /^mason$/i,
+        /^fitter$/i,
+        /^helper$/i,
+        /^operator$/i,
+        /^mechanic$/i,
+        /^safety\s*officer$/i,
+        /^foreman$/i,
+        /^cleaner$/i,
+        /^security$/i,
+        /^clerk$/i,
+        /^consultant$/i,
+        /^labor$/i,
+        /^labour$/i,
+      ];
+
+      const isDesignation = (name: string): boolean => {
+        const lower = name.trim().toLowerCase();
+        if (explicitDesignations.has(lower)) return true;
+        for (const pattern of KNOWN_DESIGNATION_PATTERNS) {
+          if (pattern.test(lower)) return true;
+        }
+        return false;
+      };
+
+      // Filter out any entries that are designations
+      const list = Array.from(workerSet)
+        .map((name) => name.trim())
+        .filter((name) => {
+          if (!name) return false;
+          if (isDesignation(name)) return false;
+          return true;
+        });
+
       return list.map((name) => ({
         id: `worker-${name}`,
         label: name,
@@ -616,7 +717,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
       fallback?: string,
     ) => {
       if (emp?.name || emp?.employeeId) {
-        return `${emp.name || "Employee"}${emp.employeeId ? ` (${emp.employeeId})` : ""}${emp.designation ? ` — ${emp.designation}` : ""}`;
+        return `${emp.name || "Employee"}${emp.employeeId ? ` (${emp.employeeId})` : ""}`;
       }
       return fallback || String(emp?.id || "");
     };
@@ -1044,18 +1145,7 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                 <ModalSectionHeader title={`${personNoun} Details`} />
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                   <div className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <Label className={labelClass}>{personNoun}</Label>
-                      {side === "supplier" && (
-                        <button
-                          type="button"
-                          onClick={() => setShowAddWorkerDialog(true)}
-                          className="text-xs text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-1"
-                        >
-                          <Plus className="h-3 w-3" /> Add Worker
-                        </button>
-                      )}
-                    </div>
+                    <Label className={labelClass}>{personNoun}</Label>
                     <Select value={employeeKey || undefined} onValueChange={setEmployeeKey} disabled={!poId}>
                       <SelectTrigger className="w-full">
                         <SelectValue placeholder={poId ? `Select ${personNoun.toLowerCase()}` : "Select PO first"} />
@@ -1063,50 +1153,13 @@ export default function TimesheetForm({ side }: { side: DeploymentSide }) {
                       <SelectContent>
                         {employeeOptions.length === 0 ? (
                           <SelectItem value="__none" disabled>
-                            {side === "supplier" ? 'No workers found (click "+ Add Worker" above)' : "No employees found"}
+                            {side === "supplier" ? "No workers found for this PO" : "No employees found"}
                           </SelectItem>
                         ) : employeeOptions.map((emp) => (
                           <SelectItem key={emp.id} value={emp.id}>{emp.label}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                    {showAddWorkerDialog && side === "supplier" && (
-                      <div className="mt-2 rounded-md border border-blue-200 bg-blue-50/60 p-2 flex items-center gap-2">
-                        <Input
-                          placeholder="Worker name..."
-                          value={newWorkerName}
-                          onChange={(e) => setNewWorkerName(e.target.value)}
-                          className="h-8 bg-white text-xs"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              handleAddCustomWorker();
-                            }
-                          }}
-                          autoFocus
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="h-8 px-2.5 text-xs bg-[#2563EB] text-white hover:bg-[#1D4ED8]"
-                          onClick={handleAddCustomWorker}
-                        >
-                          Add
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 px-2 text-xs text-gray-500"
-                          onClick={() => {
-                            setShowAddWorkerDialog(false);
-                            setNewWorkerName("");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    )}
                   </div>
                   <Field label="Worksite">
                     <Input value={workLocation} onChange={(event) => setWorkLocation(event.target.value)} />
