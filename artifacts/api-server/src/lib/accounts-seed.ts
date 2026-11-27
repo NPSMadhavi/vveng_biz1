@@ -111,6 +111,7 @@ export const DEFAULT_ACCOUNTS = [
   { code: "7000", name: "Repairs and Maintenance",                    type: "expense",   subType: "operating_expense",   isSystem: false },
   { code: "7100", name: "Foreign Exchange Loss",                      type: "expense",   subType: "operating_expense",   isSystem: false },
   { code: "7200", name: "Miscellaneous Expenses",                     type: "expense",   subType: "operating_expense",   isSystem: false },
+  { code: "7220", name: "Asset Write-Off Expense",                    type: "expense",   subType: "operating_expense",   isSystem: false },
   { code: "7300", name: "Income Tax Expense",                         type: "expense",   subType: "operating_expense",   isSystem: false },
 ];
 

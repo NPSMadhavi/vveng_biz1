@@ -60,10 +60,9 @@ const QUARTERS = [
 const IRAS_BOXES = [
   { num: 1, label: "Total value of standard-rated supplies", desc: "Taxable supplies made at the prevailing GST rate (excludes GST)" },
   { num: 2, label: "Total value of zero-rated supplies",    desc: "Supplies made at 0% GST (e.g. exports, international services)" },
-  { num: 3, label: "Total value of exempt supplies",        desc: "Financial services, sale/lease of residential properties, etc." },
-  { num: 4, label: "Total value of taxable purchases and expenses incurred in the making of taxable supplies",
-             desc: "All GST-taxable purchases (incl. imports) for which input tax is claimed" },
-  { num: 5, label: "Total value of out-of-scope supplies",  desc: "Third-country sales, internal transfers, non-business receipts, etc." },
+  { num: 3, label: "Total value of exempt supplies",        desc: "Interest from bank deposits/loans, sale of shares/bonds, residential property rental/sale, qualifying financial services, etc." },
+  { num: 4, label: "Total value of (1) + (2) + (3)",         desc: "Total value of supplies declared in Part I (Box 1 + Box 2 + Box 3)" },
+  { num: 5, label: "Total value of taxable purchases",      desc: "All GST-taxable purchases and expenses (excludes GST; excludes salaries, CPF, non-GST suppliers, and disallowed/exempt expenses)" },
   { num: 6, label: "Output tax due",                        desc: "GST collected on standard-rated supplies (Box 1 × GST rate)" },
   { num: 7, label: "Less: Input tax and refunds claimed",   desc: "GST paid on purchases (account 1110 – GST Input Tax Recoverable)" },
   { num: 8, label: "Net GST to be paid to / claimed from Comptroller", desc: "Box 6 minus Box 7. Positive = payable to IRAS; Negative = claimable from IRAS." },
@@ -403,26 +402,26 @@ export default function GstF5Page() {
                 Part I — Declaration of Total Value of Supplies
               </div>
               <CardContent className="p-0">
-                {[1, 2, 3, 5].map(n => {
+                {[1, 2, 3, 4].map(n => {
                   const box = IRAS_BOXES.find(b => b.num === n)!;
-                  const val = n === 1 ? data.box1 : n === 2 ? data.box2 : n === 3 ? data.box3 : data.box5;
+                  const val = n === 1 ? data.box1 : n === 2 ? data.box2 : n === 3 ? data.box3 : data.box4;
+                  const isTotal = n === 4;
                   return (
-                    <div key={n} className="grid grid-cols-[2.5rem_1fr_auto] gap-3 items-start px-4 py-3 border-b last:border-b-0 even:bg-muted/20">
+                    <div key={n} className={cn("grid grid-cols-[2.5rem_1fr_auto] gap-3 items-start px-4 py-3 border-b last:border-b-0", isTotal ? "bg-muted/40 font-semibold" : "even:bg-muted/20")}>
                       <div className="flex items-center justify-center w-8 h-8 rounded bg-[#1a365d]/10 text-[#1a365d] text-xs font-bold shrink-0">{n}</div>
                       <div>
-                        <p className="text-sm font-semibold">{box.label}</p>
+                        <p className={cn("text-sm", isTotal ? "font-bold" : "font-semibold")}>{box.label}</p>
                         <p className="text-xs text-muted-foreground mt-0.5">{box.desc}</p>
-                        {val === 0 && (
+                        {val === 0 && !isTotal && (
                           <p className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
                             <Info className="h-3 w-3 shrink-0" />
                             {n === 2 && "Sourced from confirmed Income records marked as zero-rated"}
                             {n === 3 && "Sourced from confirmed Income records marked as exempt"}
-                            {n === 5 && "Sourced from confirmed Income records marked as out-of-scope"}
                             {n === 1 && "No standard-rated invoices or income records in this period"}
                           </p>
                         )}
                       </div>
-                      <div className={cn("text-right font-mono font-semibold text-sm tabular-nums", val === 0 ? "text-muted-foreground/40" : "")}>
+                      <div className={cn("text-right font-mono text-sm tabular-nums", isTotal ? "font-bold" : "font-semibold", val === 0 ? "text-muted-foreground/40" : "")}>
                         S$ {fmtAmt(val)}
                       </div>
                     </div>
@@ -438,13 +437,13 @@ export default function GstF5Page() {
               </div>
               <CardContent className="p-0">
                 <div className="grid grid-cols-[2.5rem_1fr_auto] gap-3 items-start px-4 py-3">
-                  <div className="flex items-center justify-center w-8 h-8 rounded bg-[#1a365d]/10 text-[#1a365d] text-xs font-bold shrink-0">4</div>
+                  <div className="flex items-center justify-center w-8 h-8 rounded bg-[#1a365d]/10 text-[#1a365d] text-xs font-bold shrink-0">5</div>
                   <div>
-                    <p className="text-sm font-semibold">{IRAS_BOXES[3].label}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{IRAS_BOXES[3].desc}</p>
+                    <p className="text-sm font-semibold">{IRAS_BOXES[4].label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{IRAS_BOXES[4].desc}</p>
                   </div>
-                  <div className={cn("text-right font-mono font-semibold text-sm tabular-nums", data.box4 === 0 ? "text-muted-foreground/40" : "")}>
-                    S$ {fmtAmt(data.box4)}
+                  <div className={cn("text-right font-mono font-semibold text-sm tabular-nums", data.box5 === 0 ? "text-muted-foreground/40" : "")}>
+                    S$ {fmtAmt(data.box5)}
                   </div>
                 </div>
               </CardContent>
@@ -714,7 +713,7 @@ export default function GstF5Page() {
                                 <SortTh col="exchangeRate"   sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right className="text-amber-700">FX Rate</SortTh>
                                 <SortTh col="gstTreatment"   sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort}>GST Treatment</SortTh>
                                 <SortTh col="netAmount"      sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right>Net</SortTh>
-                                <SortTh col="netAmountSGD"   sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right className="text-emerald-700">Net SGD (Box 4)</SortTh>
+                                <SortTh col="netAmountSGD"   sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right className="text-emerald-700">Net SGD (Box 5)</SortTh>
                                 <SortTh col="gstAmount"      sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right>GST</SortTh>
                                 <SortTh col="gstAmountSGD"   sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right className="text-blue-700">GST SGD (Box 7)</SortTh>
                                 <SortTh col="totalAmount"    sortKey={viSortKey} sortDir={viSortDir} onSort={handleViSort} right>Total</SortTh>
@@ -798,7 +797,7 @@ export default function GstF5Page() {
                                 <tr className="bg-amber-50 border-t">
                                   <td colSpan={12} className="px-4 py-2 text-[10px] text-amber-700 flex items-center gap-1">
                                     <Info className="h-3 w-3 shrink-0" />
-                                    {viOther.length} non-GST record{viOther.length !== 1 ? "s" : ""} (ZR / Exempt / Out-of-scope) — excluded from Box 4 &amp; Box 7 as no input tax is claimable.
+                                    {viOther.length} non-GST record{viOther.length !== 1 ? "s" : ""} (ZR / Exempt / Out-of-scope) — excluded from Box 5 &amp; Box 7 as no input tax is claimable.
                                   </td>
                                 </tr>
                               )}
@@ -811,13 +810,13 @@ export default function GstF5Page() {
                 );
               })()}
 
-              {/* Expenses with GST claimable → Box 4 + Box 7 */}
+              {/* Expenses with GST claimable → Box 5 + Box 7 */}
               <div className="border rounded-lg overflow-hidden">
                 <button
                   className="w-full flex items-center justify-between px-4 py-3 bg-muted/30 hover:bg-muted/50 text-sm font-medium transition-colors"
                   onClick={() => setShowExpenses(v => !v)}
                 >
-                  <span>Confirmed Expenses (GST-claimable) contributing to Box 4 + Box 7 — {data.expenses.length} record{data.expenses.length !== 1 ? "s" : ""}</span>
+                  <span>Confirmed Expenses (GST-claimable) contributing to Box 5 + Box 7 — {data.expenses.length} record{data.expenses.length !== 1 ? "s" : ""}</span>
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-xs text-muted-foreground">Input GST S$ {fmtAmt(data.expenses.reduce((s, e) => s + e.gstAmount, 0))}</span>
                     {showExpenses ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
@@ -834,7 +833,7 @@ export default function GstF5Page() {
                             <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Vendor / Payee</th>
                             <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Description</th>
                             <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Date</th>
-                            <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Net (Box 4)</th>
+                            <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">Net (Box 5)</th>
                             <th className="text-right px-4 py-2 text-xs font-semibold text-muted-foreground">GST (Box 7)</th>
                           </tr>
                         </thead>
@@ -864,7 +863,7 @@ export default function GstF5Page() {
             {/* IRAS disclaimer */}
             <div className="rounded-md bg-muted/30 border px-4 py-3 text-xs text-muted-foreground">
               <span className="font-semibold">Note:</span> Boxes 2, 3, and 5 are sourced from confirmed Income records with the matching GST treatment.
-              Box 4 and Box 7 include confirmed vendor invoices and expenses marked as GST-claimable. Box 7 also includes any manual input tax posted to GL account 1110.
+              Box 5 and Box 7 include confirmed vendor invoices and expenses marked as GST-claimable (excluding salaries, CPF, non-GST suppliers, and disallowed expenses). Box 7 also includes any manual input tax posted to GL account 1110.
               File your GST return at{" "}
               <a href="https://mytax.iras.gov.sg" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">mytax.iras.gov.sg</a>.
             </div>

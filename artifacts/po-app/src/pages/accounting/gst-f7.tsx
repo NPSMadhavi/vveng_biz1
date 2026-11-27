@@ -33,8 +33,8 @@ const BOX_LABELS: Record<number, string> = {
   1: "Total value of standard-rated supplies",
   2: "Total value of zero-rated supplies",
   3: "Total value of exempt supplies",
-  4: "Total value of taxable purchases",
-  5: "Total value of out-of-scope supplies",
+  4: "Total value of (1) + (2) + (3)",
+  5: "Total value of taxable purchases",
   6: "Output tax due",
   7: "Less: Input tax and refunds claimed",
   8: "Net GST to be paid / claimed",
@@ -265,8 +265,8 @@ export default function GstF7Page() {
                 </thead>
                 <tbody>
                   {[
-                    { section: "PART I — VALUE OF SUPPLIES", boxes: [1, 2, 3, 5] },
-                    { section: "PART II — PURCHASES & IMPORTS", boxes: [4] },
+                    { section: "PART I — VALUE OF SUPPLIES", boxes: [1, 2, 3, 4] },
+                    { section: "PART II — PURCHASES & IMPORTS", boxes: [5] },
                     { section: "PART III — GST COMPUTATION", boxes: [6, 7, 8] },
                   ].map(({ section, boxes: sboxes }) => (
                     <Fragment key={section}>

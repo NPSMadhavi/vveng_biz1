@@ -91,9 +91,9 @@ const RULES: Rule[] = [
   { prefix: "/stock-serials", methods: ["GET", "HEAD"], anyOf: ["stock_items", ...POS_ACCESS] },
   { prefix: "/stock-serials", anyOf: ["stock_items"] },
 
-  { prefix: "/customers", methods: ["GET", "HEAD"], anyOf: ["customers", ...SALES_DOCS] },
+  { prefix: "/customers", methods: ["GET", "HEAD"], anyOf: ["customers", "accounting_income", "accounting_ar", "accounting_cust_stmt", ...SALES_DOCS] },
   { prefix: "/customers", anyOf: ["customers"] },
-  { prefix: "/vendors", methods: ["GET", "HEAD"], anyOf: ["vendors", ...PURCHASE_DOCS] },
+  { prefix: "/vendors", methods: ["GET", "HEAD"], anyOf: ["vendors", "accounting_expenses", "accounting_ap", "accounting_vendor_stmt", ...PURCHASE_DOCS] },
   { prefix: "/vendors", anyOf: ["vendors"] },
   { prefix: "/email-contacts", anyOf: ["address_book", "invoices", "quotations", "customers"] },
   { prefix: "/contacts", anyOf: ["address_book", "customers", "vendors"] },

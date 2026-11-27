@@ -28,7 +28,8 @@ interface CashFlowData {
 function fmtAmt(n: number) {
   const abs = Math.abs(n);
   const s = new Intl.NumberFormat("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(abs);
-  return n < 0 ? `(${s})` : s;
+  if (abs < 0.005) return "0.00";
+  return n < 0 ? `${s} Cr` : `${s} Dr`;
 }
 
 function fmtDate(d: string) {
@@ -40,7 +41,7 @@ function CfRow({ label, amount, indent = false }: { label: string; amount: numbe
   return (
     <div className={cn("flex items-baseline justify-between py-2 border-b border-gray-100 hover:bg-gray-50/60", indent ? "px-10" : "px-5")}>
       <span className="text-sm text-gray-600">{label}</span>
-      <span className={cn("font-mono text-sm tabular-nums ml-6 shrink-0", amount < 0 ? "text-red-600" : "text-gray-800")}>{fmtAmt(amount)}</span>
+      <span className="font-mono text-sm tabular-nums ml-6 shrink-0 text-gray-800">{fmtAmt(amount)}</span>
     </div>
   );
 }
@@ -58,7 +59,7 @@ function SectionTotal({ label, amount, dark = false }: { label: string; amount: 
   return (
     <div className={cn("flex items-baseline justify-between px-5 py-3", dark ? "bg-[#1a365d]" : "bg-gray-50 border-t border-gray-200")}>
       <span className={cn("text-xs font-bold uppercase tracking-wider", dark ? "text-blue-200" : "text-gray-500")}>{label}</span>
-      <span className={cn("font-mono tabular-nums shrink-0 ml-6", dark ? "text-white text-base font-bold" : amount < 0 ? "text-red-600 text-sm font-semibold" : "text-gray-900 text-sm font-semibold")}>
+      <span className={cn("font-mono tabular-nums shrink-0 ml-6", dark ? "text-white text-base font-bold" : "text-gray-900 text-sm font-semibold")}>
         {fmtAmt(amount)}
       </span>
     </div>
@@ -220,7 +221,7 @@ export default function CashFlowStatement() {
             </div>
             <div className="flex items-baseline justify-between px-5 py-3 bg-gray-900">
               <span className="text-xs font-bold uppercase tracking-wider text-gray-300">Closing Cash Balance (end of period)</span>
-              <span className={cn("font-mono text-base font-bold tabular-nums ml-6", data.closingCash < 0 ? "text-red-400" : "text-white")}>
+              <span className="font-mono text-base font-bold tabular-nums ml-6 text-white">
                 SGD {fmtAmt(data.closingCash)}
               </span>
             </div>

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
-import { Check } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isGeneralParty } from "@/lib/party-usage";
 
 type VendorRow = {
   id: number;
@@ -40,7 +39,7 @@ export function VendorPayeeField({
   });
 
   const active = useMemo(
-    () => vendors.filter((vendor) => vendor.isActive !== false && vendor.name?.trim() && isGeneralParty(vendor)),
+    () => vendors.filter((vendor) => vendor.isActive !== false && vendor.name?.trim()),
     [vendors],
   );
 
@@ -64,18 +63,32 @@ export function VendorPayeeField({
 
   return (
     <div ref={wrapRef} className="relative">
-      <Input
-        id={id}
-        value={value}
-        placeholder={isCustomer ? "Search customers or type a name" : "Search vendors or type a name"}
-        autoComplete="off"
-        className={cn(exact && "border-primary/40 bg-primary/5")}
-        onFocus={() => setOpen(true)}
-        onChange={(event) => {
-          onChange(event.target.value);
-          setOpen(true);
-        }}
-      />
+      <div className="relative">
+        <Input
+          id={id}
+          value={value}
+          placeholder={isCustomer ? "Select customer or type payer name" : "Select vendor or type payee name"}
+          autoComplete="off"
+          className={cn("pr-8", exact && "border-primary/40 bg-primary/5")}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            onChange(event.target.value);
+            setOpen(true);
+          }}
+        />
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={isCustomer ? "Toggle customer list" : "Toggle vendor list"}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            setOpen((prev) => !prev);
+          }}
+        >
+          <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
+        </button>
+      </div>
       {open && (
         <div className="absolute z-50 mt-1 max-h-52 w-full overflow-y-auto rounded-md border bg-popover shadow-lg">
           {matches.length === 0 ? (
@@ -99,6 +112,19 @@ export function VendorPayeeField({
                 {vendor.currency ? <span className="text-xs text-muted-foreground">{vendor.currency}</span> : null}
               </button>
             ))
+          )}
+          {query && !exact && (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 border-t px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onChange(value.trim());
+                setOpen(false);
+              }}
+            >
+              Use &ldquo;{value.trim()}&rdquo; (manual entry)
+            </button>
           )}
         </div>
       )}

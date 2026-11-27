@@ -2633,42 +2633,38 @@ export async function generateTrialBalance_PDF(
 
   drawAccountingHeader(doc, logo, "TRIAL BALANCE", `Period: ${periodStr}`, balanced ? "Status: Balanced ✓" : "Status: Out of balance", info);
 
-  const fmtSigned = (n: number) => Math.abs(n) < 0.005 ? "—" : n < 0 ? `(${fmtNum(Math.abs(n))})` : fmtNum(n);
+  const fmtSigned = (n: number) => Math.abs(n) < 0.005 ? "—" : `${fmtNum(Math.abs(n))} ${n > 0 ? "Dr" : "Cr"}`;
   const rowActive = (r: TBPDFRow) =>
     r.totalDebit > 0.005 || r.totalCredit > 0.005
     || Math.abs(r.openingBalance || 0) > 0.005
     || Math.abs(r.closingBalance ?? r.balance) > 0.005;
 
   // Build table with section header rows
-  const tableHeaders = ["Code", "Account Name", "Opening Debit (SGD)", "Opening Credit (SGD)", "Debit (SGD)", "Credit (SGD)", "Closing Balance (SGD)"];
+  const tableHeaders = ["Code", "Account Name", "Opening Balance (SGD)", "Debit (SGD)", "Credit (SGD)", "Closing Balance (SGD)"];
   const tableBody: any[][] = [];
 
   TB_TYPE_ORDER.forEach(type => {
     const typeRows = rows.filter(r => r.type === type && rowActive(r));
     if (typeRows.length === 0) return;
     // Section header row (full width via colSpan trick — we'll style it)
-    tableBody.push([`— ${TB_TYPE_LABEL[type].toUpperCase()} —`, "", "", "", "", "", ""]);
+    tableBody.push([`— ${TB_TYPE_LABEL[type].toUpperCase()} —`, "", "", "", "", ""]);
     typeRows.forEach(r => {
-      const opDr = r.openingDebit ?? ((r.openingBalance || 0) > 0 ? (r.openingBalance || 0) : 0);
-      const opCr = r.openingCredit ?? ((r.openingBalance || 0) < 0 ? Math.abs(r.openingBalance || 0) : 0);
+      const openingBal = r.openingBalance ?? ((r.openingDebit || 0) - (r.openingCredit || 0));
       tableBody.push([
         r.code, r.name,
-        opDr > 0.005 ? fmtNum(opDr) : "—",
-        opCr > 0.005 ? fmtNum(opCr) : "—",
+        fmtSigned(openingBal),
         r.totalDebit > 0.005 ? fmtNum(r.totalDebit) : "—",
         r.totalCredit > 0.005 ? fmtNum(r.totalCredit) : "—",
         fmtSigned(r.closingBalance ?? r.balance),
       ]);
     });
   });
-  const grandOpeningDebit = rows.reduce((s, r) => s + (r.openingDebit ?? ((r.openingBalance || 0) > 0 ? (r.openingBalance || 0) : 0)), 0);
-  const grandOpeningCredit = rows.reduce((s, r) => s + (r.openingCredit ?? ((r.openingBalance || 0) < 0 ? Math.abs(r.openingBalance || 0) : 0)), 0);
+  const grandOpening = rows.reduce((s, r) => s + (r.openingBalance ?? ((r.openingDebit || 0) - (r.openingCredit || 0))), 0);
   const grandClosing = rows.reduce((s, r) => s + (r.closingBalance ?? r.balance), 0);
   // Grand total row
   tableBody.push([
     "GRAND TOTAL", "",
-    fmtNum(grandOpeningDebit),
-    fmtNum(grandOpeningCredit),
+    fmtSigned(grandOpening),
     fmtNum(grandDebit), fmtNum(grandCredit),
     fmtSigned(grandClosing),
   ]);
@@ -2685,11 +2681,10 @@ export async function generateTrialBalance_PDF(
     styles: { cellPadding: 3, font: PDF_FONT },
     columnStyles: {
       0: { cellWidth: 20 }, 1: { cellWidth: "auto" as const },
-      2: { halign: "right" as const, cellWidth: 34 },
-      3: { halign: "right" as const, cellWidth: 34 },
-      4: { halign: "right" as const, cellWidth: 32 },
-      5: { halign: "right" as const, cellWidth: 32 },
-      6: { halign: "right" as const, cellWidth: 38 },
+      2: { halign: "right" as const, cellWidth: 40 },
+      3: { halign: "right" as const, cellWidth: 36 },
+      4: { halign: "right" as const, cellWidth: 36 },
+      5: { halign: "right" as const, cellWidth: 40 },
     },
     didParseCell: (data: any) => {
       if (data.section !== "body") return;
@@ -2844,8 +2839,8 @@ const BOX_LABELS_PDF: Record<number, string> = {
   1: "Total value of standard-rated supplies",
   2: "Total value of zero-rated supplies",
   3: "Total value of exempt supplies",
-  4: "Total value of taxable purchases",
-  5: "Total value of out-of-scope supplies",
+  4: "Total value of (1) + (2) + (3)",
+  5: "Total value of taxable purchases",
   6: "Output tax due",
   7: "Less: Input tax and refunds claimed",
   8: "Net GST to be paid / claimed",
@@ -2884,8 +2879,8 @@ export async function generateGstF7_PDF(
   doc.text(`GST Reg. No.: ${data.company.gstRegistrationNo || "—"}   GST Rate: ${data.gstRate}%`, mL + 4, sY + 10);
 
   const sections = [
-    { label: "PART I — VALUE OF SUPPLIES", boxes: [1, 2, 3, 5] },
-    { label: "PART II — PURCHASES & IMPORTS", boxes: [4] },
+    { label: "PART I — VALUE OF SUPPLIES", boxes: [1, 2, 3, 4] },
+    { label: "PART II — PURCHASES & IMPORTS", boxes: [5] },
     { label: "PART III — GST COMPUTATION", boxes: [6, 7, 8] },
   ];
 
@@ -3146,8 +3141,8 @@ interface F5PDFData {
 }
 
 const F5_PARTS = [
-  { part: "PART I — DECLARATION OF TOTAL VALUE OF SUPPLIES", boxes: [1, 2, 3, 5] },
-  { part: "PART II — DECLARATION OF TOTAL VALUE OF PURCHASES AND IMPORTS", boxes: [4] },
+  { part: "PART I — DECLARATION OF TOTAL VALUE OF SUPPLIES", boxes: [1, 2, 3, 4] },
+  { part: "PART II — DECLARATION OF TOTAL VALUE OF PURCHASES AND IMPORTS", boxes: [5] },
   { part: "PART III — GST COMPUTATION", boxes: [6, 7, 8] },
 ] as const;
 
@@ -3155,8 +3150,8 @@ const F5_BOX_LABELS: Record<number, string> = {
   1: "Total value of standard-rated supplies",
   2: "Total value of zero-rated supplies",
   3: "Total value of exempt supplies",
-  4: "Total value of taxable purchases and expenses",
-  5: "Total value of out-of-scope supplies",
+  4: "Total value of (1) + (2) + (3)",
+  5: "Total value of taxable purchases",
   6: "Output tax due",
   7: "Less: Input tax and refunds claimed",
   8: "Net GST to be paid to / claimed from Comptroller",

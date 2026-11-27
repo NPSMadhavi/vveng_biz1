@@ -701,24 +701,22 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
       const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
       return s + parseFloat(r.amount ?? "0") * fx;
     }, 0);
-    // Box 5 = out-of-scope SUPPLIES (sales/income side only — e.g. grants, non-business receipts)
-    const incomeBox5 = incomeRows.filter(r => r.gstTreatment === "out_of_scope").reduce((s, r) => {
-      const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
-      return s + parseFloat(r.amount ?? "0") * fx;
-    }, 0);
     const incomeBox6 = incomeRows.filter(r => r.gstTreatment === "standard_rated").reduce((s, r) => {
       const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
       return s + parseFloat(r.gstAmount ?? "0") * fx;
     }, 0);
 
     const box1 = invBox1 + incomeBox1;
+    const box2 = incomeBox2;
+    const box3 = incomeBox3;
+    // IRAS F5 Box 4 = Total value of (1) + (2) + (3)
+    const box4 = box1 + box2 + box3;
     const box6 = invBox6 + incomeBox6;
 
-    // ─ Box 4 / Box 5 / Box 7: purchases from vendor invoices ─
+    // ─ Box 5 / Box 7: taxable purchases from vendor invoices & claimable expenses ─
     // IRAS F5:
-    //   Box 4 = net value of standard-rated (SR 9%) purchases (excl. GST)
-    //   Box 5 = zero-rated (ZR) + exempt (ES) purchases
-    //   Box 7 = claimable input tax = GST on SR purchases
+    //   Box 5 = net value of taxable purchases (excl. GST; excludes non-GST suppliers & disallowed items)
+    //   Box 7 = claimable input tax = GST on taxable purchases
     const viRows = await db.select({
       id: vendorInvoicesTable.id,
       piNumber: vendorInvoicesTable.piNumber,
@@ -738,28 +736,27 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
         ...(toDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt}, 'YYYY-MM-DD')) <= ${toDate}`] : []),
       ));
 
-    // Segment vendor invoices by GST treatment
-    // Only standard-rated purchases contribute to the F5:
-    //   Box 4 = net value of SR purchases (excl. GST)
-    //   Box 7 = input tax claimed on SR purchases
-    // ZR, exempt, and out-of-scope purchases are non-claimable and have no F5 box.
-    const viSR = viRows.filter(r => !r.gstTreatment || r.gstTreatment === "standard_rated");
+    // Only standard-rated taxable purchases with GST > 0 contribute to Box 5 & Box 7.
+    // Non-GST registered suppliers (gstAmount = 0), ZR, exempt, and out-of-scope purchases are excluded.
+    const viSR = viRows.filter(
+      r => (!r.gstTreatment || r.gstTreatment === "standard_rated") && parseFloat(r.gstAmount ?? "0") > 0,
+    );
 
-    // Box 4: net amount (excl. GST) of SR purchases — converted to SGD via exchange rate
-    const viBox4 = viSR.reduce((s, r) => {
+    const viBox5 = viSR.reduce((s, r) => {
       const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
       const net = parseFloat((parseFloat(r.totalAmount ?? "0") - parseFloat(r.gstAmount ?? "0")).toFixed(2));
       return s + net * fx;
     }, 0);
-    // Box 7 contribution from vendor invoices: GST amount on SR purchases — converted to SGD
     const viBox7 = viSR.reduce((s, r) => {
       const fx = parseFloat(String(r.exchangeRate ?? "1")) || 1;
       const gst = parseFloat(parseFloat(r.gstAmount ?? "0").toFixed(2));
       return s + gst * fx;
     }, 0);
 
-    // ─ Confirmed expenses with GST claimable → also contribute to Box 4 (net) + Box 7 (GST) ─
-    const expenseRows = await db.select({
+    // Confirmed expenses with GST claimable → contribute to Box 5 (net) + Box 7 (GST)
+    // Exclude IRAS-disallowed / non-taxable expense categories (salaries, wages, CPF, medical, sports club, personal, residential rental, exempt bank charges, disallowed motor car).
+    const EXCLUDED_BOX5_PATTERN = /\b(salar|wage|cpf|medical|sports\s*club|family\s*benefit|personal|residential|disallowed\s*motor|bank\s*charge)\b/i;
+    const allClaimableExpenses = await db.select({
       id: expensesTable.id,
       vendorName: expensesTable.vendorName,
       description: expensesTable.description,
@@ -775,17 +772,20 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
         sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
         eq(expensesTable.status, "confirmed"),
         eq(expensesTable.gstClaimable, true),
+        sql`CAST(${expensesTable.gstAmount} AS numeric) > 0`,
         ...(fromDate ? [sql`${expensesTable.expenseDate} >= ${fromDate}`] : []),
         ...(toDate ? [sql`${expensesTable.expenseDate} <= ${toDate}`] : []),
       ));
 
-    const expenseBox4 = expenseRows.reduce((s, r) => s + parseFloat(r.amount ?? "0"), 0);
+    const expenseRows = allClaimableExpenses.filter(
+      r => !EXCLUDED_BOX5_PATTERN.test(`${r.category ?? ""} ${r.description ?? ""}`),
+    );
+
+    const expenseBox5 = expenseRows.reduce((s, r) => s + parseFloat(r.amount ?? "0"), 0);
     const expenseBox7 = expenseRows.reduce((s, r) => s + parseFloat(r.gstAmount ?? "0"), 0);
 
-    // Box 4 = net SR vendor invoices + GST-claimable expenses
-    const totalBox4 = viBox4 + expenseBox4;
-    // Box 5 = out-of-scope SUPPLIES (income/sales side) — NOT vendor purchases
-    const totalBox5 = incomeBox5;
+    // Box 5 = net SR vendor invoices + GST-claimable expenses (total value of taxable purchases)
+    const totalBox5 = viBox5 + expenseBox5;
     // Box 7 = input tax from SR vendor invoices + claimable expenses
     const totalBox7 = viBox7 + expenseBox7;
     const box8 = box6 - totalBox7;
@@ -795,9 +795,9 @@ router.get("/gst-f5", async (req, res): Promise<void> => {
       company: { name: company?.name, gstRegistrationNo: company?.registrationNo, address: company?.address },
       gstRate,
       box1: parseFloat(box1.toFixed(2)),
-      box2: parseFloat(incomeBox2.toFixed(2)),
-      box3: parseFloat(incomeBox3.toFixed(2)),
-      box4: parseFloat(totalBox4.toFixed(2)),
+      box2: parseFloat(box2.toFixed(2)),
+      box3: parseFloat(box3.toFixed(2)),
+      box4: parseFloat(box4.toFixed(2)),
       box5: parseFloat(totalBox5.toFixed(2)),
       box6: parseFloat(box6.toFixed(2)),
       box7: parseFloat(totalBox7.toFixed(2)),
@@ -1302,10 +1302,14 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
     const origToDate = (req.query.origTo as string) || null;
 
     await ensureAccountsSeeded(companyId);
+    await ensureIncomeSchema();
+    await ensureExpensesSchema();
 
     const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId)).limit(1);
     const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.companyId, companyId)).limit(1);
     const gstRate = parseFloat((settings as any)?.gstRate ?? "9");
+
+    const EXCLUDED_BOX5_PATTERN = /\b(salar|wage|cpf|medical|sports\s*club|family\s*benefit|personal|residential|disallowed\s*motor|bank\s*charge)\b/i;
 
     async function computeF5Boxes(fDate: string | null, tDate: string | null) {
       // Sales invoices — apply exchange rate so amounts are always in SGD
@@ -1324,16 +1328,53 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
           ...(fDate ? [sql`${invoicesTable.issueDate} >= ${fDate}`] : []),
           ...(tDate ? [sql`${invoicesTable.issueDate} <= ${tDate}`] : []),
         ));
-      const box1 = invRows.reduce((s, r) => {
+      const invBox1 = invRows.reduce((s, r) => {
         const fx = parseFloat(r.exchangeRate ?? "1") || 1;
         return s + (parseFloat(r.subtotal ?? "0") - parseFloat(r.discountAmount ?? "0")) * fx;
       }, 0);
-      const box6 = invRows.reduce((s, r) => {
+      const invBox6 = invRows.reduce((s, r) => {
         const fx = parseFloat(r.exchangeRate ?? "1") || 1;
         return s + parseFloat(r.tax ?? "0") * fx;
       }, 0);
 
-      // Vendor invoices — apply exchange rate; use net amount (excl. GST) for box4
+      // Confirmed income records (standard-rated, zero-rated, exempt)
+      const incomeRows = await db.select({
+        amount: incomeRecordsTable.amount,
+        gstAmount: incomeRecordsTable.gstAmount,
+        gstTreatment: incomeRecordsTable.gstTreatment,
+        exchangeRate: (incomeRecordsTable as any).exchangeRate,
+      })
+        .from(incomeRecordsTable)
+        .where(and(
+          eq(incomeRecordsTable.companyId, companyId),
+          sql`COALESCE(${incomeRecordsTable.isDeleted}, 0) = 0`,
+          eq(incomeRecordsTable.status, "confirmed"),
+          ...(fDate ? [sql`${incomeRecordsTable.incomeDate} >= ${fDate}`] : []),
+          ...(tDate ? [sql`${incomeRecordsTable.incomeDate} <= ${tDate}`] : []),
+        ));
+
+      const incomeBox1 = incomeRows.filter(r => r.gstTreatment === "standard_rated").reduce((s, r) => {
+        const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
+        return s + parseFloat(r.amount ?? "0") * fx;
+      }, 0);
+      const box2 = incomeRows.filter(r => r.gstTreatment === "zero_rated").reduce((s, r) => {
+        const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
+        return s + parseFloat(r.amount ?? "0") * fx;
+      }, 0);
+      const box3 = incomeRows.filter(r => r.gstTreatment === "exempt").reduce((s, r) => {
+        const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
+        return s + parseFloat(r.amount ?? "0") * fx;
+      }, 0);
+      const incomeBox6 = incomeRows.filter(r => r.gstTreatment === "standard_rated").reduce((s, r) => {
+        const fx = parseFloat(parseFloat(r.exchangeRate ?? "1").toFixed(4)) || 1;
+        return s + parseFloat(r.gstAmount ?? "0") * fx;
+      }, 0);
+
+      const box1 = invBox1 + incomeBox1;
+      const box4 = box1 + box2 + box3;
+      const box6 = invBox6 + incomeBox6;
+
+      // Vendor invoices — standard-rated taxable purchases with GST > 0 contribute to Box 5 & Box 7
       const viRows = await db.select({
         totalAmount: vendorInvoicesTable.totalAmount,
         gstAmount: vendorInvoicesTable.gstAmount,
@@ -1347,17 +1388,41 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
           ...(fDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) >= ${fDate}`] : []),
           ...(tDate ? [sql`COALESCE(${vendorInvoicesTable.piDate}, to_char(${vendorInvoicesTable.createdAt},'YYYY-MM-DD')) <= ${tDate}`] : []),
         ));
-      const box4 = viRows.reduce((s, r) => {
-        if (r.gstTreatment && r.gstTreatment !== "standard_rated") return s;
+      const viSR = viRows.filter(
+        r => (!r.gstTreatment || r.gstTreatment === "standard_rated") && parseFloat(r.gstAmount ?? "0") > 0,
+      );
+      const viBox5 = viSR.reduce((s, r) => {
         const fx = parseFloat(r.exchangeRate ?? "1") || 1;
         const net = parseFloat(r.totalAmount ?? "0") - parseFloat(r.gstAmount ?? "0");
         return s + net * fx;
       }, 0);
-      const box7raw = viRows.reduce((s, r) => {
-        if (r.gstTreatment && r.gstTreatment !== "standard_rated") return s;
+      const viBox7 = viSR.reduce((s, r) => {
         const fx = parseFloat(r.exchangeRate ?? "1") || 1;
         return s + parseFloat(r.gstAmount ?? "0") * fx;
       }, 0);
+
+      // Confirmed expenses with GST claimable → Box 5 (net) + Box 7 (GST)
+      const allClaimableExpenses = await db.select({
+        description: expensesTable.description,
+        category: expensesTable.category,
+        amount: expensesTable.amount,
+        gstAmount: expensesTable.gstAmount,
+      })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.companyId, companyId),
+          sql`COALESCE(${expensesTable.isDeleted}, 0) = 0`,
+          eq(expensesTable.status, "confirmed"),
+          eq(expensesTable.gstClaimable, true),
+          sql`CAST(${expensesTable.gstAmount} AS numeric) > 0`,
+          ...(fDate ? [sql`${expensesTable.expenseDate} >= ${fDate}`] : []),
+          ...(tDate ? [sql`${expensesTable.expenseDate} <= ${tDate}`] : []),
+        ));
+      const expenseRows = allClaimableExpenses.filter(
+        r => !EXCLUDED_BOX5_PATTERN.test(`${r.category ?? ""} ${r.description ?? ""}`),
+      );
+      const expenseBox5 = expenseRows.reduce((s, r) => s + parseFloat(r.amount ?? "0"), 0);
+      const expenseBox7 = expenseRows.reduce((s, r) => s + parseFloat(r.gstAmount ?? "0"), 0);
 
       // Also include journal-line box7 contributions for manually-entered entries
       const [gstInputAcct] = await db.select().from(accountsTable)
@@ -1377,8 +1442,18 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
           box7je = lines.reduce((s, l) => s + parseFloat(l.debit ?? "0"), 0);
         }
       }
-      const box7 = box7raw + box7je;
-      return { box1, box2: 0, box3: 0, box4, box5: 0, box6, box7, box8: box6 - box7 };
+      const box5 = viBox5 + expenseBox5;
+      const box7 = viBox7 + expenseBox7 + box7je;
+      return {
+        box1: +box1.toFixed(2),
+        box2: +box2.toFixed(2),
+        box3: +box3.toFixed(2),
+        box4: +box4.toFixed(2),
+        box5: +box5.toFixed(2),
+        box6: +box6.toFixed(2),
+        box7: +box7.toFixed(2),
+        box8: +(box6 - box7).toFixed(2),
+      };
     }
 
     const [original, amended] = await Promise.all([
@@ -1387,10 +1462,14 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
     ]);
 
     const delta = {
-      box1: amended.box1 - original.box1, box2: 0, box3: 0,
-      box4: amended.box4 - original.box4, box5: 0,
-      box6: amended.box6 - original.box6, box7: amended.box7 - original.box7,
-      box8: amended.box8 - original.box8,
+      box1: +(amended.box1 - original.box1).toFixed(2),
+      box2: +(amended.box2 - original.box2).toFixed(2),
+      box3: +(amended.box3 - original.box3).toFixed(2),
+      box4: +(amended.box4 - original.box4).toFixed(2),
+      box5: +(amended.box5 - original.box5).toFixed(2),
+      box6: +(amended.box6 - original.box6).toFixed(2),
+      box7: +(amended.box7 - original.box7).toFixed(2),
+      box8: +(amended.box8 - original.box8).toFixed(2),
     };
 
     res.json({
@@ -1398,9 +1477,9 @@ router.get("/gst-f7", async (req, res): Promise<void> => {
       amendedPeriod: { from: fromDate, to: toDate },
       company: { name: company?.name, gstRegistrationNo: company?.registrationNo, address: company?.address },
       gstRate,
-      original: { box1: +original.box1.toFixed(2), box2: 0, box3: 0, box4: +original.box4.toFixed(2), box5: 0, box6: +original.box6.toFixed(2), box7: +original.box7.toFixed(2), box8: +original.box8.toFixed(2) },
-      amended: { box1: +amended.box1.toFixed(2), box2: 0, box3: 0, box4: +amended.box4.toFixed(2), box5: 0, box6: +amended.box6.toFixed(2), box7: +amended.box7.toFixed(2), box8: +amended.box8.toFixed(2) },
-      delta: { box1: +delta.box1.toFixed(2), box2: 0, box3: 0, box4: +delta.box4.toFixed(2), box5: 0, box6: +delta.box6.toFixed(2), box7: +delta.box7.toFixed(2), box8: +delta.box8.toFixed(2) },
+      original,
+      amended,
+      delta,
     });
   } catch (err: any) {
     req.log?.error({ err }, "GST F7 failed");

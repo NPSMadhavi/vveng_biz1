@@ -80,6 +80,11 @@ function fmtBalDrCr(n: number) {
   if (Math.abs(n) < 0.005) return "0.00";
   return n > 0 ? `${s} Dr` : `${s} Cr`;
 }
+function isAbnormalBalance(n: number, accountType?: string | null) {
+  if (Math.abs(n) < 0.005) return false;
+  const isCreditNormal = ["liability", "equity", "revenue"].includes(String(accountType || "").toLowerCase());
+  return isCreditNormal ? n > 0 : n < 0;
+}
 function fmtDate(d: string | null) {
   if (!d) return "—";
   return new Date(d + "T00:00:00").toLocaleDateString("en-SG", { day: "2-digit", month: "short", year: "numeric" });
@@ -421,7 +426,7 @@ export default function GeneralLedgerPage() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <p className={cn("text-sm font-semibold font-mono tabular-nums", displayOpening < 0 ? "text-red-600" : "text-foreground")}>
+                      <p className="text-sm font-semibold font-mono tabular-nums text-foreground">
                         {fmtBalDrCr(displayOpening)}
                       </p>
                       <button
@@ -440,7 +445,7 @@ export default function GeneralLedgerPage() {
                 </div>
                 <div className="px-5 py-4">
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Closing Balance</p>
-                  <p className={cn("text-sm font-bold font-mono tabular-nums", displayClosing < 0 ? "text-red-600" : "text-foreground")}>
+                  <p className="text-sm font-bold font-mono tabular-nums text-foreground">
                     {fmtBalDrCr(displayClosing)}
                   </p>
                 </div>
@@ -473,7 +478,7 @@ export default function GeneralLedgerPage() {
                       <td className="px-4 py-2.5 text-right text-xs font-mono tabular-nums text-foreground">
                         {displayOpening < -0.005 ? fmtAmt(Math.abs(displayOpening)) : "0.00"}
                       </td>
-                      <td className={cn("px-4 py-2.5 text-right text-xs font-mono tabular-nums font-semibold", displayOpening < 0 ? "text-red-600" : "text-foreground")}>
+                      <td className="px-4 py-2.5 text-right text-xs font-mono tabular-nums font-semibold text-foreground">
                         {fmtBalDrCr(displayOpening)}
                       </td>
                     </tr>
@@ -502,7 +507,7 @@ export default function GeneralLedgerPage() {
                         <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-foreground">
                           {fmtAmt(tx.credit) ?? <span className="text-muted-foreground/40">0.00</span>}
                         </td>
-                        <td className={cn("text-right px-4 py-2.5 font-mono text-sm tabular-nums font-semibold", tx.balance < 0 ? "text-red-600" : "text-foreground")}>
+                        <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums font-semibold text-foreground">
                           {fmtBalDrCr(tx.balance)}
                         </td>
                       </tr>
@@ -517,7 +522,7 @@ export default function GeneralLedgerPage() {
                       <td className="text-right px-4 py-3 font-mono text-sm font-bold tabular-nums text-white">
                         {fmtBal(adjustedTransactions.reduce((s, t) => s + t.credit, 0))}
                       </td>
-                      <td className={cn("text-right px-4 py-3 font-mono text-base font-bold tabular-nums", displayClosing < 0 ? "text-red-300" : "text-white")}>
+                      <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">
                         {fmtBalDrCr(displayClosing)}
                       </td>
                     </tr>

@@ -101,10 +101,16 @@ export default function AssetDisposalPage() {
     [selected, asOf],
   );
 
+  const isWriteOff = disposalType === "write_off";
+
   useEffect(() => {
+    if (isWriteOff) {
+      setSaleAmount("0");
+      return;
+    }
     if (!books || saleEdited) return;
     setSaleAmount(books.nbv > 0 ? books.nbv.toFixed(2) : "");
-  }, [books, selected?.id, saleEdited]);
+  }, [books, selected?.id, saleEdited, isWriteOff]);
 
   const schedule = useMemo(
     () => (selected ? buildDepreciationSchedule(selected, asOf) : []),
@@ -129,16 +135,33 @@ export default function AssetDisposalPage() {
       }));
   }, [schedule, books?.residual]);
 
-  const sale = Math.max(0, parseFloat(saleAmount) || 0);
+  const sale = isWriteOff ? 0 : Math.max(0, parseFloat(saleAmount) || 0);
   const cost = books?.cost || 0;
   const accDep = books?.accDep || 0;
   const nbv = books?.nbv || 0;
-  const gainLoss = round2(sale - nbv);
+  const gainLoss = isWriteOff ? -nbv : round2(sale - nbv);
   const isGain = gainLoss >= 0;
   const gainLossAbs = Math.abs(gainLoss);
 
   const journalLines = useMemo(() => {
     const lines: { account: string; debit: number; credit: number }[] = [];
+    const assetLabel = selected
+      ? `Fixed Asset – ${selected.type || "Asset"}`
+      : "Fixed Asset";
+
+    if (isWriteOff) {
+      if (accDep > 0) {
+        lines.push({ account: "Accumulated Depreciation", debit: accDep, credit: 0 });
+      }
+      if (nbv > 0) {
+        lines.push({ account: "Asset Write-Off Expense (P&L)", debit: nbv, credit: 0 });
+      }
+      if (cost > 0) {
+        lines.push({ account: assetLabel, debit: 0, credit: cost });
+      }
+      return lines;
+    }
+
     if (sale > 0) lines.push({ account: "Bank", debit: sale, credit: 0 });
     if (accDep > 0) lines.push({ account: "Accumulated Depreciation", debit: accDep, credit: 0 });
     if (!isGain && gainLossAbs > 0) {
@@ -147,12 +170,9 @@ export default function AssetDisposalPage() {
     if (isGain && gainLossAbs > 0) {
       lines.push({ account: "Gain on Disposal", debit: 0, credit: gainLossAbs });
     }
-    const assetLabel = selected
-      ? `Fixed Asset – ${selected.type || "Asset"}`
-      : "Fixed Asset";
     if (cost > 0) lines.push({ account: assetLabel, debit: 0, credit: cost });
     return lines;
-  }, [sale, accDep, isGain, gainLossAbs, cost, selected]);
+  }, [isWriteOff, sale, accDep, nbv, cost, isGain, gainLossAbs, selected]);
 
   const journalTotals = useMemo(() => {
     return journalLines.reduce(
@@ -213,7 +233,7 @@ export default function AssetDisposalPage() {
       const res = await apiRequest("POST", `/api/assets/${selected.id}/dispose`, {
         disposalDate: disposalIso,
         disposalType,
-        saleAmount: sale,
+        saleAmount: isWriteOff ? 0 : sale,
         remarks: remarks.trim() || undefined,
       });
       const json = await res.json();
@@ -350,7 +370,17 @@ export default function AssetDisposalPage() {
                   <Label className="text-sm font-medium text-[#334155]">
                     Disposal Type <span className="text-[#EF4444]">*</span>
                   </Label>
-                  <Select value={disposalType} onValueChange={setDisposalType}>
+                  <Select
+                    value={disposalType}
+                    onValueChange={(val) => {
+                      setDisposalType(val);
+                      if (val === "write_off") {
+                        setSaleAmount("0");
+                      } else if (!saleEdited && books) {
+                        setSaleAmount(books.nbv > 0 ? books.nbv.toFixed(2) : "");
+                      }
+                    }}
+                  >
                     <SelectTrigger className="bg-white border-[#D1D5DB]">
                       <SelectValue />
                     </SelectTrigger>
@@ -370,14 +400,23 @@ export default function AssetDisposalPage() {
                   </Label>
                   <Input
                     inputMode="decimal"
-                    className="bg-white border-[#D1D5DB]"
-                    value={saleAmount}
+                    className={cn(
+                      "bg-white border-[#D1D5DB]",
+                      isWriteOff && "bg-slate-100 text-slate-500 cursor-not-allowed"
+                    )}
+                    value={isWriteOff ? "0" : saleAmount}
+                    disabled={isWriteOff}
                     onChange={(e) => {
                       setSaleEdited(true);
                       setSaleAmount(e.target.value.replace(/[^0-9.]/g, ""));
                     }}
-                    placeholder="0"
+                    placeholder={isWriteOff ? "0 (Not applicable for write-off)" : "0"}
                   />
+                  {isWriteOff && (
+                    <p className="text-xs text-slate-500">
+                      Write-off does not involve a sale. The remaining net book value ({money(nbv)}) will be debited to Asset Write-Off Expense (P&L).
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-sm font-medium text-[#334155]">
@@ -467,35 +506,50 @@ export default function AssetDisposalPage() {
               <span className="text-[#475569]">Net Book Value</span>
               <span className="font-bold tabular-nums text-[#0F172A]">{money(nbv)}</span>
             </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-[#475569]">Sale Amount</span>
-              <span className="font-bold tabular-nums text-[#0F172A]">{money(sale)}</span>
-            </div>
 
-            <div
-              className={cn(
-                "flex items-center justify-between rounded-md px-3.5 py-2.5 mt-2",
-                gainLoss < 0
-                  ? "bg-[#FEE2E2] text-[#DC2626]"
-                  : gainLoss > 0
-                  ? "bg-[#DCFCE7] text-[#16A34A]"
-                  : "bg-[#F1F5F9] text-[#475569]"
-              )}
-            >
-              <div className="flex items-center gap-2">
-                {gainLoss < 0 ? (
+            {isWriteOff ? (
+              <div className="flex items-center justify-between rounded-md px-3.5 py-2.5 mt-2 bg-[#FEE2E2] text-[#DC2626]">
+                <div className="flex items-center gap-2">
                   <TrendingDown className="h-4 w-4 text-[#DC2626]" />
-                ) : gainLoss > 0 ? (
-                  <TrendingUp className="h-4 w-4 text-[#16A34A]" />
-                ) : null}
-                <span className="text-sm font-bold">
-                  {gainLoss < 0 ? "Loss on Disposal" : gainLoss > 0 ? "Gain on Disposal" : "Break Even"}
+                  <span className="text-sm font-bold">Write-Off Expense (P&L)</span>
+                </div>
+                <span className="text-sm font-bold tabular-nums">
+                  {money(nbv)}
                 </span>
               </div>
-              <span className="text-sm font-bold tabular-nums">
-                {money(gainLossAbs)}
-              </span>
-            </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-[#475569]">Sale Amount</span>
+                  <span className="font-bold tabular-nums text-[#0F172A]">{money(sale)}</span>
+                </div>
+
+                <div
+                  className={cn(
+                    "flex items-center justify-between rounded-md px-3.5 py-2.5 mt-2",
+                    gainLoss < 0
+                      ? "bg-[#FEE2E2] text-[#DC2626]"
+                      : gainLoss > 0
+                      ? "bg-[#DCFCE7] text-[#16A34A]"
+                      : "bg-[#F1F5F9] text-[#475569]"
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    {gainLoss < 0 ? (
+                      <TrendingDown className="h-4 w-4 text-[#DC2626]" />
+                    ) : gainLoss > 0 ? (
+                      <TrendingUp className="h-4 w-4 text-[#16A34A]" />
+                    ) : null}
+                    <span className="text-sm font-bold">
+                      {gainLoss < 0 ? "Loss on Disposal" : gainLoss > 0 ? "Gain on Disposal" : "Break Even"}
+                    </span>
+                  </div>
+                  <span className="text-sm font-bold tabular-nums">
+                    {money(gainLossAbs)}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         </section>
 

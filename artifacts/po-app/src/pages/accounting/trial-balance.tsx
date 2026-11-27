@@ -60,12 +60,13 @@ function tbReturnPath(from: string, to: string, accountId: number) {
   return `/accounting/trial-balance?${q.toString()}`;
 }
 
-function SignedAmount({ value, strong = false }: { value: number; strong?: boolean }) {
+function SignedAmount({ value, strong = false }: { value: number; accountType?: string; strong?: boolean }) {
   const shown = strong ? fmtBig(Math.abs(value)) : fmtAmt(Math.abs(value));
-  if (!shown) return <span className={strong ? "text-gray-500" : "text-gray-300"}>—</span>;
+  if (!shown) return <span className={strong ? "text-gray-400" : "text-gray-300"}>—</span>;
+  const side = value > 0 ? "Dr" : "Cr";
   return (
-    <span className={value < 0 ? (strong ? "text-red-300" : "text-red-600") : undefined}>
-      {value < 0 ? `(${shown})` : shown}
+    <span className={strong ? "text-white" : "text-gray-800"}>
+      {`${shown} ${side}`}
     </span>
   );
 }
@@ -177,8 +178,7 @@ export default function TrialBalancePage() {
                 <tr className="border-b-2 border-gray-200 bg-gray-50">
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-24">Code</th>
                   <th className="text-left px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider">Account Name</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Opening Debit</th>
-                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Opening Credit</th>
+                  <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-40">Opening Balance</th>
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Debit</th>
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-36">Credit</th>
                   <th className="text-right px-4 py-3 text-xs font-bold text-gray-600 uppercase tracking-wider w-40">Closing Balance</th>
@@ -186,13 +186,13 @@ export default function TrialBalancePage() {
               </thead>
               <tbody>
                 {!hasData && (
-                  <tr><td colSpan={7} className="text-center py-16 text-sm text-gray-400">No journal entries for this period.</td></tr>
+                  <tr><td colSpan={6} className="text-center py-16 text-sm text-gray-400">No journal entries for this period.</td></tr>
                 )}
                 {TYPE_ORDER.map(type =>
                   grouped[type].length > 0 ? (
                     <Fragment key={type}>
                       <tr>
-                        <td colSpan={7} className="px-4 py-2.5 border-b border-t border-gray-100 bg-gray-50">
+                        <td colSpan={6} className="px-4 py-2.5 border-b border-t border-gray-100 bg-gray-50">
                           <div className="flex items-center gap-2.5">
                             <div className="w-0.5 h-3.5 bg-gray-400 rounded-full" />
                             <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{TYPE_LABEL[type]}</span>
@@ -201,8 +201,7 @@ export default function TrialBalancePage() {
                       </tr>
                       {grouped[type].map(row => {
                         const open = Boolean(expanded[row.id]);
-                        const opDr = row.openingDebit ?? (row.openingBalance > 0 ? row.openingBalance : 0);
-                        const opCr = row.openingCredit ?? (row.openingBalance < 0 ? Math.abs(row.openingBalance) : 0);
+                        const openingBal = row.openingBalance ?? ((row.openingDebit || 0) - (row.openingCredit || 0));
                         return (
                           <Fragment key={row.id}>
                             <tr
@@ -217,10 +216,7 @@ export default function TrialBalancePage() {
                                 </span>
                               </td>
                               <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
-                                {fmtAmt(opDr) ?? <span className="text-gray-300">—</span>}
-                              </td>
-                              <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
-                                {fmtAmt(opCr) ?? <span className="text-gray-300">—</span>}
+                                <SignedAmount value={openingBal} accountType={row.type} />
                               </td>
                               <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
                                 {fmtAmt(row.totalDebit) ?? <span className="text-gray-300">—</span>}
@@ -229,12 +225,12 @@ export default function TrialBalancePage() {
                                 {fmtAmt(row.totalCredit) ?? <span className="text-gray-300">—</span>}
                               </td>
                               <td className="text-right px-4 py-2.5 font-mono text-sm tabular-nums text-gray-800">
-                                <SignedAmount value={row.closingBalance ?? row.balance} />
+                                <SignedAmount value={row.closingBalance ?? row.balance} accountType={row.type} />
                               </td>
                             </tr>
                             {open && (
                               <tr className="border-b border-gray-100">
-                                <td colSpan={7} className="p-0 bg-slate-50/80">
+                                <td colSpan={6} className="p-0 bg-slate-50/80">
                                   <AccountActivityPanel accountId={row.id} from={from} to={to} returnTo={tbReturnPath(from, to, row.id)} />
                                 </td>
                               </tr>
@@ -249,11 +245,8 @@ export default function TrialBalancePage() {
               <tfoot>
                 <tr className="bg-gray-900 text-white">
                   <td colSpan={2} className="px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-300">Grand Total</td>
-                  <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">
-                    {fmtBig(data.grandOpeningDebit ?? data.rows.reduce((s, r) => s + (r.openingDebit ?? (r.openingBalance > 0 ? r.openingBalance : 0)), 0))}
-                  </td>
-                  <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">
-                    {fmtBig(data.grandOpeningCredit ?? data.rows.reduce((s, r) => s + (r.openingCredit ?? (r.openingBalance < 0 ? Math.abs(r.openingBalance) : 0)), 0))}
+                  <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums">
+                    <SignedAmount value={data.grandOpening ?? data.rows.reduce((s, r) => s + (r.openingBalance ?? ((r.openingDebit || 0) - (r.openingCredit || 0))), 0)} strong />
                   </td>
                   <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">{fmtBig(data.grandDebit)}</td>
                   <td className="text-right px-4 py-3 font-mono text-base font-bold tabular-nums text-white">{fmtBig(data.grandCredit)}</td>

@@ -12,8 +12,8 @@
  */
 
 import { db, accountsTable, journalEntriesTable, journalLinesTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
-import { ensureAccountsSeeded } from "./accounts-seed.js";
+import { eq, and, sql } from "drizzle-orm";
+import { ensureAccountsSeeded, ensureNamedAccount } from "./accounts-seed.js";
 import { assertPeriodWritable } from "./financial-year.js";
 
 function round2(n: number) {
@@ -83,6 +83,28 @@ async function getAccountByCode(companyId: number, code: string) {
   return acct ?? null;
 }
 
+async function getWriteOffAccount(companyId: number) {
+  const [existing] = await db
+    .select()
+    .from(accountsTable)
+    .where(
+      and(
+        eq(accountsTable.companyId, companyId),
+        sql`lower(${accountsTable.name}) LIKE '%write%off%'`,
+      ),
+    )
+    .limit(1);
+  if (existing) return existing;
+
+  return await ensureNamedAccount(companyId, {
+    code: "7220",
+    name: "Asset Write-Off Expense",
+    type: "expense",
+    subType: "operating_expense",
+    isSystem: false,
+  });
+}
+
 function faCodesForCategory(category?: string | null) {
   const c = String(category || "").toLowerCase();
   if (c.includes("furniture") || c.includes("fitting")) return { asset: "1600", accDep: "1610" };
@@ -121,12 +143,13 @@ export async function postAssetDisposalJE(params: {
   await ensureAccountsSeeded(companyId);
 
   const existing = await findExistingDisposalJE(companyId, assetId);
+  const isWriteOff = disposalType === "write_off";
   if (existing) {
     const books = calcAssetBooksAsOf(asset, disposalDate);
     return {
       journalEntryId: existing.id,
       books,
-      gainLoss: round2(saleAmount - books.nbv),
+      gainLoss: isWriteOff ? -books.nbv : round2(saleAmount - books.nbv),
     };
   }
 
@@ -136,8 +159,8 @@ export async function postAssetDisposalJE(params: {
   }
 
   const books = calcAssetBooksAsOf(asset, disposalDate);
-  const sale = Math.max(0, round2(saleAmount));
-  const gainLoss = round2(sale - books.nbv);
+  const sale = isWriteOff ? 0 : Math.max(0, round2(saleAmount));
+  const gainLoss = isWriteOff ? -books.nbv : round2(sale - books.nbv);
   const codes = faCodesForCategory(String(asset.category || ""));
 
   const bank = (await getAccountByCode(companyId, "1010")) ?? (await getAccountByCode(companyId, "1000"));
@@ -147,55 +170,93 @@ export async function postAssetDisposalJE(params: {
   const lossAcct = await getAccountByCode(companyId, "7200");
 
   if (!fa) throw new Error(`Fixed asset account ${codes.asset} not found in Chart of Accounts.`);
-  if (sale > 0 && !bank) throw new Error("Bank / cash account (1010) not found in Chart of Accounts.");
+  if (!isWriteOff && sale > 0 && !bank) throw new Error("Bank / cash account (1010) not found in Chart of Accounts.");
   if (books.accDep > 0 && !accDepAcct) {
     throw new Error(`Accumulated depreciation account ${codes.accDep} not found in Chart of Accounts.`);
   }
-  if (gainLoss > 0 && !gainAcct) throw new Error("Gain account (4200) not found in Chart of Accounts.");
-  if (gainLoss < 0 && !lossAcct) throw new Error("Loss account (7200) not found in Chart of Accounts.");
+  if (!isWriteOff && gainLoss > 0 && !gainAcct) throw new Error("Gain account (4200) not found in Chart of Accounts.");
+  if (!isWriteOff && gainLoss < 0 && !lossAcct) throw new Error("Loss account (7200) not found in Chart of Accounts.");
 
   const assetLabel = String(asset.type || asset.tag || `Asset #${assetId}`);
   const lines: { accountId: number; description: string; debit: number; credit: number }[] = [];
 
-  if (sale > 0 && bank) {
-    lines.push({
-      accountId: bank.id,
-      description: `Sale proceeds — ${assetLabel}`,
-      debit: sale,
-      credit: 0,
-    });
-  }
-  if (books.accDep > 0 && accDepAcct) {
-    lines.push({
-      accountId: accDepAcct.id,
-      description: `Clear accumulated depreciation — ${assetLabel}`,
-      debit: books.accDep,
-      credit: 0,
-    });
-  }
-  if (gainLoss < 0 && lossAcct) {
-    lines.push({
-      accountId: lossAcct.id,
-      description: `Loss on disposal — ${assetLabel}`,
-      debit: Math.abs(gainLoss),
-      credit: 0,
-    });
-  }
-  if (books.cost > 0) {
-    lines.push({
-      accountId: fa.id,
-      description: `Remove fixed asset — ${assetLabel}`,
-      debit: 0,
-      credit: books.cost,
-    });
-  }
-  if (gainLoss > 0 && gainAcct) {
-    lines.push({
-      accountId: gainAcct.id,
-      description: `Gain on disposal — ${assetLabel}`,
-      debit: 0,
-      credit: gainLoss,
-    });
+  if (isWriteOff) {
+    // Write-off JE:
+    // DR Accumulated Depreciation = accDep
+    // DR Asset Write-Off Expense (P&L) = nbv
+    // CR Fixed Asset = cost
+    const writeOffAcct = await getWriteOffAccount(companyId);
+    if (books.nbv > 0 && !writeOffAcct) {
+      throw new Error("Asset Write-Off Expense account (7220) not found in Chart of Accounts.");
+    }
+
+    if (books.accDep > 0 && accDepAcct) {
+      lines.push({
+        accountId: accDepAcct.id,
+        description: `Clear accumulated depreciation — ${assetLabel}`,
+        debit: books.accDep,
+        credit: 0,
+      });
+    }
+
+    if (books.nbv > 0 && writeOffAcct) {
+      lines.push({
+        accountId: writeOffAcct.id,
+        description: `Asset write-off expense (P&L) — ${assetLabel}`,
+        debit: books.nbv,
+        credit: 0,
+      });
+    }
+
+    if (books.cost > 0) {
+      lines.push({
+        accountId: fa.id,
+        description: `Remove fixed asset — ${assetLabel}`,
+        debit: 0,
+        credit: books.cost,
+      });
+    }
+  } else {
+    if (sale > 0 && bank) {
+      lines.push({
+        accountId: bank.id,
+        description: `Sale proceeds — ${assetLabel}`,
+        debit: sale,
+        credit: 0,
+      });
+    }
+    if (books.accDep > 0 && accDepAcct) {
+      lines.push({
+        accountId: accDepAcct.id,
+        description: `Clear accumulated depreciation — ${assetLabel}`,
+        debit: books.accDep,
+        credit: 0,
+      });
+    }
+    if (gainLoss < 0 && lossAcct) {
+      lines.push({
+        accountId: lossAcct.id,
+        description: `Loss on disposal — ${assetLabel}`,
+        debit: Math.abs(gainLoss),
+        credit: 0,
+      });
+    }
+    if (books.cost > 0) {
+      lines.push({
+        accountId: fa.id,
+        description: `Remove fixed asset — ${assetLabel}`,
+        debit: 0,
+        credit: books.cost,
+      });
+    }
+    if (gainLoss > 0 && gainAcct) {
+      lines.push({
+        accountId: gainAcct.id,
+        description: `Gain on disposal — ${assetLabel}`,
+        debit: 0,
+        credit: gainLoss,
+      });
+    }
   }
 
   // Edge: fully depreciated scrap with zero sale / zero cost leftovers — skip JE if < 2 lines
@@ -215,7 +276,7 @@ export async function postAssetDisposalJE(params: {
 
   const typeLabel = disposalType.replace(/_/g, " ");
   const descParts = [
-    `Asset Disposal — ${assetLabel}`,
+    isWriteOff ? `Asset Write-Off — ${assetLabel}` : `Asset Disposal — ${assetLabel}`,
     `Type: ${typeLabel}`,
     remarks?.trim() ? remarks.trim() : null,
   ].filter(Boolean);

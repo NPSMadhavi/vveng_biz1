@@ -72,7 +72,7 @@ const DISPOSAL_TYPE_OPTIONS = [
   { value: "all", label: "All Types" },
   { value: "sale", label: "Sale" },
   { value: "scrap", label: "Scrapped" },
-  { value: "write_off", label: "Damaged" },
+  { value: "write_off", label: "Write-off" },
   { value: "donation", label: "Donation / Gift" },
 ] as const;
 
@@ -142,7 +142,7 @@ function disposalTypeLabel(key: string) {
   switch (key) {
     case "sale": return "Sale";
     case "scrap": return "Scrapped";
-    case "write_off": return "Damaged";
+    case "write_off": return "Write-off";
     case "donation": return "Donation / Gift";
     default: return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   }
@@ -185,13 +185,14 @@ function buildDisposalRowFromAsset(asset: Asset): DisposalRowItem {
   const asOf = disposalDate ? new Date(`${disposalDate}T00:00:00`) : new Date();
   const books = calcAssetBookValues(asset, asOf);
   const desc = String((asset as any).description || "");
-  const saleFromDesc = parseMoneyFromDesc(desc, "Sale amount");
-  const saleAmount = saleFromDesc != null ? saleFromDesc : books.nbv;
-  const gainLoss = round2(saleAmount - books.nbv);
   const typeKey = normalizeDisposalType(
     (asset as any).disposalType || (asset as any).disposal_type,
     desc,
   );
+  const isWriteOff = typeKey === "write_off";
+  const saleFromDesc = parseMoneyFromDesc(desc, "Sale amount");
+  const saleAmount = isWriteOff ? 0 : (saleFromDesc != null ? saleFromDesc : books.nbv);
+  const gainLoss = isWriteOff ? -books.nbv : round2(saleAmount - books.nbv);
 
   const img = resolveAssetImageSrc(
     asset.id,
@@ -288,10 +289,11 @@ export default function AssetDisposalReportPage() {
   const updateDisposalMutation = useMutation({
     mutationFn: async () => {
       if (!editingRow) return;
+      const isWriteOff = editDisposalType === "write_off";
       const res = await apiRequest("PUT", `/api/assets/${editingRow.id}/dispose`, {
         disposalDate: editDisposalDate,
         disposalType: editDisposalType,
-        saleAmount: parseFloat(editSaleAmount) || 0,
+        saleAmount: isWriteOff ? 0 : (parseFloat(editSaleAmount) || 0),
         remarks: editRemarks,
       });
       return res.json();
@@ -1157,7 +1159,7 @@ export default function AssetDisposalReportPage() {
                 <SelectContent>
                   <SelectItem value="sale" className="text-xs">Sale</SelectItem>
                   <SelectItem value="scrap" className="text-xs">Scrapped</SelectItem>
-                  <SelectItem value="write_off" className="text-xs">Damaged</SelectItem>
+                  <SelectItem value="write_off" className="text-xs">Write-off</SelectItem>
                   <SelectItem value="donation" className="text-xs">Donation / Gift</SelectItem>
                   <SelectItem value="retired" className="text-xs">Retired</SelectItem>
                 </SelectContent>
@@ -1170,7 +1172,8 @@ export default function AssetDisposalReportPage() {
                 type="number"
                 step="0.01"
                 min="0"
-                value={editSaleAmount}
+                value={editDisposalType === "write_off" ? "0" : editSaleAmount}
+                disabled={editDisposalType === "write_off"}
                 onChange={(e) => setEditSaleAmount(e.target.value)}
                 placeholder="0.00"
                 className="h-9 text-xs"

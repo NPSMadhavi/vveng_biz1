@@ -771,7 +771,8 @@ router.post("/assets/:id/dispose", async (req, res): Promise<void> => {
       return;
     }
 
-    const sale = Math.max(0, Number(saleAmount) || 0);
+    const isWriteOff = String(disposalType) === "write_off";
+    const sale = isWriteOff ? 0 : Math.max(0, Number(saleAmount) || 0);
     if (String(disposalType) === "sale" && sale <= 0) {
       res.status(400).json({ error: "Sale amount is required for a sale disposal." });
       return;
@@ -791,10 +792,12 @@ router.post("/assets/:id/dispose", async (req, res): Promise<void> => {
     const noteParts = [
       `Disposed on ${disposalDate}`,
       `Type: ${String(disposalType).replace(/_/g, " ")}`,
-      sale > 0 ? `Sale amount: S$ ${sale.toFixed(2)}` : null,
+      !isWriteOff && sale > 0 ? `Sale amount: S$ ${sale.toFixed(2)}` : null,
       `NBV: S$ ${posted.books.nbv.toFixed(2)}`,
       `Acc. Dep: S$ ${posted.books.accDep.toFixed(2)}`,
-      `${posted.gainLoss >= 0 ? "Gain" : "Loss"}: S$ ${Math.abs(posted.gainLoss).toFixed(2)}`,
+      isWriteOff
+        ? `Write-off expense: S$ ${posted.books.nbv.toFixed(2)}`
+        : `${posted.gainLoss >= 0 ? "Gain" : "Loss"}: S$ ${Math.abs(posted.gainLoss).toFixed(2)}`,
       remarks?.trim() ? `Remarks: ${String(remarks).trim()}` : null,
       posted.journalEntryId ? `JE#${posted.journalEntryId}` : null,
     ].filter(Boolean);
@@ -924,7 +927,8 @@ router.put("/assets/:id/dispose", async (req, res): Promise<void> => {
     const row = existing.rows[0];
     if (!row) { res.status(404).json({ error: "Asset not found" }); return; }
 
-    const sale = Math.max(0, Number(saleAmount) || 0);
+    const isWriteOff = String(disposalType) === "write_off";
+    const sale = isWriteOff ? 0 : Math.max(0, Number(saleAmount) || 0);
 
     // Reverse previous disposal JE if one existed
     await reverseAssetDisposalJE({ companyId, userId, assetId: id, reversalDate: disposalDate }).catch(() => undefined);
@@ -944,10 +948,12 @@ router.put("/assets/:id/dispose", async (req, res): Promise<void> => {
     const noteParts = [
       `Disposed on ${disposalDate}`,
       `Type: ${String(disposalType).replace(/_/g, " ")}`,
-      sale > 0 ? `Sale amount: S$ ${sale.toFixed(2)}` : null,
+      !isWriteOff && sale > 0 ? `Sale amount: S$ ${sale.toFixed(2)}` : null,
       `NBV: S$ ${posted.books.nbv.toFixed(2)}`,
       `Acc. Dep: S$ ${posted.books.accDep.toFixed(2)}`,
-      `${posted.gainLoss >= 0 ? "Gain" : "Loss"}: S$ ${Math.abs(posted.gainLoss).toFixed(2)}`,
+      isWriteOff
+        ? `Write-off expense: S$ ${posted.books.nbv.toFixed(2)}`
+        : `${posted.gainLoss >= 0 ? "Gain" : "Loss"}: S$ ${Math.abs(posted.gainLoss).toFixed(2)}`,
       remarks?.trim() ? `Remarks: ${String(remarks).trim()}` : null,
       posted.journalEntryId ? `JE#${posted.journalEntryId}` : null,
     ].filter(Boolean);

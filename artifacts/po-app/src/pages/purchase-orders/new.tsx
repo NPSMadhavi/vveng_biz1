@@ -795,7 +795,7 @@ export default function PurchaseOrderNew() {
  render={({ field }) => (
                     <FormItem>
                       <FormControl>
-                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="PO Date" />
+                        <IssueDateField value={field.value || ""} onChange={field.onChange} label="PO Date" hideHints />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
